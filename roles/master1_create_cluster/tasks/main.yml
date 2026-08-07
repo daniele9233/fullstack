@@ -36,12 +36,18 @@
 - name: Accept Rancher EULA
   delegate_to: "{{ ansibleSshHost }}"
   uri:
-    url: "https://{{ rancher_domain }}/v3/setting/first-login"
-    method: POST
+    # La risorsa e' /v3/settings/<id> (plurale) e si aggiorna in PUT, come il
+    # task server-url qui sopra: POST su /v3/setting/first-login rispondeva
+    # "405 Method POST not supported".
+    url: "https://{{ rancher_domain }}/v3/settings/first-login"
+    method: PUT
     body_format: json
     headers:
       Authorization: "Bearer {{ api_token_response.json.token }}"
       Content-Type: "application/json"
+    body:
+      name: first-login
+      value: "false"
     status_code: [200, 204, 409]
     validate_certs: no
   ignore_errors: yes

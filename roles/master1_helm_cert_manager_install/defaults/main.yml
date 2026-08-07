@@ -1,3 +1,6 @@
 ---
-helm_version: "{{ helm_version }}"
-
+# Fallback usato solo se helm_version non e' definita altrove.
+# group_vars/all.yml ha precedenza maggiore e normalmente sovrascrive
+# questo valore. NON scrivere qui helm_version: "{{ helm_version }}":
+# e' un riferimento circolare e Ansible lo risolve come recursive loop.
+helm_version: "v3.11.0"

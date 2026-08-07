@@ -1,6 +1,7 @@
 ---
 # PRIMO PLAY: Setup disco dedicato per Rancher su tutti i server
-- hosts: all
+# Escluso il gruppo [local]: e' la macchina di controllo, non va partizionata.
+- hosts: all:!local
   become: yes
   gather_facts: yes
   roles:
@@ -43,7 +44,10 @@
         seconds: 180
         prompt: "Attendendo 60 secondi dopo creazione cluster..."
 
-# QUINTO PLAY: Setup kubectl sui nuovi manager
+# QUINTO PLAY: Setup kubectl e fix DNS Cattle-System sui nuovi manager
+# Il ruolo kubectl_setup esegue gia' sia il setup di kubectl sia il patch
+# hostAliases su cattle-cluster-agent: eseguirlo due volte riapplicava lo
+# stesso patch e faceva scadere una seconda volta il rollout (~10 min persi).
 - hosts: new_managers
   become: yes
   gather_facts: no
@@ -51,16 +55,7 @@
     - kubectl_setup
 
 
-# SESTO PLAY: Edit DNS Cattle-System
-- hosts: new_managers
-  become: yes
-  gather_facts: no
-  roles:
-    - kubectl_setup
-
-
-
-# DECIMO PLAY: Nginx install
+# SESTO PLAY: Nginx install
 - name: Install and configure Nginx
   hosts: nginx_servers
   become: yes
