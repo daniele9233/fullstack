@@ -1,0 +1,102 @@
+---
+# Variabili comuni per tutti gli host
+
+# Dominio e credenziali
+rancher_domain: "kikko.app.inail-svil.almaviva.it"
+rancher_password: "DanielE9233???"
+
+# Versioni software
+helm_version: "v3.11.0"
+rancher_version: "2.14.2"
+
+# Configurazione disco
+vg_name: "vg_rancher"
+lv_name: "lv_rancher"
+rancher_mount_point: "/var/lib/rancher"
+filesystem_type: "xfs"
+mount_options: "defaults,noatime"
+
+# Certificati
+fullchain_pem_file: "fullchain.pem"
+privkey_pem_file: "privkey.pem"
+cacerts_pem_file: "cacerts.pem"
+remote_cert_path: "/root"
+
+# Cluster configuration
+cluster_name: "iacdevops"
+cluster_k8s_version: "v1.33.11+rke2r1"
+cluster_cni: "canal"
+ansibleSshHost: "localhost"
+
+# Master node configuration (per kubectl setup sui new_managers)
+master_node_ip: "10.205.166.214"
+master_node_user: "root"
+# master_node_name usa rancher_domain (evita duplicazioni)
+
+# Variabili blocco Rancher
+nginx_server_name: "kikko.app.inail-svil.almaviva.it"
+nginx_ssl_cert_path: "/etc/nginx/cert/fullchain.pem"
+nginx_ssl_key_path: "/etc/nginx/cert/privkey.pem"
+
+# Variabili blocco Multi-Servizi
+multi_services_server_names:
+  - "kibana.app.inail-svil.almaviva.it"
+  - "grafana.app.inail-svil.almaviva.it"
+  - "pgadmin.app.inail-svil.almaviva.it"
+
+multi_services_ssl_cert_path: "/etc/nginx/cert/fullchain.pem"
+multi_services_ssl_key_path: "/etc/nginx/cert/privkey.pem"
+
+# Upstream servers
+rancher_servers_https:
+  - server: "10.205.166.214:443"
+    max_fails: 3
+    fail_timeout: "5s"
+
+
+rancher_ingress_https:
+  - server: "10.205.166.219:443"
+    max_fails: 3
+    fail_timeout: "5s"
+
+rancher_ingress_https_1:
+  - server: "10.205.166.220:443"
+    max_fails: 3
+    fail_timeout: "5s"
+
+
+# Configurazione Nginx
+nginx_user: "www-data"
+nginx_worker_processes: 2
+nginx_worker_rlimit_nofile: 40000
+nginx_client_max_body_size: "2G"
+
+# Path directory certificati
+nginx_cert_dir: "/etc/nginx/cert"
+
+# Path locali certificati
+local_ssl_cert_path: "files/fullchain.pem"
+local_ssl_key_path: "files/privkey.pem"
+
+# Prometheus/Monitoring configuration
+prometheus_namespace: "monitoring"
+grafana_password: "SecureGrafanaPassword123!"  # CAMBIA QUESTA PASSWORD
+prometheus_retention: "15d"
+prometheus_storage_size: "5Gi"
+grafana_storage_size: "3Gi"
+alertmanager_storage_size: "2Gi"
+
+# Ingress configuration
+prometheus_create_ingress: true
+grafana_domain: "grafana.app.iac-svil.almaviva.it"
+prometheus_domain: "prometheus.app.iac-svil.almaviva.it"
+
+# Resource configurations (optional overrides)
+prometheus_cpu_requests: "1000m"
+prometheus_memory_requests: "2Gi"
+prometheus_cpu_limits: "2000m"
+prometheus_memory_limits: "4Gi"
+
+# Timeout configurations
+helm_timeout: "15m"
+pod_wait_timeout: "5m"  # Ridotto per evitare blocchi lunghi
