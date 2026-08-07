@@ -57,6 +57,34 @@
     mode: '0600'
   register: rke2_config
 
+# La porta del supervisor deve essere libera prima di avviare. Se e' occupata
+# mentre rke2-server NON e' attivo, si tratta di un processo orfano di
+# un'installazione precedente: meglio dirlo subito che lasciare systemd in
+# restart loop con "bind: address already in use".
+- name: Verifica che la porta del supervisor sia libera
+  shell: >-
+    ss -lntp | awk '$4 ~ /:{{ rke2_supervisor_port }}$/' || true
+  args:
+    executable: /bin/bash
+  register: rke2_port_check
+  changed_when: false
+  when: rke2_service_state.status.ActiveState | default('inactive') != 'active'
+
+- name: Interrompi se la porta del supervisor e' gia' occupata
+  fail:
+    msg: |
+      Sul nodo {{ inventory_hostname }} la porta {{ rke2_supervisor_port }} e'
+      gia' occupata ma rke2-server non e' attivo: e' un processo orfano di
+      un'installazione precedente.
+
+      {{ rke2_port_check.stdout }}
+
+      Rilancia con -e clean_nodes_before_join=true, oppure sul nodo esegui
+      /usr/local/bin/rke2-killall.sh
+  when:
+    - rke2_service_state.status.ActiveState | default('inactive') != 'active'
+    - rke2_port_check.stdout | default('') | length > 0
+
 # block/rescue: se rke2-server non parte, systemd restituisce solo "exited with
 # error code". Il motivo sta nel journal, che qui viene raccolto e stampato
 # invece di lasciare il fallimento cieco.

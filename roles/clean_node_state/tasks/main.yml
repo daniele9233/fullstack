@@ -64,6 +64,33 @@
   register: clean_node_leftover_units
   changed_when: false
 
+# systemctl non vede i processi orfani: se il supervisor e' sopravvissuto alla
+# rimozione dell'unit, la porta resta occupata e il prossimo avvio fallisce.
+- name: Verifica che le porte RKE2 siano libere
+  shell: >-
+    ss -lntp | awk '$4 ~ /:{{ item }}$/' || true
+  args:
+    executable: /bin/bash
+  register: clean_node_busy_ports
+  loop: "{{ clean_node_state_ports }}"
+  changed_when: false
+
+- name: Interrompi se una porta RKE2 e' ancora occupata
+  fail:
+    msg: |
+      Sul nodo {{ inventory_hostname }} la porta {{ item.item }} risulta ancora
+      occupata dopo la pulizia, da un processo che systemd non gestisce piu':
+
+      {{ item.stdout }}
+
+      rke2-server fallirebbe con "bind: address already in use".
+      Sul nodo: /usr/local/bin/rke2-killall.sh, oppure termina il processo
+      indicato sopra e riavvia la macchina se resiste.
+  loop: "{{ clean_node_busy_ports.results }}"
+  loop_control:
+    label: "porta {{ item.item }}"
+  when: item.stdout | default('') | length > 0
+
 - name: Mostra il risultato della pulizia
   debug:
     msg: |

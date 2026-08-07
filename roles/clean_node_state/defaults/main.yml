@@ -14,11 +14,21 @@ clean_node_state_services:
   - rke2-server
   - rke2-agent
 
-# Script di uninstall ufficiali, eseguiti solo se presenti.
+# Script ufficiali, eseguiti solo se presenti e in quest'ordine.
+# rke2-killall.sh per primo: fermare l'unit systemd non basta, RKE2 lascia vivi
+# containerd, kubelet e il processo supervisor. Un supervisor orfano continua a
+# tenere la porta 9345 e il successivo avvio muore con
+# "listen tcp :9345: bind: address already in use".
 clean_node_state_uninstall_scripts:
+  - /usr/local/bin/rke2-killall.sh
   - /usr/local/bin/rancher-system-agent-uninstall.sh
   - /usr/local/bin/rke2-uninstall.sh
   - /usr/local/bin/rke2-agent-uninstall.sh
+
+# Porte che devono risultare libere a pulizia finita.
+clean_node_state_ports:
+  - 9345
+  - 6443
 
 # Directory di stato rimosse dopo gli script di uninstall.
 # NOTA: si rimuovono solo sottodirectory di /var/lib/rancher, mai la
