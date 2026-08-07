@@ -1,6 +1,72 @@
 ---
-- name: Create /etc/rancher/rke2/config.yaml on master1
+# Scrive la configurazione RKE2 e avvia il server. Il play che invoca questo
+# ruolo gira con serial: 1, quindi i master vengono portati su uno alla volta
+# nell'ordine dell'inventario: prima il bootstrap, poi i due che si uniscono.
+
+- name: Crea la directory di configurazione RKE2
+  file:
+    path: /etc/rancher/rke2
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Verifica se rke2-server e' gia' attivo
+  systemd:
+    name: rke2-server
+  register: rke2_service_state
+  failed_when: false
+
+- name: Create /etc/rancher/rke2/config.yaml
   template:
     src: config_master1.yaml.j2
     dest: /etc/rancher/rke2/config.yaml
-    #  when: inventory_hostname == '{{ master_node_name }}'
+    owner: root
+    group: root
+    mode: '0600'
+  register: rke2_config
+
+- name: Abilita e avvia rke2-server
+  systemd:
+    name: rke2-server
+    enabled: yes
+    state: started
+    daemon_reload: yes
+
+# Il task sopra non riavvia un servizio gia' in esecuzione, quindi una modifica
+# alla configurazione su un nodo gia' attivo resterebbe senza effetto.
+- name: Riavvia rke2-server se la configurazione e' cambiata
+  systemd:
+    name: rke2-server
+    state: restarted
+  when:
+    - rke2_config is changed
+    - rke2_service_state.status.ActiveState | default('inactive') == 'active'
+
+# Barriera prima di passare al master successivo: aggiungere un server etcd
+# mentre il precedente non ha ancora completato l'ingresso nel quorum e' il
+# modo piu' rapido per corrompere l'inizializzazione del cluster.
+- name: Attendi che l'API server del nodo risponda
+  command: >-
+    /var/lib/rancher/rke2/bin/kubectl
+    --kubeconfig /etc/rancher/rke2/rke2.yaml
+    get --raw=/readyz
+  register: rke2_readyz
+  until: rke2_readyz.rc == 0
+  retries: "{{ rke2_ready_retries }}"
+  delay: "{{ rke2_ready_delay }}"
+  changed_when: false
+
+- name: Mostra lo stato del cluster locale
+  command: >-
+    /var/lib/rancher/rke2/bin/kubectl
+    --kubeconfig /etc/rancher/rke2/rke2.yaml
+    get nodes
+  register: rke2_nodes
+  changed_when: false
+
+- name: Riepilogo nodo
+  debug:
+    msg: |
+      {{ inventory_hostname }} ({{ 'bootstrap' if inventory_hostname == groups['masters'][0] else 'join su ' + hostvars[groups['masters'][0]].ansible_host }})
+      {{ rke2_nodes.stdout }}

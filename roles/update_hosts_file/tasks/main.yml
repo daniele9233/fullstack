@@ -1,9 +1,12 @@
 ---
 # roles/update_hosts_file/tasks/main.yml
 
+# Default: il primo master. Con 3 master in HA conviene valorizzare
+# rancher_endpoint_ip con l'IP del bilanciatore nginx in group_vars/all.yml,
+# altrimenti la caduta del primo master isola tutti gli altri nodi.
 - name: Get master node IP from inventory
   set_fact:
-    rancher_master_ip: "{{ hostvars[groups['masters'][0]]['ansible_host'] }}"
+    rancher_master_ip: "{{ rancher_endpoint_ip | default(hostvars[groups['masters'][0]]['ansible_host']) }}"
   run_once: true
 
 - name: Debug values

@@ -34,6 +34,49 @@ PRODECURA DI INSTALLAZIONE
 ansible-playbook -i inventory.ini site.yml
 
 
+CLUSTER RANCHER A 3 NODI
+
+Il cluster RKE2 locale che ospita Rancher e' definito dal gruppo [masters]
+dell'inventario. Il PRIMO host del gruppo bootstrappa il cluster, gli altri si
+uniscono a lui sulla porta 9345 (supervisor, non 6443). Il numero di nodi deve
+essere dispari: 1 o 3, mai 2, perche' etcd ha bisogno del quorum.
+
+Non c'e' nulla da cambiare nei ruoli per passare da 1 a 3 nodi: basta
+aggiungere gli host a [masters]. Da li' derivano da soli il config.yaml di
+ogni nodo, i tls-san del certificato API, l'upstream nginx verso Rancher e
+l'IP usato per il fix DNS di cattle-cluster-agent.
+
+Variabili in group_vars/all.yml:
+
+  rke2_token                 segreto condiviso da tutti i master. CAMBIALO.
+                             Impostato prima del primo avvio, quindi non serve
+                             leggere node-token dal primo nodo e ridistribuirlo
+  rke2_supervisor_port       9345
+  rke2_version               vuoto = ultima da get.rke2.io; valorizzare per
+                             fissare la versione e rendere i run ripetibili
+  rke2_cni                   deve essere identico su tutti i master
+  rke2_disable               componenti packaged da disabilitare
+  rke2_extra_tls_san         SAN extra (VIP o FQDN del load balancer)
+  rke2_write_kubeconfig_mode permessi di rke2.yaml, vuoto = default RKE2
+  rancher_endpoint_ip        IP a cui punta rancher_domain in /etc/hosts.
+                             Default il primo master; con 3 master conviene
+                             valorizzarlo con l'IP del bilanciatore nginx
+
+Per riprodurre la configurazione del cluster di produzione (calico al posto
+di canal):
+
+  rke2_cni:
+    - calico
+  rke2_disable:
+    - rke2-canal
+    - cilium
+
+I master vengono installati un nodo alla volta (serial: 1): ogni nodo attende
+che il proprio API server risponda su /readyz prima di liberare il successivo.
+Aggiungere un server etcd mentre il precedente non e' ancora entrato nel
+quorum corrompe l'inizializzazione del cluster.
+
+
 RIUTILIZZO DI MACCHINE GIA' USATE
 
 site.yml e' un playbook di installazione da zero: crea un nuovo cluster via API

@@ -31,19 +31,40 @@
       when: clean_nodes_before_join | bool
 
 
-# TERZO PLAY: Installazione Rancher su TUTTI i masters
+# TERZO PLAY: cluster RKE2 locale sui master, UN NODO ALLA VOLTA.
+# serial: 1 non e' un'ottimizzazione, e' un requisito: i server etcd vanno
+# aggiunti in sequenza e il primo host del gruppo deve completare il bootstrap
+# prima che il secondo provi a unirsi. master1_config contiene la barriera che
+# attende /readyz prima di liberare il nodo successivo.
 - hosts: masters
   become: yes
   gather_facts: no
+  serial: 1
+  # Default di Ansible, reso esplicito perche' qui la correttezza ci dipende:
+  # il primo host dell'inventario deve bootstrappare prima che gli altri
+  # provino a registrarsi sul suo supervisor.
+  order: inventory
   roles:
     - role: master1_install
     - role: master1_config
     - role: master1_kubectl
+
+
+# QUARTO PLAY: Rancher via Helm, SOLO sul primo master.
+# Helm agisce sul cluster, non sul nodo: ripetere "helm install rancher" e
+# "kubectl create namespace cattle-system" sugli altri due master fallirebbe
+# con "already exists". I 3 replica di Rancher li distribuisce Kubernetes.
+- hosts: masters[0]
+  become: yes
+  gather_facts: no
+  roles:
     - role: master1_helm_cert_manager_install
 
 
-# QUARTO PLAY: Creazione cluster RKE2 su TUTTI i masters
-- hosts: masters
+# QUINTO PLAY: creazione del cluster downstream, SOLO dal primo master.
+# Sono chiamate all'API di Rancher delegate al control node: eseguirle da tutti
+# e tre i master creerebbe tre volte lo stesso cluster.
+- hosts: masters[0]
   become: yes
   gather_facts: no
   roles:
@@ -59,7 +80,7 @@
         seconds: 180
         prompt: "Attendendo 60 secondi dopo creazione cluster..."
 
-# QUINTO PLAY: Setup kubectl e fix DNS Cattle-System sui nuovi manager
+# SESTO PLAY: Setup kubectl e fix DNS Cattle-System sui nuovi manager
 # Il ruolo kubectl_setup esegue gia' sia il setup di kubectl sia il patch
 # hostAliases su cattle-cluster-agent: eseguirlo due volte riapplicava lo
 # stesso patch e faceva scadere una seconda volta il rollout (~10 min persi).
@@ -70,7 +91,7 @@
     - kubectl_setup
 
 
-# SESTO PLAY: Nginx install
+# SETTIMO PLAY: Nginx install
 - name: Install and configure Nginx
   hosts: nginx_servers
   become: yes

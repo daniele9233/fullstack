@@ -22,16 +22,61 @@ privkey_pem_file: "privkey.pem"
 cacerts_pem_file: "cacerts.pem"
 remote_cert_path: "/root"
 
-# Cluster configuration
+# Cluster configuration (cluster DOWNSTREAM creato via API Rancher)
 cluster_name: "iacdevops"
 cluster_k8s_version: "v1.33.11+rke2r1"
 cluster_cni: "canal"
 ansibleSshHost: "localhost"
 
+# ---------------------------------------------------------------------------
+# Cluster RKE2 LOCALE (i nodi del gruppo [masters], quelli che ospitano Rancher)
+# ---------------------------------------------------------------------------
+# Segreto condiviso da tutti i server del cluster locale. Va impostato PRIMA
+# del primo avvio: cosi' non serve leggere /var/lib/rancher/rke2/server/node-token
+# dal primo nodo e ridistribuirlo agli altri.
+# CAMBIA QUESTO TOKEN prima di usare il playbook su un ambiente vero.
+rke2_token: "8cab86ed266831d00cc4660fd1d8682efaf337ffc35f5f7214886218bbc02d0e"
+
+# Porta del supervisor RKE2, quella su cui i server aggiuntivi si registrano.
+# NON e' 6443 (API server): usare 6443 qui e' l'errore piu' comune su RKE2.
+rke2_supervisor_port: 9345
+
+# Versione RKE2 del cluster locale. Vuoto = ultima disponibile da get.rke2.io.
+# Valorizzare (es. "v1.33.11+rke2r1") per fissarla e rendere i run ripetibili.
+rke2_version: ""
+
+# CNI del cluster locale. Deve essere identico su tutti i master: se diverge,
+# in /etc/cni/net.d convivono conflist di CNI diversi e i pod restano bloccati
+# in ContainerCreating. Lista vuota = default RKE2 (canal).
+rke2_cni:
+  - canal
+
+# Componenti packaged da disabilitare. Con rke2_cni: [calico] va valorizzato
+# con [rke2-canal, cilium], come nel cluster di produzione di riferimento.
+rke2_disable: []
+
+# SAN aggiuntivi nel certificato dell'API server. Il dominio Rancher e gli IP
+# di tutti i master sono gia' inclusi automaticamente dal template: qui vanno
+# solo eventuali VIP o FQDN del load balancer davanti ai master.
+rke2_extra_tls_san: []
+
+# Permessi di /etc/rancher/rke2/rke2.yaml. Vuoto = default RKE2 (0600).
+rke2_write_kubeconfig_mode: ""
+
+# Attesa che ogni master risponda su /readyz prima di passare al successivo.
+rke2_ready_retries: 60
+rke2_ready_delay: 10
+
 # Master node configuration (per kubectl setup sui new_managers)
-master_node_ip: "10.205.166.214"
+# Derivato dall'inventario: e' il primo host del gruppo [masters].
+master_node_ip: "{{ hostvars[groups['masters'][0]]['ansible_host'] }}"
 master_node_user: "root"
 # master_node_name usa rancher_domain (evita duplicazioni)
+
+# IP a cui far puntare rancher_domain in /etc/hosts su tutti i nodi.
+# Di default il primo master. Con 3 master in HA conviene puntarlo all'IP del
+# bilanciatore nginx, altrimenti la caduta del primo master isola tutti gli altri.
+# rancher_endpoint_ip: "10.205.166.221"
 
 # Variabili blocco Rancher
 nginx_server_name: "kikko.app.inail-svil.almaviva.it"
@@ -48,10 +93,12 @@ multi_services_ssl_cert_path: "/etc/nginx/cert/fullchain.pem"
 multi_services_ssl_key_path: "/etc/nginx/cert/privkey.pem"
 
 # Upstream servers
-rancher_servers_https:
-  - server: "10.205.166.214:443"
-    max_fails: 3
-    fail_timeout: "5s"
+# L'upstream verso Rancher non e' piu' una lista fissa: il template nginx lo
+# genera dal gruppo [masters] dell'inventario, cosi' passando da 1 a 3 master
+# il bilanciatore si aggiorna da solo.
+rancher_https_port: 443
+nginx_upstream_max_fails: 3
+nginx_upstream_fail_timeout: "5s"
 
 
 rancher_ingress_https:

@@ -1,14 +1,10 @@
 ---
-- name: Install RKE2 on master1
+# Installa solo il binario RKE2. L'avvio del servizio sta in master1_config,
+# DOPO la scrittura di /etc/rancher/rke2/config.yaml: un server che parte senza
+# la direttiva "server:" bootstrappa un cluster proprio invece di unirsi al
+# primo master, e i tre nodi non formano mai un quorum etcd.
+
+- name: Install RKE2 on master
   shell: curl -sfL https://get.rke2.io | sh -
-
-- name: Enable RKE2 server service
-  systemd:
-    name: rke2-server
-    enabled: yes
-
-- name: Start RKE2 server service
-  systemd:
-    name: rke2-server
-    state: started
-
+  environment:
+    INSTALL_RKE2_VERSION: "{{ rke2_version }}"

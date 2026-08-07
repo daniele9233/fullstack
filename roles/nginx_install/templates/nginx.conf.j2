@@ -15,9 +15,11 @@ events {
 http {
     client_max_body_size {{ nginx_client_max_body_size }};
 
+    # Generato dal gruppo [masters] dell'inventario: passando da 1 a 3 master
+    # il bilanciatore si aggiorna da solo, senza IP scritti a mano qui dentro.
     upstream rancher_servers_https {
-{% for server in rancher_servers_https %}
-        server {{ server.server }} max_fails={{ server.max_fails }} fail_timeout={{ server.fail_timeout }};
+{% for host in groups['masters'] %}
+        server {{ hostvars[host].ansible_host }}:{{ rancher_https_port }} max_fails={{ nginx_upstream_max_fails }} fail_timeout={{ nginx_upstream_fail_timeout }};
 {% endfor %}
     }
 

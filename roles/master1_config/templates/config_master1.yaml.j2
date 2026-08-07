@@ -1,2 +1,31 @@
+{{ '#' }} {{ ansible_managed }} - roles/master1_config/templates/config_master1.yaml.j2
+{% set first_master = groups['masters'][0] %}
+token: {{ rke2_token }}
+{% if inventory_hostname != first_master %}
+{{ '#' }} Nodo aggiuntivo: si registra sul supervisor del primo master.
+{{ '#' }} La porta e' {{ rke2_supervisor_port }} (supervisor), non 6443 (API server).
+server: https://{{ hostvars[first_master].ansible_host }}:{{ rke2_supervisor_port }}
+{% endif %}
 tls-san:
-   - {{ rancher_domain }}
+  - {{ rancher_domain }}
+{% for host in groups['masters'] %}
+  - {{ hostvars[host].ansible_host }}
+{% endfor %}
+{% for san in rke2_extra_tls_san %}
+  - {{ san }}
+{% endfor %}
+{% if rke2_cni | length > 0 %}
+cni:
+{% for plugin in rke2_cni %}
+  - {{ plugin }}
+{% endfor %}
+{% endif %}
+{% if rke2_disable | length > 0 %}
+disable:
+{% for component in rke2_disable %}
+  - {{ component }}
+{% endfor %}
+{% endif %}
+{% if rke2_write_kubeconfig_mode %}
+write-kubeconfig-mode: "{{ rke2_write_kubeconfig_mode }}"
+{% endif %}
