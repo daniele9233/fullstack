@@ -50,10 +50,14 @@ In quel caso lanciare il playbook con la pulizia dei nodi abilitata:
 
 ansible-playbook -i inventory.ini site.yml -e clean_nodes_before_join=true
 
-La pulizia gira sui gruppi [new_managers] e [workers] prima del join, esegue
-gli uninstall ufficiali di rke2 e del rancher-system-agent e azzera le
-directory di stato. E' distruttiva ed e' disattivata di default: NON usarla
-su un cluster funzionante.
+La pulizia gira su [masters], [new_managers] e [workers] prima di qualsiasi
+installazione, esegue gli uninstall ufficiali di rke2 e del
+rancher-system-agent e azzera le directory di stato. Include i master perche'
+su di loro "helm install rancher" e "kubectl create namespace cattle-system"
+falliscono se Rancher e' gia' installato.
+
+E' distruttiva ed e' disattivata di default: NON usarla su un cluster
+funzionante.
 
 
 

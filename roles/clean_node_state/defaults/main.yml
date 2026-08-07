@@ -13,7 +13,9 @@ clean_nodes_before_join: false
 clean_node_state_paths:
   - /etc/cni/net.d
   - /var/lib/cni
-  - /opt/cni/bin
+  # Tutta /opt/cni, non solo bin: su questi nodi la disinstallazione di cilium
+  # aveva lasciato /etc/cni/net.d/05-cilium.conflist senza piu' /opt/cni/bin.
+  - /opt/cni
   - /etc/rancher/agent
   - /etc/rancher/rke2
   - /var/lib/rancher/agent
