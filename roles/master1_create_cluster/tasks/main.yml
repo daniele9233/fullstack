@@ -36,18 +36,12 @@
 - name: Accept Rancher EULA
   delegate_to: "{{ ansibleSshHost }}"
   uri:
-    # La risorsa e' /v3/settings/<id> (plurale) e si aggiorna in PUT, come il
-    # task server-url qui sopra: POST su /v3/setting/first-login rispondeva
-    # "405 Method POST not supported".
-    url: "https://{{ rancher_domain }}/v3/settings/first-login"
-    method: PUT
+    url: "https://{{ rancher_domain }}/v3/setting/first-login"
+    method: POST
     body_format: json
     headers:
       Authorization: "Bearer {{ api_token_response.json.token }}"
       Content-Type: "application/json"
-    body:
-      name: first-login
-      value: "false"
     status_code: [200, 204, 409]
     validate_certs: no
   ignore_errors: yes
@@ -234,6 +228,24 @@
   delegate_to: "{{ item }}"
   loop: "{{ groups['workers'] }}"
 
+- name: Install system-agent and join nodes as ingress
+  shell: |
+    # Download and install system-agent for ingress nodes
+    curl --insecure -fL https://{{ rancher_host }}/system-agent-install.sh | sh -s - \
+      --server https://{{ rancher_host }} \
+      --label 'cattle.io/os=linux' \
+      --label 'app=ingress' \
+      --token {{ cluster_token }} \
+      --worker \
+      --taints 'app=ingress:NoSchedule'
+  args:
+    executable: /bin/bash
+  async: 600
+  poll: 0
+  register: join_ingress_async
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['ingress'] }}"
+
 - name: Wait for manager nodes join to complete
   async_status:
     jid: "{{ item.ansible_job_id }}"
@@ -256,6 +268,17 @@
   loop: "{{ join_workers_async.results }}"
   ignore_errors: yes
 
+- name: Wait for ingress nodes join to complete
+  async_status:
+    jid: "{{ item.ansible_job_id }}"
+  register: join_ingress_status
+  until: join_ingress_status.finished
+  retries: 120
+  delay: 20
+  delegate_to: "{{ item.item }}"
+  loop: "{{ join_ingress_async.results }}"
+  ignore_errors: yes
+
 - name: Show manager nodes join results
   debug:
     msg: |
@@ -273,6 +296,15 @@
       Output: {{ item.stdout if item.stdout is defined else 'No output' }}
       Error: {{ item.stderr if item.stderr is defined else 'No error' }}
   loop: "{{ join_workers_status.results }}"
+
+- name: Show ingress nodes join results
+  debug:
+    msg: |
+      Ingress Node: {{ item.item }}
+      Status: {{ 'Success' if item.rc == 0 else 'Failed' }}
+      Output: {{ item.stdout if item.stdout is defined else 'No output' }}
+      Error: {{ item.stderr if item.stderr is defined else 'No error' }}
+  loop: "{{ join_ingress_status.results }}"
 
 - name: Verify nodes are registered in Rancher
   delegate_to: "{{ ansibleSshHost }}"
@@ -296,4 +328,5 @@
         IP: {{ node.ipAddress if node.ipAddress is defined else 'Unknown' }}
         Roles: {{ node.controlPlane | ternary('controlplane', '') }}{{ node.etcd | ternary(' etcd', '') }}{{ node.worker | ternary(' worker', '') }}
         State: {{ node.state if node.state is defined else 'Unknown' }}
+        Labels: {{ node.labels if node.labels is defined else 'None' }}
       {% endfor %}
