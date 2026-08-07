@@ -57,12 +57,30 @@
     mode: '0600'
   register: rke2_config
 
-- name: Abilita e avvia rke2-server
-  systemd:
-    name: rke2-server
-    enabled: yes
-    state: started
-    daemon_reload: yes
+# block/rescue: se rke2-server non parte, systemd restituisce solo "exited with
+# error code". Il motivo sta nel journal, che qui viene raccolto e stampato
+# invece di lasciare il fallimento cieco.
+- name: Avvio di rke2-server
+  block:
+    - name: Abilita e avvia rke2-server
+      systemd:
+        name: rke2-server
+        enabled: yes
+        state: started
+        daemon_reload: yes
+  rescue:
+    - name: Raccogli gli ultimi log di rke2-server
+      command: journalctl -u rke2-server --no-pager -n 80
+      register: rke2_journal
+      failed_when: false
+      changed_when: false
+
+    - name: Interrompi mostrando il motivo del fallimento
+      fail:
+        msg: |
+          Avvio di rke2-server fallito su {{ inventory_hostname }}.
+          Ultime righe del journal:
+          {{ rke2_journal.stdout }}
 
 # Il task sopra non riavvia un servizio gia' in esecuzione, quindi una modifica
 # alla configurazione su un nodo gia' attivo resterebbe senza effetto.
@@ -74,9 +92,14 @@
     - rke2_config is changed
     - rke2_service_state.status.ActiveState | default('inactive') == 'active'
 
-# Barriera prima di passare al master successivo: aggiungere un server etcd
-# mentre il precedente non ha ancora completato l'ingresso nel quorum e' il
-# modo piu' rapido per corrompere l'inizializzazione del cluster.
+# --- Barriera prima di passare al master successivo --------------------------
+# RKE2 aggiunge ogni nuovo server come learner etcd e lo promuove a membro
+# votante solo quando ha recuperato il log. Aggiungere il server successivo
+# durante quella finestra fa fallire l'avvio di rke2-server.
+#
+# /readyz da solo NON basta come barriera: risponde ok appena l'API server
+# locale e' su, quando il nodo non e' ancora registrato ne' promosso.
+
 - name: Attendi che l'API server del nodo risponda
   command: >-
     /var/lib/rancher/rke2/bin/kubectl
@@ -87,6 +110,33 @@
   retries: "{{ rke2_ready_retries }}"
   delay: "{{ rke2_ready_delay }}"
   changed_when: false
+
+# Conta i nodi etcd in stato Ready e attende che siano tanti quanti i master
+# avviati fino a questo punto: e' la prova che il nodo corrente e' davvero
+# entrato nel cluster, non solo che il suo processo e' partito.
+- name: Attendi che tutti i master avviati finora siano Ready
+  shell: >-
+    set -o pipefail;
+    /var/lib/rancher/rke2/bin/kubectl
+    --kubeconfig /etc/rancher/rke2/rke2.yaml
+    get nodes -l node-role.kubernetes.io/etcd=true --no-headers
+    | awk '$2 == "Ready"' | wc -l
+  args:
+    executable: /bin/bash
+  register: rke2_ready_masters
+  until: rke2_ready_masters.stdout | int >= (groups['masters'].index(inventory_hostname) + 1)
+  retries: "{{ rke2_ready_retries }}"
+  delay: "{{ rke2_ready_delay }}"
+  changed_when: false
+
+# Margine per la promozione da learner a membro votante, che avviene poco dopo
+# che il nodo risulta Ready. Solo tra un master e il successivo.
+- name: Lascia stabilizzare etcd prima del master successivo
+  pause:
+    seconds: "{{ rke2_settle_seconds }}"
+  when:
+    - groups['masters'] | length > 1
+    - inventory_hostname != groups['masters'][-1]
 
 - name: Mostra lo stato del cluster locale
   command: >-

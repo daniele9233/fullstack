@@ -70,9 +70,13 @@ rke2_extra_tls_san: []
 # Permessi di /etc/rancher/rke2/rke2.yaml. Vuoto = default RKE2 (0600).
 rke2_write_kubeconfig_mode: ""
 
-# Attesa che ogni master risponda su /readyz prima di passare al successivo.
+# Attesa che ogni master sia entrato nel cluster prima di avviare il successivo.
 rke2_ready_retries: 60
 rke2_ready_delay: 10
+
+# Margine per la promozione del nodo da learner etcd a membro votante, applicato
+# tra un master e il successivo. Alzarlo se l'avvio del terzo master fallisce.
+rke2_settle_seconds: 45
 
 # Master node configuration (per kubectl setup sui new_managers)
 # Derivato dall'inventario: e' il primo host del gruppo [masters].
