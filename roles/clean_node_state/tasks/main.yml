@@ -7,15 +7,27 @@
 # /etc/cni/net.d. Un conflist di un CNI non piu' installato vince per ordine
 # alfabetico su quello nuovo e blocca ogni pod in ContainerCreating con
 # 'failed to find plugin "<cni>-cni" in path [/opt/cni/bin]'.
+#
+# Il ruolo non puo' dipendere dagli script di uninstall ufficiali: su un nodo
+# rimasto a meta' provisioning esiste solo rancher-system-agent.service, senza
+# rke2-server.service ne' /usr/local/bin/rke2-uninstall.sh. Quindi ferma i
+# servizi e rimuove unit file e directory anche quando gli script mancano.
+
+- name: Ferma e disabilita i servizi RKE2 e Rancher
+  systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop: "{{ clean_node_state_services }}"
+  # Il servizio puo' non esistere: e' proprio il caso che vogliamo coprire.
+  failed_when: false
+  register: clean_node_stop_services
 
 - name: Verifica quali script di uninstall sono presenti
   stat:
     path: "{{ item }}"
   register: clean_node_uninstall_scripts
-  loop:
-    - /usr/local/bin/rancher-system-agent-uninstall.sh
-    - /usr/local/bin/rke2-uninstall.sh
-    - /usr/local/bin/rke2-agent-uninstall.sh
+  loop: "{{ clean_node_state_uninstall_scripts }}"
 
 # Gli script ufficiali fermano i servizi, smontano i filesystem di rke2 e
 # rimuovono i binari: vanno eseguiti prima della rimozione manuale, non dopo.
@@ -27,22 +39,17 @@
   when: item.stat.exists
   register: clean_node_uninstall_run
   failed_when: false
-  changed_when: clean_node_uninstall_run.rc == 0
+  changed_when: clean_node_uninstall_run.rc | default(1) == 0
 
-- name: Mostra l'esito degli uninstall
-  debug:
-    msg: >-
-      {{ item.item.item }}:
-      {{ 'eseguito' if not item.skipped | default(false) else 'non presente, saltato' }}
-  loop: "{{ clean_node_uninstall_run.results }}"
-  loop_control:
-    label: "{{ item.item.item }}"
-
-- name: Rimuovi le directory di stato residue
+- name: Rimuovi unit file, binari e directory di stato residui
   file:
     path: "{{ item }}"
     state: absent
-  loop: "{{ clean_node_state_paths }}"
+  loop: "{{ clean_node_state_paths + clean_node_state_files }}"
+
+- name: Ricarica systemd dopo la rimozione degli unit file
+  systemd:
+    daemon_reload: true
 
 - name: Verifica che non resti configurazione CNI
   find:
@@ -50,11 +57,22 @@
     patterns: "*"
   register: clean_node_leftover_cni
 
+- name: Verifica che non resti nessun servizio RKE2 o Rancher
+  shell: >-
+    systemctl list-units --all --type=service --no-legend
+    | grep -iE 'rke2|rancher-system-agent' || true
+  register: clean_node_leftover_units
+  changed_when: false
+
 - name: Mostra il risultato della pulizia
   debug:
     msg: |
-      Pulizia nodo {{ inventory_hostname }} completata.
+      === PULIZIA NODO {{ inventory_hostname }} ===
       Configurazioni CNI residue: {{ clean_node_leftover_cni.files | length }}
       {% if clean_node_leftover_cni.files | length > 0 %}
-      ATTENZIONE: rimangono {{ clean_node_leftover_cni.files | map(attribute='path') | join(', ') }}
+      ATTENZIONE: {{ clean_node_leftover_cni.files | map(attribute='path') | join(', ') }}
+      {% endif %}
+      Servizi residui: {{ clean_node_leftover_units.stdout_lines | length }}
+      {% if clean_node_leftover_units.stdout_lines | length > 0 %}
+      ATTENZIONE: {{ clean_node_leftover_units.stdout_lines | join(' | ') }}
       {% endif %}

@@ -7,7 +7,20 @@
 #
 clean_nodes_before_join: false
 
-# Directory di stato rimosse dopo gli script di uninstall ufficiali.
+# Servizi fermati e disabilitati prima di tutto il resto. Non e' un errore se
+# non esistono: un nodo rimasto a meta' provisioning puo' avere solo l'agent.
+clean_node_state_services:
+  - rancher-system-agent
+  - rke2-server
+  - rke2-agent
+
+# Script di uninstall ufficiali, eseguiti solo se presenti.
+clean_node_state_uninstall_scripts:
+  - /usr/local/bin/rancher-system-agent-uninstall.sh
+  - /usr/local/bin/rke2-uninstall.sh
+  - /usr/local/bin/rke2-agent-uninstall.sh
+
+# Directory di stato rimosse dopo gli script di uninstall.
 # NOTA: si rimuovono solo sottodirectory di /var/lib/rancher, mai la
 # directory stessa, che e' il mount point del volume LVM creato da create_disk.
 clean_node_state_paths:
@@ -20,3 +33,14 @@ clean_node_state_paths:
   - /etc/rancher/rke2
   - /var/lib/rancher/agent
   - /var/lib/rancher/rke2
+
+# Unit file e binari lasciati indietro quando mancano gli script di uninstall.
+clean_node_state_files:
+  - /etc/systemd/system/rancher-system-agent.service
+  - /etc/systemd/system/rancher-system-agent.env
+  - /etc/systemd/system/rke2-server.service
+  - /etc/systemd/system/rke2-server.env
+  - /etc/systemd/system/rke2-agent.service
+  - /etc/systemd/system/rke2-agent.env
+  - /usr/local/bin/rancher-system-agent
+  - /usr/local/bin/rancher-system-agent-uninstall.sh
