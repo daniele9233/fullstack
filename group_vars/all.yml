@@ -31,11 +31,18 @@ ansibleSshHost: "localhost"
 # ---------------------------------------------------------------------------
 # Cluster RKE2 LOCALE (i nodi del gruppo [masters], quelli che ospitano Rancher)
 # ---------------------------------------------------------------------------
-# Segreto condiviso da tutti i server del cluster locale. Va impostato PRIMA
-# del primo avvio: cosi' non serve leggere /var/lib/rancher/rke2/server/node-token
-# dal primo nodo e ridistribuirlo agli altri.
-# CAMBIA QUESTO TOKEN prima di usare il playbook su un ambiente vero.
-rke2_token: "8cab86ed266831d00cc4660fd1d8682efaf337ffc35f5f7214886218bbc02d0e"
+# Segreto condiviso dai server del cluster locale.
+#
+# VUOTO (default) = completamente automatico: il primo master bootstrappa e
+# genera il proprio token, i master successivi lo leggono da lui in
+# /var/lib/rancher/rke2/server/node-token e se lo mettono nel config.yaml.
+# Nessun segreto committato nel repository.
+#
+# VALORIZZATO = token pre-condiviso, scritto uguale sul config.yaml di tutti i
+# master prima del primo avvio. Serve solo se il token deve essere noto in
+# anticipo (ad esempio per aggiungere nodi da un altro playbook).
+# In quel caso generalo con: openssl rand -hex 32
+rke2_token: ""
 
 # Porta del supervisor RKE2, quella su cui i server aggiuntivi si registrano.
 # NON e' 6443 (API server): usare 6443 qui e' l'errore piu' comune su RKE2.

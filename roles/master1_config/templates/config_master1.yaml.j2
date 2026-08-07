@@ -1,6 +1,11 @@
 {{ '#' }} {{ ansible_managed }} - roles/master1_config/templates/config_master1.yaml.j2
 {% set first_master = groups['masters'][0] %}
-token: {{ rke2_token }}
+{% if rke2_effective_token is defined and rke2_effective_token %}
+token: {{ rke2_effective_token }}
+{% else %}
+{{ '#' }} Nessun token: questo nodo bootstrappa il cluster e RKE2 ne genera uno
+{{ '#' }} in /var/lib/rancher/rke2/server/node-token, da cui lo leggono gli altri.
+{% endif %}
 {% if inventory_hostname != first_master %}
 {{ '#' }} Nodo aggiuntivo: si registra sul supervisor del primo master.
 {{ '#' }} La porta e' {{ rke2_supervisor_port }} (supervisor), non 6443 (API server).

@@ -48,9 +48,16 @@ l'IP usato per il fix DNS di cattle-cluster-agent.
 
 Variabili in group_vars/all.yml:
 
-  rke2_token                 segreto condiviso da tutti i master. CAMBIALO.
-                             Impostato prima del primo avvio, quindi non serve
-                             leggere node-token dal primo nodo e ridistribuirlo
+  rke2_token                 vuoto (default) = automatico. Il primo master
+                             bootstrappa senza token, RKE2 ne genera uno, e i
+                             master successivi lo leggono da lui in
+                             /var/lib/rancher/rke2/server/node-token e se lo
+                             scrivono nel proprio config.yaml. Nessun segreto
+                             nel repository e nessun passaggio manuale.
+                             Valorizzarlo solo se il token deve essere noto in
+                             anticipo: in quel caso viene scritto uguale sul
+                             config.yaml di tutti i master prima del primo
+                             avvio. Generalo con: openssl rand -hex 32
   rke2_supervisor_port       9345
   rke2_version               vuoto = ultima da get.rke2.io; valorizzare per
                              fissare la versione e rendere i run ripetibili

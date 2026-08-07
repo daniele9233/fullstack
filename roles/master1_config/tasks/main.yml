@@ -17,6 +17,37 @@
   register: rke2_service_state
   failed_when: false
 
+# --- Token del cluster -------------------------------------------------------
+# Con rke2_token valorizzato si usa quello su tutti i master. Con rke2_token
+# vuoto (default) il primo master bootstrappa senza token, RKE2 gliene genera
+# uno, e i master successivi lo leggono direttamente da lui.
+#
+# La lettura e' delegata al primo master invece di appoggiarsi a un fact
+# propagato tra i batch di serial: 1. Cosi' funziona anche rilanciando il
+# playbook con --limit su un solo nodo aggiuntivo.
+
+- name: Usa il token pre-condiviso se configurato
+  set_fact:
+    rke2_effective_token: "{{ rke2_token }}"
+  when: rke2_token | length > 0
+
+- name: Leggi il node-token generato dal primo master
+  slurp:
+    src: /var/lib/rancher/rke2/server/node-token
+  delegate_to: "{{ groups['masters'][0] }}"
+  register: rke2_node_token_raw
+  when:
+    - rke2_token | length == 0
+    - inventory_hostname != groups['masters'][0]
+
+- name: Usa il node-token letto dal primo master
+  set_fact:
+    # trim obbligatorio: il file termina con newline, che finirebbe nel token.
+    rke2_effective_token: "{{ rke2_node_token_raw.content | b64decode | trim }}"
+  when:
+    - rke2_token | length == 0
+    - inventory_hostname != groups['masters'][0]
+
 - name: Create /etc/rancher/rke2/config.yaml
   template:
     src: config_master1.yaml.j2
