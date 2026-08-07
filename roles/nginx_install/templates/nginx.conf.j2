@@ -29,17 +29,24 @@ http {
 {% endfor %}
     }
 
-upstream rancher_ingress_https_1 {
+    # Upstream ingress aggiuntivi: resi solo se la variabile e' definita e non vuota.
+    # Un upstream senza server e' un errore di sintassi per nginx, quindi il blocco
+    # va omesso del tutto quando il nodo corrispondente non e' in inventario.
+{% if rancher_ingress_https_1 is defined and rancher_ingress_https_1 %}
+    upstream rancher_ingress_https_1 {
 {% for server in rancher_ingress_https_1 %}
-    server {{ server.server }} max_fails={{ server.max_fails }} fail_timeout={{ server.fail_timeout }};
+        server {{ server.server }} max_fails={{ server.max_fails }} fail_timeout={{ server.fail_timeout }};
 {% endfor %}
-}
+    }
+{% endif %}
+{% if rancher_ingress_https_2 is defined and rancher_ingress_https_2 %}
 
-upstream rancher_ingress_https_2 {
+    upstream rancher_ingress_https_2 {
 {% for server in rancher_ingress_https_2 %}
-    server {{ server.server }} max_fails={{ server.max_fails }} fail_timeout={{ server.fail_timeout }};
+        server {{ server.server }} max_fails={{ server.max_fails }} fail_timeout={{ server.fail_timeout }};
 {% endfor %}
-}
+    }
+{% endif %}
 
 
     # Redirezione HTTP a HTTPS
