@@ -29,9 +29,31 @@ fullchain.pem
 privkey.pem
 
 
-PRODECURA DI INSTALLAZIONE 
+PRODECURA DI INSTALLAZIONE
 
 ansible-playbook -i inventory.ini site.yml
+
+
+RIUTILIZZO DI MACCHINE GIA' USATE
+
+site.yml e' un playbook di installazione da zero: crea un nuovo cluster via API
+Rancher a ogni esecuzione. Su macchine gia' usate in un'installazione
+precedente i nodi conservano lo stato vecchio e il cluster non si tira su:
+
+  - /etc/cni/net.d contiene ancora il conflist del CNI precedente. Vince per
+    ordine alfabetico su quello nuovo e ogni pod resta in ContainerCreating con
+    'failed to find plugin "<cni>-cni" in path [/opt/cni/bin]'
+  - /var/lib/rancher/agent conserva il vecchio Cattle ID, che il nuovo Rancher
+    non riconosce: 401 durante il download della connection info
+
+In quel caso lanciare il playbook con la pulizia dei nodi abilitata:
+
+ansible-playbook -i inventory.ini site.yml -e clean_nodes_before_join=true
+
+La pulizia gira sui gruppi [new_managers] e [workers] prima del join, esegue
+gli uninstall ufficiali di rke2 e del rancher-system-agent e azzera le
+directory di stato. E' distruttiva ed e' disattivata di default: NON usarla
+su un cluster funzionante.
 
 
 

@@ -27,6 +27,19 @@
     - role: master1_helm_cert_manager_install
 
 
+# PULIZIA OPZIONALE: azzera lo stato di una precedente installazione sui nodi
+# che stanno per unirsi al cluster. Deve girare PRIMA del play che fa il join.
+# Disattivata di default perche' distruttiva: su un nodo sano smonta RKE2.
+# Abilitare solo quando si riparte da capo su macchine gia' usate:
+#   ansible-playbook -i inventory.ini site.yml -e clean_nodes_before_join=true
+- hosts: new_managers,workers
+  become: yes
+  gather_facts: no
+  roles:
+    - role: clean_node_state
+      when: clean_nodes_before_join | bool
+
+
 # QUARTO PLAY: Creazione cluster RKE2 su TUTTI i masters
 - hosts: masters
   become: yes

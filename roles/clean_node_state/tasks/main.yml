@@ -1,0 +1,60 @@
+---
+# Rimuove dai nodi lo stato lasciato da una precedente installazione RKE2/Rancher.
+#
+# Senza questa pulizia il nodo si ripresenta al nuovo cluster con la vecchia
+# identita' agent (401 "received while downloading Rancher connection
+# information") e, soprattutto, con la vecchia configurazione CNI in
+# /etc/cni/net.d. Un conflist di un CNI non piu' installato vince per ordine
+# alfabetico su quello nuovo e blocca ogni pod in ContainerCreating con
+# 'failed to find plugin "<cni>-cni" in path [/opt/cni/bin]'.
+
+- name: Verifica quali script di uninstall sono presenti
+  stat:
+    path: "{{ item }}"
+  register: clean_node_uninstall_scripts
+  loop:
+    - /usr/local/bin/rancher-system-agent-uninstall.sh
+    - /usr/local/bin/rke2-uninstall.sh
+    - /usr/local/bin/rke2-agent-uninstall.sh
+
+# Gli script ufficiali fermano i servizi, smontano i filesystem di rke2 e
+# rimuovono i binari: vanno eseguiti prima della rimozione manuale, non dopo.
+- name: Esegui gli script di uninstall presenti
+  command: "{{ item.item }}"
+  loop: "{{ clean_node_uninstall_scripts.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.stat.exists
+  register: clean_node_uninstall_run
+  failed_when: false
+  changed_when: clean_node_uninstall_run.rc == 0
+
+- name: Mostra l'esito degli uninstall
+  debug:
+    msg: >-
+      {{ item.item.item }}:
+      {{ 'eseguito' if not item.skipped | default(false) else 'non presente, saltato' }}
+  loop: "{{ clean_node_uninstall_run.results }}"
+  loop_control:
+    label: "{{ item.item.item }}"
+
+- name: Rimuovi le directory di stato residue
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ clean_node_state_paths }}"
+
+- name: Verifica che non resti configurazione CNI
+  find:
+    paths: /etc/cni/net.d
+    patterns: "*"
+  register: clean_node_leftover_cni
+
+- name: Mostra il risultato della pulizia
+  debug:
+    msg: |
+      Pulizia nodo {{ inventory_hostname }} completata.
+      Configurazioni CNI residue: {{ clean_node_leftover_cni.files | length }}
+      {% if clean_node_leftover_cni.files | length > 0 %}
+      ATTENZIONE: rimangono {{ clean_node_leftover_cni.files | map(attribute='path') | join(', ') }}
+      {% endif %}

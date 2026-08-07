@@ -1,0 +1,20 @@
+---
+# Interruttore generale del ruolo. Disattivato di default: la pulizia e'
+# distruttiva e su un nodo sano smonta il cluster. Va abilitata solo quando si
+# riparte da capo su macchine gia' usate in un'installazione precedente:
+#
+#   ansible-playbook -i inventory.ini site.yml -e clean_nodes_before_join=true
+#
+clean_nodes_before_join: false
+
+# Directory di stato rimosse dopo gli script di uninstall ufficiali.
+# NOTA: si rimuovono solo sottodirectory di /var/lib/rancher, mai la
+# directory stessa, che e' il mount point del volume LVM creato da create_disk.
+clean_node_state_paths:
+  - /etc/cni/net.d
+  - /var/lib/cni
+  - /opt/cni/bin
+  - /etc/rancher/agent
+  - /etc/rancher/rke2
+  - /var/lib/rancher/agent
+  - /var/lib/rancher/rke2
