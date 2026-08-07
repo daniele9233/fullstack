@@ -74,13 +74,19 @@
   fail:
     msg: |
       Sul nodo {{ inventory_hostname }} la porta {{ rke2_supervisor_port }} e'
-      gia' occupata ma rke2-server non e' attivo: e' un processo orfano di
-      un'installazione precedente.
+      gia' occupata mentre rke2-server non e' attivo:
 
       {{ rke2_port_check.stdout }}
 
-      Rilancia con -e clean_nodes_before_join=true, oppure sul nodo esegui
-      /usr/local/bin/rke2-killall.sh
+      Il processo indicato sopra dice cosa fare:
+
+        - rke2 o containerd: residuo di un'installazione precedente. Rilancia
+          con -e clean_nodes_before_join=true, oppure esegui sul nodo
+          /usr/local/bin/rke2-killall.sh
+
+        - nginx, haproxy o simili: e' un bilanciatore configurato in passato su
+          questa macchina, e va fermato o riconfigurato a mano. Il playbook non
+          lo tocca di proposito.
   when:
     - rke2_service_state.status.ActiveState | default('inactive') != 'active'
     - rke2_port_check.stdout | default('') | length > 0

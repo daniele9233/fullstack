@@ -78,14 +78,20 @@
 - name: Interrompi se una porta RKE2 e' ancora occupata
   fail:
     msg: |
-      Sul nodo {{ inventory_hostname }} la porta {{ item.item }} risulta ancora
-      occupata dopo la pulizia, da un processo che systemd non gestisce piu':
+      Sul nodo {{ inventory_hostname }} la porta {{ item.item }} e' occupata:
 
       {{ item.stdout }}
 
-      rke2-server fallirebbe con "bind: address already in use".
-      Sul nodo: /usr/local/bin/rke2-killall.sh, oppure termina il processo
-      indicato sopra e riavvia la macchina se resiste.
+      rke2-server fallirebbe con "bind: address already in use". Il processo
+      indicato sopra dice cosa fare:
+
+        - rke2 o containerd: e' un residuo sfuggito alla pulizia, si chiude con
+          /usr/local/bin/rke2-killall.sh o con un reboot del nodo
+
+        - nginx, haproxy o simili: e' un bilanciatore configurato in passato su
+          questa macchina. Va fermato o riconfigurato a mano, la pulizia non lo
+          tocca di proposito. Un nodo non puo' fare da server RKE2 finche'
+          qualcun altro tiene la 9345 o la 6443.
   loop: "{{ clean_node_busy_ports.results }}"
   loop_control:
     label: "porta {{ item.item }}"
