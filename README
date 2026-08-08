@@ -84,6 +84,44 @@ Aggiungere un server etcd mentre il precedente non e' ancora entrato nel
 quorum corrompe l'inizializzazione del cluster.
 
 
+BILANCIATORI IN HA (gruppo [nginx_servers])
+
+Ogni host del gruppo esegue nginx, haproxy e keepalived. Due VIP distinti,
+gestiti da due istanze VRRP separate:
+
+  vip_rancher_ip    lo tiene nginx, espone la console Rancher e i servizi
+                    pubblicati dall'ingress del cluster
+  vip_patroni_ip    lo tiene haproxy, espone Patroni/PgBouncer sulle porte
+                    primary e standby
+
+Il PRIMO host del gruppo e' MASTER per entrambe le istanze, gli altri BACKUP
+con priorita' decrescente. nginx e' attivo/passivo: lo script nginx-ha-check
+lo avvia sul nodo che tiene il VIP e lo ferma sugli altri.
+
+Gli upstream nginx derivano dai gruppi [masters] e [ingress] dell'inventario,
+i backend haproxy dal gruppo [db_servers]: con [db_servers] vuoto le sezioni
+primary e standby non vengono generate e haproxy espone solo le statistiche.
+
+Variabili principali in group_vars/all.yml:
+
+  keepalived_interface        interfaccia su cui annunciare i VIP (es. ens160).
+                              Verificala con "ip -br addr" sui bilanciatori
+  vip_rancher_ip              VIP nginx, con vip_rancher_prefix per il netmask
+  vip_patroni_ip              VIP haproxy
+  keepalived_vrid_rancher     VRID delle due istanze. Devono essere unici nella
+  keepalived_vrid_patroni     VLAN: due cluster keepalived con lo stesso VRID
+                              sullo stesso broadcast domain si disturbano
+  keepalived_priority_master  priorita' del primo bilanciatore
+  haproxy_backend_port        porta di PgBouncer sui nodi database
+  haproxy_patroni_api_port    porta della REST API di Patroni per gli health
+                              check /primary e /replica
+  nginx_load_stream_module    false: la configurazione generata usa solo http{}
+
+Il ruolo keepalived_install imposta net.ipv4.ip_nonlocal_bind=1. Senza, nginx
+e haproxy non riescono a fare il bind del VIP sul nodo che non lo possiede e
+non partono affatto. Per questo keepalived_install gira prima degli altri due.
+
+
 RIUTILIZZO DI MACCHINE GIA' USATE
 
 site.yml e' un playbook di installazione da zero: crea un nuovo cluster via API

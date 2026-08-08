@@ -91,20 +91,24 @@
     - kubectl_setup
 
 
-# SETTIMO PLAY: Nginx install
-- name: Install and configure Nginx
+# SETTIMO PLAY: bilanciatori in HA - keepalived, haproxy, nginx.
+# keepalived per primo: imposta net.ipv4.ip_nonlocal_bind, senza il quale
+# nginx e haproxy non riescono a fare il bind del VIP sul nodo che in quel
+# momento non lo possiede.
+- name: Install and configure load balancers
   hosts: nginx_servers
   become: yes
-  vars_files:
-    - group_vars/all.yml
   roles:
+    - keepalived_install
+    - haproxy_install
     - nginx_install
   post_tasks:
     - name: Display completion message
       debug:
         msg:
-          - "Nginx installation and configuration completed successfully!"
-          - "Server configured for: {{ nginx_server_name }}"
-          - "SSL Certificate: {{ nginx_ssl_cert_path }}"
-          - "SSL Key: {{ nginx_ssl_key_path }}"
-          - "Remember to copy your SSL certificates to {{ nginx_cert_dir }}/"
+          - "Bilanciatore {{ inventory_hostname }} configurato."
+          - "Ruolo VRRP: {{ 'MASTER' if groups['nginx_servers'].index(inventory_hostname) == 0 else 'BACKUP' }}"
+          - "VIP console Rancher (nginx): {{ vip_rancher_ip }} -> {{ nginx_server_name }}"
+          - "VIP Patroni/PgBouncer (haproxy): {{ vip_patroni_ip }} porte {{ haproxy_primary_port }}/{{ haproxy_standby_port }}"
+          - "Statistiche haproxy: http://{{ hostvars[inventory_hostname].ansible_host }}:{{ haproxy_stats_port }}/"
+          - "Certificati attesi in {{ nginx_cert_dir }}/"

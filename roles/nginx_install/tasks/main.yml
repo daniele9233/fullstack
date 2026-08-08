@@ -50,7 +50,7 @@
 
 - name: Create Nginx conf-http.d directory
   file:
-    path: /etc/nginx/conf-http.d
+    path: "{{ nginx_conf_http_dir }}"
     state: directory
     owner: root
     group: root
@@ -63,6 +63,23 @@
     remote_src: yes
     backup: yes
   ignore_errors: yes
+
+# I server block vanno scritti prima di nginx.conf, che li include: cosi' il
+# "nginx -t" piu' sotto valida l'insieme completo. Non hanno un validate
+# proprio perche' da soli sono frammenti: referenziano upstream e contesto
+# http{} che stanno in nginx.conf.
+- name: Deploy dei server block in conf-http.d
+  template:
+    src: "{{ item }}.j2"
+    dest: "{{ nginx_conf_http_dir }}/{{ item }}"
+    owner: root
+    group: root
+    mode: '0644'
+    backup: yes
+  loop:
+    - rancher-console.conf
+    - rancher-ingress.conf
+  notify: restart nginx
 
 - name: Deploy Nginx configuration from template
   template:
@@ -83,6 +100,9 @@
   debug:
     var: nginx_test.stdout_lines
 
+# Su un bilanciatore in HA nginx e' attivo/passivo: keepalived lo avvia sul
+# nodo che tiene il VIP e lo ferma sugli altri entro pochi secondi. Qui viene
+# comunque avviato, poi lo stato lo decide keepalived.
 - name: Enable and start Nginx service
   systemd:
     name: nginx

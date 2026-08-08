@@ -1,0 +1,36 @@
+---
+- name: Installa haproxy
+  apt:
+    name: haproxy
+    state: present
+    update_cache: yes
+    cache_valid_time: 3600
+
+- name: Deploy della configurazione haproxy
+  template:
+    src: haproxy.cfg.j2
+    dest: "{{ haproxy_config_path }}"
+    owner: root
+    group: root
+    mode: '0644'
+    backup: yes
+    # haproxy rifiuta di partire con una configurazione non valida: meglio
+    # scoprirlo qui che lasciare il servizio giu'.
+    validate: "haproxy -c -f %s"
+  notify: reload haproxy
+
+- name: Abilita e avvia haproxy
+  systemd:
+    name: haproxy
+    enabled: yes
+    state: started
+    daemon_reload: yes
+
+- name: Segnala che non ci sono backend configurati
+  debug:
+    msg: >-
+      Il gruppo [{{ haproxy_backend_group }}] dell'inventario e' vuoto: haproxy
+      espone solo le statistiche sulla porta {{ haproxy_stats_port }}.
+      Popola il gruppo con i nodi Patroni/PgBouncer per generare le sezioni
+      primary ({{ haproxy_primary_port }}) e standby ({{ haproxy_standby_port }}).
+  when: groups[haproxy_backend_group] | default([]) | length == 0

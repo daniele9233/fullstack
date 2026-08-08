@@ -1,0 +1,22 @@
+---
+# Valori di ripiego: group_vars/all.yml ha precedenza maggiore.
+
+vip_patroni_ip: ""
+
+haproxy_stats_port: 7000
+haproxy_primary_port: 5000
+haproxy_standby_port: 5001
+haproxy_backend_port: 6432
+haproxy_patroni_api_port: 8008
+
+haproxy_maxconn_global: 4000
+haproxy_maxconn_default: 3000
+haproxy_maxconn_server: 100
+
+haproxy_chroot: "/var/lib/haproxy"
+haproxy_user: "haproxy"
+haproxy_group: "haproxy"
+haproxy_config_path: "/etc/haproxy/haproxy.cfg"
+
+# Gruppo dell'inventario da cui prendere i nodi Patroni/PgBouncer.
+haproxy_backend_group: "db_servers"

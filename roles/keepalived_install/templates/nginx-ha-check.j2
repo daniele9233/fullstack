@@ -1,0 +1,36 @@
+#!/bin/bash
+# {{ ansible_managed }} - roles/keepalived_install
+#
+# Eseguito da keepalived ogni {{ keepalived_nginx_check_interval }} secondi.
+# Legge lo stato scritto da nginx-ha-notify e allinea il servizio nginx: attivo
+# solo sul nodo che tiene il VIP {{ vip_rancher_ip }}.
+#
+# Il nome dell'istanza arriva dalla variabile keepalived_rancher_instance ed e'
+# lo stesso su tutti i bilanciatori. Con nomi diversi tra i nodi questo file
+# cercherebbe uno stato che sul secondo nodo non viene mai scritto.
+
+STATE_FILE="/run/keepalive.INSTANCE.{{ keepalived_rancher_instance }}.state"
+
+# Prima della prima transizione VRRP il file non esiste ancora: senza questo
+# controllo "cat" fallirebbe e lo stato risulterebbe vuoto.
+if [ ! -r "$STATE_FILE" ]; then
+    logger -t nginx-ha-keepalived "state file $STATE_FILE assente, nessuna azione"
+    exit 1
+fi
+
+STATE=$(cat "$STATE_FILE")
+
+case "$STATE" in
+    MASTER)
+        systemctl start nginx
+        exit 0
+        ;;
+    BACKUP|FAULT|STOP)
+        systemctl stop nginx
+        exit 0
+        ;;
+    *)
+        logger -t nginx-ha-keepalived "Unknown state: '$STATE'"
+        exit 1
+        ;;
+esac

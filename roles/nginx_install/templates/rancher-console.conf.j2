@@ -1,0 +1,30 @@
+{{ '#' }} {{ ansible_managed }} - roles/nginx_install
+{{ '#' }} Console Rancher, esposta sul VIP {{ vip_rancher_ip }}.
+server {
+    listen {{ vip_rancher_ip }}:443 ssl;
+    server_name {{ nginx_server_name }};
+
+    ssl_certificate {{ nginx_ssl_cert_path }};
+    ssl_certificate_key {{ nginx_ssl_key_path }};
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+
+    access_log /var/log/nginx/access_proxy.log;
+    error_log /var/log/nginx/error_proxy.log;
+
+    location / {
+        proxy_pass https://rancher_servers_https;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout {{ nginx_proxy_read_timeout }};
+        proxy_set_header Origin $http_origin;
+
+        # La console Rancher usa WebSocket per shell e log dei pod.
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_ssl_server_name on;
+    }
+}

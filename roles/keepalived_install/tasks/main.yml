@@ -1,0 +1,74 @@
+---
+- name: Verifica che i VIP siano configurati
+  assert:
+    that:
+      - vip_rancher_ip | length > 0
+      - vip_patroni_ip | length > 0
+      - vip_rancher_ip != vip_patroni_ip
+    fail_msg: >-
+      vip_rancher_ip e vip_patroni_ip devono essere valorizzati in
+      group_vars/all.yml e devono essere due indirizzi diversi.
+
+- name: Verifica che l'interfaccia di rete esista sul nodo
+  shell: "ip -o link show {{ keepalived_interface }}"
+  register: keepalived_iface_check
+  changed_when: false
+  failed_when: keepalived_iface_check.rc != 0
+
+- name: Installa keepalived
+  apt:
+    name: keepalived
+    state: present
+    update_cache: yes
+    cache_valid_time: 3600
+
+# nginx e haproxy fanno il bind del VIP anche sul nodo che in quel momento non
+# lo possiede. Senza questo sysctl il bind fallisce e i servizi non partono.
+- name: Consenti il bind su indirizzi non locali
+  sysctl:
+    name: net.ipv4.ip_nonlocal_bind
+    value: "1"
+    sysctl_set: yes
+    state: present
+    reload: yes
+
+- name: Crea la directory di configurazione keepalived
+  file:
+    path: "{{ keepalived_config_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# Gli script vanno scritti prima della configurazione che li referenzia:
+# con enable_script_security keepalived rifiuta di eseguire script mancanti o
+# scrivibili da utenti non privilegiati.
+- name: Installa gli script di check e notify
+  template:
+    src: "{{ item }}.j2"
+    dest: "{{ keepalived_config_dir }}/{{ item }}"
+    owner: root
+    group: root
+    mode: '0750'
+  loop:
+    - nginx-ha-check
+    - nginx-ha-notify
+  notify: restart keepalived
+
+- name: Deploy della configurazione keepalived
+  template:
+    src: keepalived.conf.j2
+    dest: "{{ keepalived_config_dir }}/keepalived.conf"
+    owner: root
+    group: root
+    mode: '0644'
+    backup: yes
+    validate: "keepalived --config-test -f %s"
+  notify: restart keepalived
+
+- name: Abilita e avvia keepalived
+  systemd:
+    name: keepalived
+    enabled: yes
+    state: started
+    daemon_reload: yes

@@ -111,23 +111,31 @@ rancher_https_port: 443
 nginx_upstream_max_fails: 3
 nginx_upstream_fail_timeout: "5s"
 
-
-rancher_ingress_https:
-  - server: "10.205.166.219:443"
-    max_fails: 3
-    fail_timeout: "5s"
-
-rancher_ingress_https_1:
-  - server: "10.205.166.220:443"
-    max_fails: 3
-    fail_timeout: "5s"
-
+# Anche l'upstream verso gli ingress deriva dal gruppo [ingress]. Prima erano
+# tre variabili separate (rancher_ingress_https, _1, _2) con un solo server
+# ciascuna, e una sola veniva referenziata da proxy_pass: il secondo nodo
+# ingress non riceveva traffico.
+ingress_https_port: 443
 
 # Configurazione Nginx
 nginx_user: "www-data"
 nginx_worker_processes: 2
 nginx_worker_rlimit_nofile: 40000
+nginx_worker_connections: 8192
 nginx_client_max_body_size: "2G"
+nginx_server_names_hash_bucket_size: 128
+nginx_server_names_hash_max_size: 512
+nginx_proxy_read_timeout: 900
+
+# I server block stanno in file separati dentro questa directory, inclusa da
+# nginx.conf all'interno del blocco http.
+nginx_conf_http_dir: "/etc/nginx/conf-http.d"
+
+# La configurazione generata usa solo http{}, quindi il modulo stream non serve
+# e non viene caricato. Metterlo a true solo se si aggiunge un blocco stream{},
+# e verificando che il modulo esista sul pacchetto nginx installato.
+nginx_load_stream_module: false
+nginx_stream_module_path: "/usr/lib/nginx/modules/ngx_stream_module.so"
 
 # Path directory certificati
 nginx_cert_dir: "/etc/nginx/cert"
@@ -135,6 +143,64 @@ nginx_cert_dir: "/etc/nginx/cert"
 # Path locali certificati
 local_ssl_cert_path: "files/fullchain.pem"
 local_ssl_key_path: "files/privkey.pem"
+
+# ---------------------------------------------------------------------------
+# BILANCIATORI (gruppo [nginx_servers]): nginx + haproxy + keepalived
+# ---------------------------------------------------------------------------
+# Due nodi in HA con due VIP distinti, ciascuno gestito da una propria istanza
+# VRRP:
+#   - vip_rancher_ip  -> lo tiene nginx, espone la console Rancher e i servizi
+#   - vip_patroni_ip  -> lo tiene haproxy, espone Patroni/PgBouncer
+
+# >>> VERIFICA CHE QUESTI DUE INDIRIZZI SIANO LIBERI NELLA TUA VLAN <<<
+vip_rancher_ip: "10.205.166.230"
+vip_rancher_prefix: 24
+vip_patroni_ip: "10.205.166.231"
+
+# Interfaccia su cui keepalived annuncia i VIP. Deve esistere sui bilanciatori:
+# verificala con "ip -br addr" prima di lanciare.
+keepalived_interface: "ens160"
+
+# I VRID devono essere unici nella VLAN: due cluster keepalived con lo stesso
+# VRID sullo stesso dominio di broadcast si disturbano a vicenda.
+keepalived_vrid_rancher: 151
+keepalived_vrid_patroni: 51
+
+# Nomi delle istanze VRRP. Devono essere UGUALI su tutti i bilanciatori: lo
+# script di check legge /run/keepalive.INSTANCE.<nome>.state, che lo script di
+# notify scrive usando il nome dell'istanza locale. Nomi diversi tra i nodi
+# (es. VI_1 sul primo e VI_2 sul secondo) rompono il check sul secondo nodo.
+keepalived_rancher_instance: "VI_1"
+keepalived_patroni_instance: "vrrp_1"
+
+# Priorita' del primo bilanciatore dell'inventario; gli altri scalano di step.
+# Il primo host di [nginx_servers] e' MASTER, gli altri BACKUP.
+keepalived_priority_master: 101
+keepalived_priority_step: 1
+
+keepalived_advert_int: 1
+keepalived_garp_master_refresh: 5
+keepalived_garp_master_refresh_repeat: 1
+
+# Peso aggiunto dal check di nginx e sottratto dal track dell'interfaccia.
+keepalived_nginx_check_weight: 50
+keepalived_nginx_check_interval: 3
+keepalived_interface_track_weight: -2
+
+# HAProxy: front-end Patroni/PgBouncer
+haproxy_stats_port: 7000
+haproxy_primary_port: 5000
+haproxy_standby_port: 5001
+# Porta di PgBouncer sui nodi database.
+haproxy_backend_port: 6432
+# Porta della REST API di Patroni, usata per gli health check /primary e /replica.
+haproxy_patroni_api_port: 8008
+haproxy_maxconn_global: 4000
+haproxy_maxconn_default: 3000
+haproxy_maxconn_server: 100
+haproxy_chroot: "/var/lib/haproxy"
+haproxy_user: "haproxy"
+haproxy_group: "haproxy"
 
 # Prometheus/Monitoring configuration
 prometheus_namespace: "monitoring"

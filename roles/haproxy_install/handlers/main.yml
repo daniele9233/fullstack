@@ -1,0 +1,7 @@
+---
+# reload invece di restart: haproxy ricarica la configurazione senza chiudere
+# le connessioni in corso verso il database.
+- name: reload haproxy
+  systemd:
+    name: haproxy
+    state: reloaded

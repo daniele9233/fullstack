@@ -1,111 +1,48 @@
-#load_module /usr/lib/nginx/modules/ngx_stream_module.so;
+{{ '#' }} {{ ansible_managed }} - roles/nginx_install
+{% if nginx_load_stream_module %}
+{{ '#' }} Serve solo se si aggiunge un blocco stream{}: la configurazione generata
+{{ '#' }} qui usa esclusivamente http{}. Su pacchetti senza questo modulo (per
+{{ '#' }} esempio nginx-light) caricarlo fa fallire l'avvio.
+load_module {{ nginx_stream_module_path }};
+{% endif %}
 user {{ nginx_user }};
 worker_processes {{ nginx_worker_processes }};
 worker_rlimit_nofile {{ nginx_worker_rlimit_nofile }};
 error_log /var/log/nginx/error.log;
 pid /run/nginx.pid;
-#include /etc/nginx/modules-enabled/*.conf;
 
 events {
-    worker_connections 1024;
-    use epoll;
-    multi_accept on;
+    worker_connections {{ nginx_worker_connections }};
 }
 
 http {
+    server_names_hash_bucket_size {{ nginx_server_names_hash_bucket_size }};
+    server_names_hash_max_size {{ nginx_server_names_hash_max_size }};
     client_max_body_size {{ nginx_client_max_body_size }};
 
-    # Generato dal gruppo [masters] dell'inventario: passando da 1 a 3 master
-    # il bilanciatore si aggiorna da solo, senza IP scritti a mano qui dentro.
+    # Upstream generati dai gruppi [masters] e [ingress] dell'inventario:
+    # aggiungere o togliere un nodo non richiede di toccare questo template.
     upstream rancher_servers_https {
 {% for host in groups['masters'] %}
         server {{ hostvars[host].ansible_host }}:{{ rancher_https_port }} max_fails={{ nginx_upstream_max_fails }} fail_timeout={{ nginx_upstream_fail_timeout }};
 {% endfor %}
     }
 
-
     upstream rancher_ingress_https {
-{% for server in rancher_ingress_https %}
-        server {{ server.server }} max_fails={{ server.max_fails }} fail_timeout={{ server.fail_timeout }};
+{% for host in groups['ingress'] %}
+        server {{ hostvars[host].ansible_host }}:{{ ingress_https_port }} max_fails={{ nginx_upstream_max_fails }} fail_timeout={{ nginx_upstream_fail_timeout }};
 {% endfor %}
     }
 
-    # Upstream ingress aggiuntivi: resi solo se la variabile e' definita e non vuota.
-    # Un upstream senza server e' un errore di sintassi per nginx, quindi il blocco
-    # va omesso del tutto quando il nodo corrispondente non e' in inventario.
-{% if rancher_ingress_https_1 is defined and rancher_ingress_https_1 %}
-    upstream rancher_ingress_https_1 {
-{% for server in rancher_ingress_https_1 %}
-        server {{ server.server }} max_fails={{ server.max_fails }} fail_timeout={{ server.fail_timeout }};
-{% endfor %}
-    }
-{% endif %}
-{% if rancher_ingress_https_2 is defined and rancher_ingress_https_2 %}
-
-    upstream rancher_ingress_https_2 {
-{% for server in rancher_ingress_https_2 %}
-        server {{ server.server }} max_fails={{ server.max_fails }} fail_timeout={{ server.fail_timeout }};
-{% endfor %}
-    }
-{% endif %}
-
-
-    # Redirezione HTTP a HTTPS
     server {
         listen 80 default_server;
         server_name _;
         return 301 https://$host$request_uri;
     }
 
-    # Blocco Rancher
-    server {
-        listen 443 ssl;
-        server_name {{ nginx_server_name }};
-        ssl_certificate {{ nginx_ssl_cert_path }};
-        ssl_certificate_key {{ nginx_ssl_key_path }};
-        ssl_protocols TLSv1.2 TLSv1.3;
-        ssl_ciphers HIGH:!aNULL:!MD5;
-
-        location / {
-            proxy_pass https://rancher_servers_https;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
-            proxy_set_header X-Forwarded-Host $host;
-            proxy_set_header X-Forwarded-Port $server_port;
-            proxy_http_version 1.1;
-            proxy_set_header Upgrade $http_upgrade;
-            proxy_set_header Connection "Upgrade";
-            proxy_ssl_server_name on;
-        }
-    }
-
-    # Blocco Multi-Servizi
-    server {
-        listen 443 ssl;
-        server_name {% for name in multi_services_server_names %}{{ name }} {% endfor %};
-        ssl_certificate {{ multi_services_ssl_cert_path }};
-        ssl_certificate_key {{ multi_services_ssl_key_path }};
-        ssl_protocols TLSv1.2 TLSv1.3;
-        ssl_ciphers HIGH:!aNULL:!MD5;
-
-        location / {
-            proxy_pass https://rancher_ingress_https;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
-            proxy_set_header X-Forwarded-Host $host;
-            proxy_set_header X-Forwarded-Port $server_port;
-            proxy_ssl_server_name on;
-        }
-    }
-
-    # Gli include stanno dentro http{}: nel contesto main il primo file con un
-    # blocco server{} o upstream{} farebbe fallire nginx -t con
+    # I server block HTTPS stanno in file separati. Gli include restano dentro
+    # http{}: nel contesto main il primo server{} farebbe fallire nginx -t con
     # "directive is not allowed here".
     include /etc/nginx/conf.d/*.conf;
-    include /etc/nginx/conf-http.d/*.conf;
+    include {{ nginx_conf_http_dir }}/*.conf;
 }
-

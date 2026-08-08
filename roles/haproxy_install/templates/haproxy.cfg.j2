@@ -1,0 +1,78 @@
+{% set backends = groups[haproxy_backend_group] | default([]) %}
+# {{ ansible_managed }} - roles/haproxy_install
+global
+        log 127.0.0.1 local2
+        log /dev/log local0
+        log /dev/log local1 notice
+        chroot {{ haproxy_chroot }}
+        stats socket /run/haproxy/admin.sock mode 660 level admin expose-fd listeners
+        stats timeout 30s
+        user {{ haproxy_user }}
+        group {{ haproxy_group }}
+        maxconn {{ haproxy_maxconn_global }}
+        daemon
+
+        # Default SSL material locations
+        ca-base /etc/ssl/certs
+        crt-base /etc/ssl/private
+
+        # See: https://ssl-config.mozilla.org/#server=haproxy&config=intermediate
+        ssl-default-bind-ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384
+        ssl-default-bind-ciphersuites TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256
+        ssl-default-bind-options ssl-min-ver TLSv1.2 no-tls-tickets
+
+defaults
+        log     global
+        mode    tcp
+        option  tcplog
+        retries 3
+        timeout queue 1m
+        timeout connect 10s
+        timeout client  1m
+        timeout server  1m
+        timeout check   10s
+        maxconn         {{ haproxy_maxconn_default }}
+        errorfile 400 /etc/haproxy/errors/400.http
+        errorfile 403 /etc/haproxy/errors/403.http
+        errorfile 408 /etc/haproxy/errors/408.http
+        errorfile 500 /etc/haproxy/errors/500.http
+        errorfile 502 /etc/haproxy/errors/502.http
+        errorfile 503 /etc/haproxy/errors/503.http
+        errorfile 504 /etc/haproxy/errors/504.http
+
+listen stats
+    bind *:{{ haproxy_stats_port }}
+    mode http
+    stats enable
+    stats uri /
+
+{% if backends | length > 0 %}
+# Il bind sul VIP funziona anche sul nodo che non lo possiede grazie a
+# net.ipv4.ip_nonlocal_bind, impostato dal ruolo keepalived_install.
+# Health check sulla REST API di Patroni: /primary risponde 200 solo sul leader.
+listen primary
+        bind {{ vip_patroni_ip }}:{{ haproxy_primary_port }}
+        bind *:{{ haproxy_primary_port }}
+        option httpchk OPTIONS /primary
+        http-check expect status 200
+        default-server inter 3s fall 3 rise 2 on-marked-down shutdown-sessions
+{% for host in backends %}
+        server {{ host }} {{ hostvars[host].ansible_host }}:{{ haproxy_backend_port }} maxconn {{ haproxy_maxconn_server }} check port {{ haproxy_patroni_api_port }}
+{% endfor %}
+
+# /replica risponde 200 su tutte le repliche in salute, quindi qui si bilancia.
+listen standby
+        bind {{ vip_patroni_ip }}:{{ haproxy_standby_port }}
+        bind *:{{ haproxy_standby_port }}
+        balance roundrobin
+        option httpchk OPTIONS /replica
+        http-check expect status 200
+        default-server inter 3s fall 3 rise 2 on-marked-down shutdown-sessions
+{% for host in backends %}
+        server {{ host }} {{ hostvars[host].ansible_host }}:{{ haproxy_backend_port }} maxconn {{ haproxy_maxconn_server }} check port {{ haproxy_patroni_api_port }}
+{% endfor %}
+{% else %}
+# Nessun host nel gruppo [{{ haproxy_backend_group }}] dell'inventario: le sezioni
+# primary e standby non vengono generate. Un listen senza server accetterebbe
+# connessioni per poi non avere dove mandarle.
+{% endif %}
