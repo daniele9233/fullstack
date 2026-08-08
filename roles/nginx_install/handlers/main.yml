@@ -1,9 +1,11 @@
 ---
+# reload e non restart: nginx rilegge configurazione e certificati avviando
+# nuovi worker e lasciando chiudere in modo pulito le connessioni in corso.
+# Gli handler girano a fine play, quando il servizio e' gia' stato avviato.
 - name: restart nginx
   systemd:
     name: nginx
-    state: restarted
-    daemon_reload: yes
+    state: reloaded
 
 - name: reload nginx
   systemd:

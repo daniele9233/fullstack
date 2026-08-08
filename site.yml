@@ -98,6 +98,11 @@
 - name: Install and configure load balancers
   hosts: nginx_servers
   become: yes
+  # serial: 1 per riconfigurare un bilanciatore alla volta. Senza, il riavvio
+  # di keepalived e il reload di nginx avverrebbero in parallelo sui due nodi
+  # e il servizio resterebbe scoperto per qualche secondo a ogni esecuzione.
+  serial: 1
+  order: inventory
   roles:
     - keepalived_install
     - haproxy_install

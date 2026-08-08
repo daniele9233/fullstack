@@ -9,11 +9,9 @@
     name: nginx
     state: present
 
-- name: Ensure Nginx service is stopped before configuration
-  systemd:
-    name: nginx
-    state: stopped
-
+# Nessuno stop preventivo: scrivere certificati e configurazione non richiede
+# che nginx sia fermo, e fermarlo aprirebbe una finestra di disservizio a ogni
+# esecuzione del playbook. Le modifiche vengono applicate dall'handler.
 - name: Create Nginx certificate directory
   file:
     path: "{{ nginx_cert_dir }}"

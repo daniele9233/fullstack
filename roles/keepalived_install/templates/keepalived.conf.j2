@@ -12,13 +12,15 @@ global_defs {
 
 # --- VIP 1: {{ vip_rancher_ip }} - console Rancher e servizi, servito da nginx ---
 
-# Lo script non e' un semplice health check: legge lo stato scritto dal notify
-# e avvia o ferma nginx di conseguenza, cosi' nginx gira solo sul nodo che
-# tiene il VIP.
+# Health check vero: se nginx cade sul nodo che tiene il VIP, la priorita'
+# scende di {{ keepalived_nginx_check_weight }} e il VIP passa all'altro nodo, dove nginx e' gia'
+# in esecuzione. fall/rise a 2 per non spostare il VIP a ogni singolo campione.
 vrrp_script chk_nginx_service {
     script "{{ keepalived_config_dir }}/nginx-ha-check"
     interval {{ keepalived_nginx_check_interval }}
     weight {{ keepalived_nginx_check_weight }}
+    fall 2
+    rise 2
 }
 
 vrrp_instance {{ keepalived_rancher_instance }} {
@@ -42,7 +44,6 @@ vrrp_instance {{ keepalived_rancher_instance }} {
     track_script {
         chk_nginx_service
     }
-    notify "{{ keepalived_config_dir }}/nginx-ha-notify"
 }
 
 # --- VIP 2: {{ vip_patroni_ip }} - Patroni/PgBouncer, servito da haproxy ---
@@ -71,13 +72,10 @@ vrrp_instance {{ keepalived_patroni_instance }} {
     virtual_ipaddress {
         {{ vip_patroni_ip }}
     }
-    {{ '#' }} keepalived traccia gia' implicitamente l'interfaccia dell'istanza e
-    {{ '#' }} logga "Ignoring track_interface <iface> since own interface": questo
-    {{ '#' }} blocco e' quindi inefficace. Mantenuto per aderenza alla
-    {{ '#' }} configurazione di produzione, si puo' togliere senza conseguenze.
-    track_interface {
-        {{ keepalived_interface }} weight {{ keepalived_interface_track_weight }}
-    }
+    {{ '#' }} Niente track_interface su {{ keepalived_interface }}: e' l'interfaccia dell'istanza,
+    {{ '#' }} che keepalived traccia gia' da sola. Dichiararla esplicitamente non
+    {{ '#' }} aggiunge nulla e fa uscire "keepalived --config-test" con codice 5,
+    {{ '#' }} bloccando la validazione del template.
     track_script {
         chk_haproxy
         chk_lb

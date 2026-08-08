@@ -95,8 +95,26 @@ gestiti da due istanze VRRP separate:
                     primary e standby
 
 Il PRIMO host del gruppo e' MASTER per entrambe le istanze, gli altri BACKUP
-con priorita' decrescente. nginx e' attivo/passivo: lo script nginx-ha-check
-lo avvia sul nodo che tiene il VIP e lo ferma sugli altri.
+con priorita' decrescente.
+
+nginx e haproxy girano su TUTTI i bilanciatori; a spostarsi e' solo il VIP.
+E' la condizione perche' il failover funzioni davvero: keepalived controlla il
+servizio locale e, se cade sul nodo che tiene il VIP, la priorita' scende e il
+VIP passa all'altro nodo, dove il servizio e' gia' avviato e risponde subito.
+Uno schema in cui nginx viene fermato sul nodo di riserva non permette al
+check di quel nodo di avere successo, quindi non c'e' nessun nodo verso cui
+fallire.
+
+Failover coperti:
+  - caduta di keepalived su un nodo: l'altro smette di ricevere gli annunci
+    VRRP e prende il VIP
+  - caduta di nginx: chk_nginx_service scende sotto soglia dopo due campioni
+    e il VIP della console passa all'altro nodo
+  - caduta di haproxy: chk_haproxy toglie 4 alla priorita', sotto quella
+    dell'altro nodo, e il VIP di Patroni si sposta
+
+Il play gira con serial: 1, un bilanciatore alla volta, e nginx non viene mai
+fermato durante la riconfigurazione: le modifiche si applicano con un reload.
 
 Gli upstream nginx derivano dai gruppi [masters] e [ingress] dell'inventario,
 i backend haproxy dal gruppo [db_servers]: con [db_servers] vuoto le sezioni

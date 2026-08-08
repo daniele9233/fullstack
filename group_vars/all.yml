@@ -166,10 +166,7 @@ keepalived_interface: "ens160"
 keepalived_vrid_rancher: 151
 keepalived_vrid_patroni: 51
 
-# Nomi delle istanze VRRP. Devono essere UGUALI su tutti i bilanciatori: lo
-# script di check legge /run/keepalive.INSTANCE.<nome>.state, che lo script di
-# notify scrive usando il nome dell'istanza locale. Nomi diversi tra i nodi
-# (es. VI_1 sul primo e VI_2 sul secondo) rompono il check sul secondo nodo.
+# Nomi delle istanze VRRP, uguali su tutti i bilanciatori.
 keepalived_rancher_instance: "VI_1"
 keepalived_patroni_instance: "vrrp_1"
 
@@ -182,10 +179,15 @@ keepalived_advert_int: 1
 keepalived_garp_master_refresh: 5
 keepalived_garp_master_refresh_repeat: 1
 
-# Peso aggiunto dal check di nginx e sottratto dal track dell'interfaccia.
+# Peso che il check di nginx aggiunge alla priorita' quando nginx e' sano.
+# Deve superare il divario di priorita' fra i nodi, altrimenti la caduta di
+# nginx sul MASTER non basta a spostare il VIP.
 keepalived_nginx_check_weight: 50
 keepalived_nginx_check_interval: 3
-keepalived_interface_track_weight: -2
+
+# Porta su cui lo script verifica che nginx sia davvero in ascolto. La 80 e'
+# il server di redirect verso https, presente in nginx.conf su ogni nodo.
+nginx_health_check_port: 80
 
 # HAProxy: front-end Patroni/PgBouncer
 haproxy_stats_port: 7000

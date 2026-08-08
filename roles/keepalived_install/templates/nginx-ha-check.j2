@@ -1,36 +1,25 @@
 #!/bin/bash
 # {{ ansible_managed }} - roles/keepalived_install
 #
-# Eseguito da keepalived ogni {{ keepalived_nginx_check_interval }} secondi.
-# Legge lo stato scritto da nginx-ha-notify e allinea il servizio nginx: attivo
-# solo sul nodo che tiene il VIP {{ vip_rancher_ip }}.
+# Health check di nginx per keepalived, eseguito ogni
+# {{ keepalived_nginx_check_interval }} secondi.
 #
-# Il nome dell'istanza arriva dalla variabile keepalived_rancher_instance ed e'
-# lo stesso su tutti i bilanciatori. Con nomi diversi tra i nodi questo file
-# cercherebbe uno stato che sul secondo nodo non viene mai scritto.
+# Uscita 0  -> nginx sano, keepalived aggiunge {{ keepalived_nginx_check_weight }} alla priorita'
+# Uscita 1  -> nginx non utilizzabile, la priorita' scende e il VIP passa all'altro nodo
+#
+# Deve limitarsi a CONTROLLARE. Una versione che avvia o ferma nginx e poi esce
+# sempre 0 non fa scattare nessun failover quando nginx e' rotto: il VIP resta
+# dov'e' e il servizio resta giu'.
 
-STATE_FILE="/run/keepalive.INSTANCE.{{ keepalived_rancher_instance }}.state"
-
-# Prima della prima transizione VRRP il file non esiste ancora: senza questo
-# controllo "cat" fallirebbe e lo stato risulterebbe vuoto.
-if [ ! -r "$STATE_FILE" ]; then
-    logger -t nginx-ha-keepalived "state file $STATE_FILE assente, nessuna azione"
+# 1. Il servizio deve risultare attivo per systemd.
+if ! systemctl is-active --quiet nginx; then
     exit 1
 fi
 
-STATE=$(cat "$STATE_FILE")
+# 2. E deve essere davvero in ascolto: un master process vivo con i worker
+#    morti supererebbe il controllo precedente.
+if ! ss -lnt | awk '$4 ~ /:{{ nginx_health_check_port }}$/ {found=1} END {exit !found}'; then
+    exit 1
+fi
 
-case "$STATE" in
-    MASTER)
-        systemctl start nginx
-        exit 0
-        ;;
-    BACKUP|FAULT|STOP)
-        systemctl stop nginx
-        exit 0
-        ;;
-    *)
-        logger -t nginx-ha-keepalived "Unknown state: '$STATE'"
-        exit 1
-        ;;
-esac
+exit 0

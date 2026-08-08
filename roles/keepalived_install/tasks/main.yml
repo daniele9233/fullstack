@@ -43,17 +43,23 @@
 # Gli script vanno scritti prima della configurazione che li referenzia:
 # con enable_script_security keepalived rifiuta di eseguire script mancanti o
 # scrivibili da utenti non privilegiati.
-- name: Installa gli script di check e notify
+- name: Installa lo script di health check di nginx
   template:
-    src: "{{ item }}.j2"
-    dest: "{{ keepalived_config_dir }}/{{ item }}"
+    src: nginx-ha-check.j2
+    dest: "{{ keepalived_config_dir }}/nginx-ha-check"
     owner: root
     group: root
     mode: '0750'
-  loop:
-    - nginx-ha-check
-    - nginx-ha-notify
   notify: restart keepalived
+
+# Lo schema precedente avviava e fermava nginx tramite un file di stato scritto
+# da uno script di notify. Ora nginx gira su entrambi i nodi e keepalived si
+# limita a controllarlo, quindi il notify non serve piu' e va tolto dal disco
+# per non lasciare in giro uno script che nessuno invoca.
+- name: Rimuovi lo script di notify obsoleto
+  file:
+    path: "{{ keepalived_config_dir }}/nginx-ha-notify"
+    state: absent
 
 - name: Deploy della configurazione keepalived
   template:

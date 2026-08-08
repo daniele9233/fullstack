@@ -23,7 +23,7 @@ keepalived_garp_master_refresh_repeat: 1
 
 keepalived_nginx_check_weight: 50
 keepalived_nginx_check_interval: 3
-keepalived_interface_track_weight: -2
+nginx_health_check_port: 80
 
 haproxy_stats_port: 7000
 
