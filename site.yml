@@ -91,6 +91,31 @@
     - kubectl_setup
 
 
+# PLAY STORAGE: GlusterFS replicato, Ganesha NFS e Pacemaker.
+# Ordine obbligato: i volumi Gluster devono esistere prima che Ganesha li
+# esporti, e gli export devono esistere prima che Pacemaker avvii il servizio.
+# Niente serial: peering e creazione dei volumi sono operazioni di cluster e
+# girano gia' solo dal primo nodo del gruppo.
+- name: Install and configure GlusterFS with Ganesha NFS in HA
+  hosts: gluster_servers
+  become: yes
+  gather_facts: yes
+  roles:
+    - glusterfs_install
+    - ganesha_install
+    - pacemaker_nfs_ha
+  post_tasks:
+    - name: Riepilogo storage
+      debug:
+        msg:
+          - "Nodi Gluster: {{ groups['gluster_servers'] | join(', ') }}"
+          - "Arbitro (solo metadati): {{ groups['gluster_servers'][-1] if gluster_arbiter_count | int > 0 else 'nessuno' }}"
+          - "Volumi: {{ gluster_volumes | map(attribute='name') | join(', ') }}"
+          - "VIP NFS gestito da Pacemaker: {{ nfs_vip_ip }}"
+          - "Mount dal client: mount -t nfs4 {{ nfs_vip_ip }}:{{ gluster_volumes[0].pseudo }} /mnt"
+      run_once: true
+
+
 # SETTIMO PLAY: bilanciatori in HA - keepalived, haproxy, nginx.
 # keepalived per primo: imposta net.ipv4.ip_nonlocal_bind, senza il quale
 # nginx e haproxy non riescono a fare il bind del VIP sul nodo che in quel

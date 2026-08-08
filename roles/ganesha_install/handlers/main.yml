@@ -1,0 +1,15 @@
+---
+# Se il servizio e' in mano a Pacemaker, si riavvia la RISORSA, non l'unit
+# systemd: un restart diretto verrebbe visto dal cluster come un guasto.
+- name: restart ganesha
+  command: "pcs resource restart {{ pcs_resource_ganesha }}"
+  when: ganesha_managed_by_pacemaker and inventory_hostname == groups['gluster_servers'][0]
+  failed_when: false
+  changed_when: true
+
+- name: restart ganesha systemd
+  systemd:
+    name: nfs-ganesha
+    state: restarted
+  when: not ganesha_managed_by_pacemaker
+  listen: restart ganesha

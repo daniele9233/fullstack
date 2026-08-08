@@ -1,0 +1,139 @@
+---
+# Pacemaker tiene insieme il servizio Ganesha e il VIP NFS: stanno nello stesso
+# gruppo di risorse, quindi si spostano insieme sullo stesso nodo.
+#
+# La configurazione del cluster e' un'operazione unica, non per nodo: tutto
+# quello che segue la sezione "solo primo nodo" gira solo da li'.
+
+- name: Verifica i parametri obbligatori del cluster
+  assert:
+    that:
+      - nfs_vip_ip | length > 0
+      - pcs_cluster_password | length > 0
+    fail_msg: >-
+      nfs_vip_ip e pcs_cluster_password devono essere valorizzati in
+      group_vars/all.yml.
+  run_once: true
+
+- name: Verifica che il VIP NFS non sia gia' assegnato a un host
+  assert:
+    that:
+      - nfs_vip_ip not in (groups['gluster_servers'] | map('extract', hostvars, 'ansible_host') | list)
+    fail_msg: >-
+      nfs_vip_ip ({{ nfs_vip_ip }}) coincide con l'indirizzo di un nodo del
+      cluster. Il VIP deve essere un indirizzo libero.
+  run_once: true
+
+- name: Installa Pacemaker e pcs
+  apt:
+    name:
+      - pacemaker
+      - pcs
+      - resource-agents
+    state: present
+    update_cache: yes
+    cache_valid_time: 3600
+
+- name: Abilita e avvia pcsd
+  systemd:
+    name: pcsd
+    enabled: yes
+    state: started
+    daemon_reload: yes
+
+# pcs autentica i nodi fra loro con questo utente: la password deve essere la
+# stessa ovunque. Il modulo user e' idempotente e non la riscrive a ogni run.
+- name: Imposta la password dell'utente di cluster
+  user:
+    name: "{{ pcs_cluster_user }}"
+    password: "{{ pcs_cluster_password | password_hash('sha512', 65534 | random(seed=inventory_hostname) | string) }}"
+    update_password: always
+  no_log: true
+
+# --- Da qui solo sul primo nodo ---
+
+- name: Verifica se il cluster esiste gia'
+  command: pcs cluster status
+  register: pcs_status
+  changed_when: false
+  failed_when: false
+  when: inventory_hostname == groups['gluster_servers'][0]
+
+- name: Autentica i nodi del cluster
+  command: >-
+    pcs host auth {{ groups['gluster_servers'] | join(' ') }}
+    -u {{ pcs_cluster_user }} -p {{ pcs_cluster_password }}
+  when:
+    - inventory_hostname == groups['gluster_servers'][0]
+    - pcs_status.rc != 0
+  no_log: true
+
+# Tutti e tre i nodi, non due: un cluster a due nodi non ha quorum quando ne
+# perde uno, e con tre nodi il quorum resta con la maggioranza.
+- name: Crea il cluster
+  command: >-
+    pcs cluster setup {{ pcs_cluster_name }}
+    {{ groups['gluster_servers'] | join(' ') }} --start --enable
+  when:
+    - inventory_hostname == groups['gluster_servers'][0]
+    - pcs_status.rc != 0
+
+- name: Attendi che il cluster risponda
+  command: pcs cluster status
+  register: pcs_ready
+  until: pcs_ready.rc == 0
+  retries: 30
+  delay: 5
+  changed_when: false
+  when: inventory_hostname == groups['gluster_servers'][0]
+
+- name: Imposta stonith
+  command: "pcs property set stonith-enabled={{ pcs_stonith_enabled | lower }}"
+  when: inventory_hostname == groups['gluster_servers'][0]
+  changed_when: true
+
+- name: Leggi le risorse gia' definite
+  command: pcs resource config
+  register: pcs_resources
+  changed_when: false
+  failed_when: false
+  when: inventory_hostname == groups['gluster_servers'][0]
+
+- name: Crea la risorsa Ganesha
+  command: >-
+    pcs resource create {{ pcs_resource_ganesha }} systemd:nfs-ganesha
+    op monitor interval={{ pcs_resource_monitor_interval }}
+  when:
+    - inventory_hostname == groups['gluster_servers'][0]
+    - pcs_resource_ganesha not in (pcs_resources.stdout | default(''))
+
+- name: Crea la risorsa VIP
+  command: >-
+    pcs resource create {{ pcs_resource_vip }} ocf:heartbeat:IPaddr2
+    ip={{ nfs_vip_ip }} cidr_netmask={{ nfs_vip_prefix }}
+    op monitor interval={{ pcs_resource_monitor_interval }}
+  when:
+    - inventory_hostname == groups['gluster_servers'][0]
+    - pcs_resource_vip not in (pcs_resources.stdout | default(''))
+
+# Nello stesso gruppo per due motivi: restano sullo stesso nodo e partono in
+# ordine, prima Ganesha e poi il VIP. Cosi' il VIP non viene mai annunciato
+# prima che il servizio dietro sia pronto a rispondere.
+- name: Raggruppa Ganesha e VIP
+  command: >-
+    pcs resource group add {{ pcs_resource_group }}
+    {{ pcs_resource_ganesha }} {{ pcs_resource_vip }}
+  when:
+    - inventory_hostname == groups['gluster_servers'][0]
+    - pcs_resource_group not in (pcs_resources.stdout | default(''))
+
+- name: Stato finale del cluster
+  command: pcs status
+  register: pcs_final
+  changed_when: false
+  when: inventory_hostname == groups['gluster_servers'][0]
+
+- name: Mostra lo stato del cluster
+  debug:
+    msg: "{{ pcs_final.stdout_lines }}"
+  when: inventory_hostname == groups['gluster_servers'][0]

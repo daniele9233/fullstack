@@ -1,0 +1,14 @@
+---
+# Valori di ripiego: group_vars/all.yml ha precedenza maggiore.
+pcs_cluster_name: "nfs_export"
+pcs_cluster_user: "hacluster"
+pcs_cluster_password: ""
+pcs_stonith_enabled: false
+pcs_resource_monitor_interval: "10s"
+
+pcs_resource_ganesha: "nfs_server"
+pcs_resource_vip: "nfs_ip"
+pcs_resource_group: "nfs_group"
+
+nfs_vip_ip: ""
+nfs_vip_prefix: 24

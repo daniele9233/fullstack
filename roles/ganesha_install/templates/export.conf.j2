@@ -1,0 +1,42 @@
+{{ '#' }} {{ ansible_managed }} - roles/ganesha_install
+{{ '#' }} Export del volume Gluster {{ item.name }} su {{ item.pseudo }}
+EXPORT
+{
+    {{ '#' }} Deve essere unico fra tutti gli export: qui deriva dalla posizione
+    {{ '#' }} del volume in gluster_volumes.
+    Export_Id = {{ export_id }};
+
+    {{ '#' }} Percorso all'interno del volume Gluster, non il percorso del brick
+    {{ '#' }} su disco: "/" espone il volume intero.
+    Path = {{ ganesha_export_path }};
+
+    {{ '#' }} Percorso con cui il client monta la share in NFSv4.
+    Pseudo = {{ item.pseudo }};
+
+    Protocols = {{ ganesha_protocols }};
+
+    {{ '#' }} Accesso predefinito. In sola lettura, cosi' scrive solo chi e'
+    {{ '#' }} elencato nei blocchi CLIENT. Con Access_Type = None showmount non
+    {{ '#' }} mostrerebbe nulla.
+    Access_Type = {{ ganesha_default_access }};
+
+    Sectype = {{ ganesha_sectype }};
+
+    FSAL {
+        Name = Gluster;
+        {{ '#' }} Ogni nodo punta a se stesso per recuperare il volfile. Puntare
+        {{ '#' }} tutti a un nodo fisso significa che, se quel nodo e' giu',
+        {{ '#' }} Ganesha non riparte sugli altri.
+        Hostname = "{{ inventory_hostname }}";
+        Volume = "{{ item.name }}";
+    }
+{% for client in ganesha_clients %}
+
+    CLIENT
+    {
+        Clients = {{ client }};
+        Access_Type = {{ ganesha_client_access }};
+        Squash = {{ ganesha_client_squash }};
+    }
+{% endfor %}
+}

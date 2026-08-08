@@ -1,0 +1,154 @@
+---
+# GlusterFS replicato sui nodi del gruppo [gluster_servers].
+# Il peering e la creazione dei volumi sono operazioni di CLUSTER, non di nodo:
+# girano solo sul primo host del gruppo, non su tutti e tre.
+
+- name: Verifica di avere il numero di nodi richiesto dalla replica
+  assert:
+    that:
+      - groups['gluster_servers'] | length == (gluster_replica_count | int)
+    fail_msg: >-
+      Il gruppo [gluster_servers] ha {{ groups['gluster_servers'] | length }}
+      host ma gluster_replica_count e' {{ gluster_replica_count }}.
+      Con "replica {{ gluster_replica_count }}" servono esattamente
+      {{ gluster_replica_count }} brick, uno per nodo.
+  run_once: true
+
+- name: Installa GlusterFS
+  apt:
+    name:
+      - glusterfs-server
+      - glusterfs-client
+    state: present
+    update_cache: yes
+    cache_valid_time: 3600
+
+- name: Abilita e avvia glusterd
+  systemd:
+    name: glusterd
+    enabled: yes
+    state: started
+    daemon_reload: yes
+
+# Il peering usa i nomi, non gli IP: ogni nodo deve risolvere tutti gli altri.
+- name: Risolvi i peer Gluster in /etc/hosts
+  lineinfile:
+    path: /etc/hosts
+    regexp: '^\S+\s+{{ item }}\s*$'
+    line: "{{ hostvars[item].ansible_host }} {{ item }}"
+    state: present
+    backup: yes
+  loop: "{{ groups['gluster_servers'] }}"
+
+- name: Crea le directory dei brick
+  file:
+    path: "{{ gluster_brick_root }}/{{ item.brick }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop: "{{ gluster_volumes }}"
+  loop_control:
+    label: "{{ gluster_brick_root }}/{{ item.brick }}"
+
+- name: Avvisa se i brick non sono su un filesystem dedicato
+  shell: "findmnt -n -o TARGET --target {{ gluster_brick_root }}"
+  register: gluster_brick_mount
+  changed_when: false
+
+- name: Mostra il filesystem che ospita i brick
+  debug:
+    msg: >-
+      I brick stanno su {{ gluster_brick_mount.stdout }}.
+      {% if gluster_brick_mount.stdout == '/' %}
+      E' la partizione di root: Gluster lo sconsiglia e accetta la creazione
+      solo con gluster_brick_force (attualmente {{ gluster_brick_force }}).
+      Valuta un volume dedicato montato su {{ gluster_brick_root }}.
+      {% endif %}
+
+# --- Da qui in poi solo sul primo nodo: sono operazioni di cluster ---
+
+- name: Leggi i peer gia' presenti nel pool
+  command: gluster pool list
+  register: gluster_pool
+  changed_when: false
+  when: inventory_hostname == groups['gluster_servers'][0]
+
+- name: Aggiungi i peer mancanti
+  command: "gluster --mode=script peer probe {{ item }}"
+  loop: "{{ groups['gluster_servers'][1:] }}"
+  when:
+    - inventory_hostname == groups['gluster_servers'][0]
+    - item not in gluster_pool.stdout
+  register: gluster_probe
+  changed_when: "'success' in gluster_probe.stdout | default('')"
+
+- name: Attendi che tutti i peer risultino connessi
+  shell: >-
+    set -o pipefail;
+    gluster pool list | tail -n +2 | awk '$3 == "Connected"' | wc -l
+  args:
+    executable: /bin/bash
+  register: gluster_connected
+  until: gluster_connected.stdout | int >= (groups['gluster_servers'] | length)
+  retries: 30
+  delay: 5
+  changed_when: false
+  when: inventory_hostname == groups['gluster_servers'][0]
+
+- name: Elenca i volumi esistenti
+  command: gluster volume list
+  register: gluster_existing
+  changed_when: false
+  failed_when: false
+  when: inventory_hostname == groups['gluster_servers'][0]
+
+# --mode=script evita la conferma interattiva, che bloccherebbe il playbook.
+# L'ordine dei brick segue l'inventario: con arbiter l'ULTIMO nodo e' l'arbitro.
+- name: Crea i volumi mancanti
+  command: >-
+    gluster --mode=script volume create {{ item.name }}
+    replica {{ gluster_replica_count }}
+    {% if gluster_arbiter_count | int > 0 %}arbiter {{ gluster_arbiter_count }}{% endif %}
+    {% for host in groups['gluster_servers'] %}{{ host }}:{{ gluster_brick_root }}/{{ item.brick }}/brick {% endfor %}
+    {% if gluster_brick_force %}force{% endif %}
+  loop: "{{ gluster_volumes }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - inventory_hostname == groups['gluster_servers'][0]
+    - item.name not in (gluster_existing.stdout_lines | default([]))
+
+- name: Leggi lo stato di ogni volume
+  shell: >-
+    set -o pipefail;
+    gluster volume info {{ item.name }} | awk -F': ' '/^Status:/ {print $2}'
+  args:
+    executable: /bin/bash
+  register: gluster_vol_status
+  loop: "{{ gluster_volumes }}"
+  loop_control:
+    label: "{{ item.name }}"
+  changed_when: false
+  failed_when: false
+  when: inventory_hostname == groups['gluster_servers'][0]
+
+- name: Avvia i volumi non ancora attivi
+  command: "gluster --mode=script volume start {{ item.item.name }}"
+  loop: "{{ gluster_vol_status.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name | default('') }}"
+  when:
+    - inventory_hostname == groups['gluster_servers'][0]
+    - item.stdout | default('') | trim != 'Started'
+
+- name: Riepilogo dei volumi
+  command: gluster volume status
+  register: gluster_status
+  changed_when: false
+  when: inventory_hostname == groups['gluster_servers'][0]
+
+- name: Mostra lo stato del cluster Gluster
+  debug:
+    msg: "{{ gluster_status.stdout_lines }}"
+  when: inventory_hostname == groups['gluster_servers'][0]

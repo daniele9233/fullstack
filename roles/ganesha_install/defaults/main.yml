@@ -1,0 +1,18 @@
+---
+# Valori di ripiego: group_vars/all.yml ha precedenza maggiore.
+ganesha_config_path: "/etc/ganesha/ganesha.conf"
+ganesha_export_dir: "/etc/ganesha/exports"
+ganesha_export_path: "/"
+ganesha_protocols: "3,4"
+ganesha_sectype: "sys"
+ganesha_default_access: "RO"
+ganesha_client_access: "RW"
+ganesha_client_squash: "no_root_squash"
+ganesha_client_groups: []
+ganesha_extra_clients: []
+gluster_volumes: []
+
+# Il servizio nfs-ganesha e' avviato e spostato da Pacemaker insieme al VIP.
+# Mettere a false per gestirlo direttamente con systemd, senza cluster.
+ganesha_managed_by_pacemaker: true
+pcs_resource_ganesha: "nfs_server"

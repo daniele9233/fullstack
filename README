@@ -140,6 +140,59 @@ e haproxy non riescono a fare il bind del VIP sul nodo che non lo possiede e
 non partono affatto. Per questo keepalived_install gira prima degli altri due.
 
 
+STORAGE: GLUSTERFS + GANESHA NFS + PACEMAKER (gruppo [gluster_servers])
+
+Tre nodi con GlusterFS replicato, esportato via NFS da Ganesha, con VIP e
+servizio gestiti da Pacemaker. I ruoli girano in quest'ordine obbligato:
+glusterfs_install, ganesha_install, pacemaker_nfs_ha.
+
+Peering e creazione dei volumi sono operazioni di cluster: girano solo dal
+PRIMO nodo del gruppo, non da tutti e tre. Lo stesso vale per la creazione del
+cluster Pacemaker e delle sue risorse.
+
+I volumi si dichiarano in gluster_volumes, un elemento per volume:
+
+  gluster_volumes:
+    - name: "INFRA"          nome del volume Gluster
+      brick: "infra"         sottodirectory sotto gluster_brick_root
+      pseudo: "/infra"       percorso con cui il client monta la share
+
+Con "replica 3 arbiter 1" servono esattamente 3 nodi: i primi due tengono i
+dati, il TERZO dell'inventario fa da arbitro e conserva solo i metadati, per
+evitare lo split-brain senza triplicare lo spazio. L'ordine nell'inventario
+determina quale nodo e' l'arbitro. Con gluster_arbiter_count a 0 si ottiene
+una replica 3 piena.
+
+Gluster rifiuta di creare un brick sulla partizione di root. gluster_brick_force
+e' a true per questo: se puoi, monta un volume dedicato su gluster_brick_root
+e rimettilo a false.
+
+Ganesha genera un export per ogni volume in ganesha_export_dir, con Export_Id
+progressivo, e le righe %include vengono aggiunte a ganesha.conf. I client
+autorizzati in scrittura derivano dai gruppi elencati in ganesha_client_groups
+(di default tutti i nodi Kubernetes), piu' eventuali ganesha_extra_clients.
+
+Il servizio nfs-ganesha NON viene abilitato in systemd: lo avvia Pacemaker
+insieme al VIP, nello stesso gruppo di risorse, cosi' stanno sempre sullo
+stesso nodo e il VIP non viene annunciato prima che il servizio risponda.
+Con ganesha_managed_by_pacemaker a false lo si gestisce con systemd.
+
+Variabili principali:
+
+  gluster_brick_root        radice dei brick
+  gluster_replica_count     numero di repliche, pari al numero di nodi
+  gluster_arbiter_count     1 per arbitro, 0 per replica piena
+  ganesha_export_path       percorso dentro il volume, "/" per il volume intero
+  ganesha_client_groups     gruppi di inventario autorizzati in scrittura
+  nfs_vip_ip                VIP NFS gestito da Pacemaker
+  pcs_cluster_password      password di hacluster. CAMBIALA
+  pcs_stonith_enabled       false come da procedura di riferimento
+
+Mount da un client:
+
+  mount -t nfs4 <nfs_vip_ip>:/infra /mnt
+
+
 RIUTILIZZO DI MACCHINE GIA' USATE
 
 site.yml e' un playbook di installazione da zero: crea un nuovo cluster via API

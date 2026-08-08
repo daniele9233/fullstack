@@ -1,0 +1,87 @@
+---
+# Ganesha NFS davanti ai volumi Gluster. Il servizio non viene abilitato in
+# systemd: lo avvia e lo sposta Pacemaker insieme al VIP. Due gestori sullo
+# stesso servizio farebbero a pugni.
+
+# Un client per riga, in CIDR: gli host dei gruppi indicati piu' gli extra.
+- name: Componi l'elenco dei client autorizzati
+  set_fact:
+    ganesha_clients: >-
+      {{ (ganesha_client_groups
+          | map('extract', groups)
+          | select('defined')
+          | flatten
+          | map('extract', hostvars, 'ansible_host')
+          | select('defined')
+          | map('regex_replace', '^(.*)$', '\1/32')
+          | list) + ganesha_extra_clients }}
+
+- name: Verifica che ci sia almeno un client autorizzato
+  assert:
+    that:
+      - ganesha_clients | length > 0
+    fail_msg: >-
+      Nessun client autorizzato: con Access_Type = {{ ganesha_default_access }}
+      e nessun blocco CLIENT nessuno potrebbe scrivere sulle share. Popola
+      ganesha_client_groups o ganesha_extra_clients.
+
+- name: Installa Ganesha con il backend Gluster
+  apt:
+    name: nfs-ganesha-gluster
+    state: present
+    update_cache: yes
+    cache_valid_time: 3600
+
+- name: Crea la directory degli export
+  file:
+    path: "{{ ganesha_export_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Deploy di un export per ogni volume Gluster
+  template:
+    src: export.conf.j2
+    dest: "{{ ganesha_export_dir }}/{{ item.name | lower }}.conf"
+    owner: root
+    group: root
+    mode: '0644'
+    backup: yes
+  loop: "{{ gluster_volumes }}"
+  loop_control:
+    label: "{{ item.name }}"
+    index_var: volume_index
+  vars:
+    export_id: "{{ volume_index + 1 }}"
+  notify: restart ganesha
+
+# blockinfile e non template: ganesha.conf arriva dal pacchetto con blocchi
+# utili, qui si aggiungono soltanto gli include.
+- name: Includi gli export in ganesha.conf
+  blockinfile:
+    path: "{{ ganesha_config_path }}"
+    marker: "# {mark} EXPORT ANSIBLE"
+    create: yes
+    owner: root
+    group: root
+    mode: '0644'
+    block: |
+      {% for volume in gluster_volumes %}
+      %include "{{ ganesha_export_dir }}/{{ volume.name | lower }}.conf"
+      {% endfor %}
+  notify: restart ganesha
+
+- name: Lascia il servizio a Pacemaker
+  systemd:
+    name: nfs-ganesha
+    enabled: "{{ not ganesha_managed_by_pacemaker }}"
+  when: ganesha_managed_by_pacemaker
+
+- name: Abilita e avvia Ganesha
+  systemd:
+    name: nfs-ganesha
+    enabled: yes
+    state: started
+    daemon_reload: yes
+  when: not ganesha_managed_by_pacemaker

@@ -204,6 +204,78 @@ haproxy_chroot: "/var/lib/haproxy"
 haproxy_user: "haproxy"
 haproxy_group: "haproxy"
 
+# ---------------------------------------------------------------------------
+# STORAGE (gruppo [gluster_servers]): GlusterFS + Ganesha NFS + Pacemaker
+# ---------------------------------------------------------------------------
+
+# Radice dei brick. Gluster rifiuta di creare un brick sulla partizione di root
+# a meno di passare "force": tenere gluster_brick_force a true se questa
+# directory non e' un filesystem dedicato. Meglio comunque montarci sopra un
+# volume a parte, come fa create_disk per /var/lib/rancher.
+gluster_brick_root: "/bricks"
+gluster_brick_force: true
+
+# replica 3 arbiter 1 su tre nodi: due copie dei dati piu' un arbitro che
+# tiene solo i metadati ed evita lo split-brain. Con gluster_arbiter_count a 0
+# si ottiene una replica 3 piena, che richiede il triplo dello spazio.
+gluster_replica_count: 3
+gluster_arbiter_count: 1
+
+# Un volume per riga: name e' il nome Gluster, brick la sottodirectory sotto
+# gluster_brick_root, pseudo il percorso con cui il client NFS lo monta.
+gluster_volumes:
+  - name: "INFRA"
+    brick: "infra"
+    pseudo: "/infra"
+  - name: "POSTGRESQL"
+    brick: "postgresql"
+    pseudo: "/postgresql"
+  - name: "ELASTIC"
+    brick: "elastic"
+    pseudo: "/elastic"
+
+# Ganesha
+ganesha_config_path: "/etc/ganesha/ganesha.conf"
+ganesha_export_dir: "/etc/ganesha/exports"
+
+# Percorso ESPORTATO, relativo alla radice del volume Gluster: "/" espone il
+# volume intero. Da non confondere con il percorso del brick su disco.
+ganesha_export_path: "/"
+
+# Protocolli e sicurezza degli export.
+ganesha_protocols: "3,4"
+ganesha_sectype: "sys"
+# Access_Type a livello di export. Con RO gli accessi in scrittura restano
+# possibili solo ai CLIENT elencati sotto, che lo sovrascrivono con RW.
+ganesha_default_access: "RO"
+ganesha_client_access: "RW"
+ganesha_client_squash: "no_root_squash"
+
+# Client autorizzati in scrittura. Di default tutti i nodi Kubernetes
+# dell'inventario, che sono quelli che montano le share.
+ganesha_client_groups:
+  - masters
+  - new_managers
+  - workers
+  - ingress
+# Indirizzi aggiuntivi, in notazione CIDR (es. "10.200.60.194/32").
+ganesha_extra_clients: []
+
+# VIP NFS, gestito da Pacemaker e spostato sul nodo che serve Ganesha.
+# >>> VERIFICA CHE SIA LIBERO NELLA TUA VLAN <<<
+nfs_vip_ip: "10.205.166.253"
+nfs_vip_prefix: 24
+
+# Pacemaker
+pcs_cluster_name: "nfs_export"
+pcs_cluster_user: "hacluster"
+# CAMBIA QUESTA PASSWORD. Serve a pcs per autenticare i nodi fra loro.
+pcs_cluster_password: "CambiaMiSubito-hacluster"
+# stonith disabilitato come nella procedura di riferimento. In produzione, con
+# un meccanismo di fencing disponibile, andrebbe abilitato.
+pcs_stonith_enabled: false
+pcs_resource_monitor_interval: "10s"
+
 # Prometheus/Monitoring configuration
 prometheus_namespace: "monitoring"
 grafana_password: "SecureGrafanaPassword123!"  # CAMBIA QUESTA PASSWORD

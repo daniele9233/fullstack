@@ -1,0 +1,7 @@
+---
+# Valori di ripiego: group_vars/all.yml ha precedenza maggiore.
+gluster_brick_root: "/bricks"
+gluster_brick_force: true
+gluster_replica_count: 3
+gluster_arbiter_count: 1
+gluster_volumes: []
