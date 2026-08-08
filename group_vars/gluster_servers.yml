@@ -1,0 +1,12 @@
+---
+# Variabili valide solo per il gruppo [gluster_servers].
+
+# Corosync identifica i nodi per nome e confronta con "uname -n": se il nome di
+# inventario e l'hostname reale divergono, "pcs cluster setup" crea un cluster
+# i cui nodi Pacemaker non riconosce, e le risorse non partono. Anche Gluster
+# registra i peer per nome.
+#
+# Qui e' sicuro allinearlo perche' queste macchine non sono ancora in nessun
+# cluster. NON abilitarlo sui master Rancher: RKE2 registra i nodi Kubernetes
+# con l'hostname, e cambiarlo a cluster avviato orfanizza il nodo.
+set_hostname_from_inventory: true

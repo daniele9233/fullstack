@@ -1,0 +1,19 @@
+---
+# Firewall e AppArmor vanno disattivati su tutti i nodi gestiti: RKE2, Gluster,
+# NFS, Pacemaker e VRRP usano un insieme di porte e protocolli ampio, e VRRP
+# non e' nemmeno TCP (protocollo IP 112). Con ufw attivo i cluster sembrano
+# partire ma non convergono mai.
+disable_ufw: true
+disable_apparmor: true
+
+# Allinea l'hostname di sistema al nome usato nell'inventario.
+#
+# Disattivato di default DI PROPOSITO: su un nodo gia' in un cluster, cambiare
+# l'hostname lo rende irriconoscibile. RKE2 registra i nodi Kubernetes con il
+# nome host, quindi cambiarlo su un master gia' provisionato orfanizza il nodo
+# nel cluster. Va abilitato solo su macchine non ancora inizializzate.
+#
+# E' abilitato in group_vars/gluster_servers.yml perche' li' serve davvero:
+# Corosync identifica i nodi per nome e li confronta con "uname -n". Se il nome
+# di inventario e l'hostname reale divergono, le risorse Pacemaker non partono.
+set_hostname_from_inventory: false

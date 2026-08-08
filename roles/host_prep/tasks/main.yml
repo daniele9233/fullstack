@@ -1,0 +1,89 @@
+---
+# Preparazione comune a tutti i nodi gestiti, da eseguire prima di qualsiasi
+# installazione: un firewall attivo o AppArmor in mezzo fanno fallire i cluster
+# in modi che sembrano problemi di configurazione.
+
+- name: Rileva i servizi presenti sul nodo
+  service_facts:
+
+# service_facts non usa sempre la stessa chiave: con systemd attivo riporta
+# "ufw.service", ma quando raccoglie da SysV riporta "ufw". Su Ubuntu ufw ha
+# sia l'unit sia lo script init.d, quindi vanno controllate entrambe le forme:
+# un controllo sulla sola forma con suffisso salta il task senza dire nulla.
+- name: Determina quali servizi sono presenti
+  set_fact:
+    host_prep_has_ufw: "{{ ('ufw.service' in ansible_facts.services) or ('ufw' in ansible_facts.services) }}"
+    host_prep_has_firewalld: "{{ ('firewalld.service' in ansible_facts.services) or ('firewalld' in ansible_facts.services) }}"
+    host_prep_has_apparmor: "{{ ('apparmor.service' in ansible_facts.services) or ('apparmor' in ansible_facts.services) }}"
+
+# --- Firewall ---------------------------------------------------------------
+# Fermare l'unit non basta: "ufw disable" e' quello che azzera le regole e
+# impedisce il ricaricamento al boot.
+
+- name: Leggi lo stato di ufw
+  command: ufw status
+  register: host_prep_ufw_status
+  changed_when: false
+  failed_when: false
+  when:
+    - disable_ufw | bool
+    - host_prep_has_ufw | bool
+
+- name: Disattiva ufw
+  command: ufw --force disable
+  when:
+    - disable_ufw | bool
+    - host_prep_has_ufw | bool
+    - "'Status: active' in (host_prep_ufw_status.stdout | default(''))"
+
+# Non serve un task systemd per ufw: "ufw disable" ferma il firewall E lo
+# toglie dall'avvio al boot ("Firewall stopped and disabled on system startup"),
+# scrivendo ENABLED=no in /etc/ufw/ufw.conf. Un secondo task sull'unit sarebbe
+# ridondante e aggiungerebbe solo un punto in cui il play puo' interrompersi.
+
+# firewalld non c'e' su Ubuntu, ma se qualcuno lo installa vanifica tutto il
+# resto senza dare segnali evidenti.
+- name: Disattiva firewalld se presente
+  systemd:
+    name: firewalld
+    enabled: false
+    state: stopped
+  when:
+    - disable_ufw | bool
+    - host_prep_has_firewalld | bool
+
+# --- AppArmor ---------------------------------------------------------------
+
+- name: Disattiva AppArmor
+  systemd:
+    name: apparmor
+    enabled: false
+    state: stopped
+  when:
+    - disable_apparmor | bool
+    - host_prep_has_apparmor | bool
+
+# --- Hostname ---------------------------------------------------------------
+
+- name: Verifica l'hostname corrente
+  command: hostname
+  register: host_prep_hostname
+  changed_when: false
+  when: set_hostname_from_inventory | bool
+
+- name: Allinea l'hostname al nome di inventario
+  hostname:
+    name: "{{ inventory_hostname }}"
+  when:
+    - set_hostname_from_inventory | bool
+    - host_prep_hostname.stdout | default('') | trim != inventory_hostname
+
+# --- Riepilogo --------------------------------------------------------------
+
+- name: Riepilogo preparazione host
+  debug:
+    msg: >-
+      {{ inventory_hostname }}:
+      ufw {{ 'disattivato' if (host_prep_has_ufw | bool and disable_ufw | bool) else 'non presente o non gestito' }},
+      apparmor {{ 'disattivato' if (host_prep_has_apparmor | bool and disable_apparmor | bool) else 'non presente o non gestito' }},
+      hostname {{ 'allineato a ' ~ inventory_hostname if set_hostname_from_inventory | bool else 'lasciato invariato' }}

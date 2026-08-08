@@ -1,4 +1,17 @@
 ---
+# PLAY ZERO: preparazione dei nodi, prima di qualsiasi installazione.
+# Disattiva ufw e AppArmor ovunque: RKE2, Gluster, NFS, Pacemaker e VRRP usano
+# molte porte e VRRP non e' nemmeno TCP (protocollo IP 112). Con il firewall
+# attivo i cluster sembrano partire e poi non convergono mai.
+# Escluso [local]: e' la macchina di controllo, non un nodo gestito.
+- name: Prepara i nodi
+  hosts: all:!local
+  become: yes
+  gather_facts: no
+  roles:
+    - role: host_prep
+
+
 # PRIMO PLAY: Setup disco dedicato per Rancher su tutti i server
 # Escluso il gruppo [local]: e' la macchina di controllo, non va partizionata.
 - hosts: all:!local
