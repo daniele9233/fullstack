@@ -100,6 +100,11 @@ multi_services_server_names:
   - "grafana.app.inail-svil.almaviva.it"
   - "pgadmin.app.inail-svil.almaviva.it"
 
+# Alternativa all'elenco: una regex che intercetta tutti gli host di un
+# dominio, come nella configurazione di produzione. Se valorizzata prevale su
+# multi_services_server_names. Esempio: "~^.*\\.istitutotumori\\.na\\.it$"
+multi_services_server_name_regex: ""
+
 multi_services_ssl_cert_path: "/etc/nginx/cert/fullchain.pem"
 multi_services_ssl_key_path: "/etc/nginx/cert/privkey.pem"
 
@@ -119,12 +124,10 @@ ingress_https_port: 443
 
 # Configurazione Nginx
 nginx_user: "www-data"
-nginx_worker_processes: 2
+nginx_worker_processes: 4
 nginx_worker_rlimit_nofile: 40000
 nginx_worker_connections: 8192
 nginx_client_max_body_size: "2G"
-nginx_server_names_hash_bucket_size: 128
-nginx_server_names_hash_max_size: 512
 nginx_proxy_read_timeout: 900
 
 # I server block stanno in file separati dentro questa directory, inclusa da

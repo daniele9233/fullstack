@@ -1,3 +1,4 @@
 ---
 # Valore di ripiego: group_vars/all.yml ha precedenza maggiore.
 nginx_managed_by_keepalived: true
+multi_services_server_name_regex: ""
