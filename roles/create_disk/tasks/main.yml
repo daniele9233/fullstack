@@ -151,19 +151,25 @@
             fstype: "{{ disk_fs_type }}"
             dev: "/dev/{{ disk_vg_name }}/{{ disk_lv_name }}"
 
-        - name: "Get UUID of logical volume"
-          command: "blkid -s UUID -o value /dev/{{ disk_vg_name }}/{{ disk_lv_name }}"
-          register: rancher_lv_uuid
-          changed_when: false
-
         # Il modulo mount scrive fstab e monta in un'unica operazione
         # idempotente, senza bisogno di un lineinfile separato.
+        #
+        # La riga generata e' quella che scriviamo a mano sui server:
+        #   /dev/vg_data/lv_data /var/lib/postgresql xfs defaults 0 0
+        #
+        # src e' il device LVM e non un UUID: /dev/<vg>/<lv> lo crea udev dai
+        # metadati LVM, quindi e' gia' stabile e non dipende dall'ordine con cui
+        # il kernel enumera i dischi. dump e passno espliciti perche' la riga
+        # deve venire identica a quella scritta a mano, senza dipendere dai
+        # default del modulo.
         - name: "Mount volume su {{ disk_mount_point }}"
           mount:
             path: "{{ disk_mount_point }}"
-            src: "UUID={{ rancher_lv_uuid.stdout | trim }}"
+            src: "/dev/{{ disk_vg_name }}/{{ disk_lv_name }}"
             fstype: "{{ disk_fs_type }}"
             opts: "{{ disk_mount_options }}"
+            dump: "0"
+            passno: "0"
             state: mounted
 
 - name: "Assicura che {{ disk_mount_point }} esista"

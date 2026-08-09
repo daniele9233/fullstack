@@ -18,4 +18,7 @@ disk_vg_name: "vg_rancher"
 disk_lv_name: "lv_rancher"
 disk_lv_size: "100%FREE"
 disk_fs_type: "xfs"
-disk_mount_options: "defaults,noatime"
+
+# "defaults" e basta, come sui server in esercizio: la riga di fstab deve venire
+# uguale a quella che scriviamo a mano.
+disk_mount_options: "defaults"

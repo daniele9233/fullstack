@@ -24,10 +24,7 @@ disk_device: "/dev/sdb"
 # 100%FREE: l'LV prende tutta la partizione, come i 150G in esercizio.
 disk_lv_size: "100%FREE"
 
-# >>> VERIFICA CHE COINCIDA CON LA PRODUZIONE <<<
-# Sui db gia' installati leggilo con:
-#   findmnt -n -o FSTYPE,OPTIONS /var/lib/postgresql
-# Se e' ext4, cambia qui: il ruolo non riformatta nulla di gia' montato, ma un
-# nodo nuovo nascerebbe con un filesystem diverso dagli altri.
+# Riga di fstab prodotta, identica a quella che scriviamo a mano:
+#   /dev/vg_data/lv_data /var/lib/postgresql xfs defaults 0 0
 disk_fs_type: "xfs"
-disk_mount_options: "defaults,noatime"
+disk_mount_options: "defaults"

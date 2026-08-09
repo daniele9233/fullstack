@@ -164,10 +164,12 @@ macchine gia' installate stampa il mount esistente e passa oltre. Su un disco
 nuovo, invece, pretende che il device esista, non abbia partizioni, non sia
 montato e non sia il disco di sistema, altrimenti si ferma prima di partizionare.
 
-Prima di aggiungere un nodo, verifica che disk_fs_type coincida con quello degli
-altri:
+La riga scritta in fstab e' quella che mettiamo a mano sui server:
 
-  findmnt -n -o FSTYPE,OPTIONS /var/lib/postgresql
+  /dev/vg_data/lv_data /var/lib/postgresql xfs defaults 0 0
+
+Il device LVM e non un UUID: /dev/<vg>/<lv> lo crea udev dai metadati LVM, non
+dipende dall'ordine di enumerazione dei dischi ed e' leggibile.
 
 PostgreSQL scrive su questo disco locale, non sul volume Gluster POSTGRESQL.
 
