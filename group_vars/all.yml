@@ -183,6 +183,15 @@ keepalived_advert_int: 1
 keepalived_nginx_check_weight: 50
 keepalived_nginx_check_interval: 3
 
+# Schema attivo/passivo: nginx e' avviato e fermato da nginx-ha-notify di
+# keepalived, quindi gira solo sul nodo che tiene vip_rancher_ip. Ansible non
+# lo avvia e non lo abilita al boot, per non lasciarlo acceso sul nodo passivo.
+#
+# Mettendolo a false, nginx gira su TUTTI i bilanciatori e keepalived si limita
+# a controllarlo: in quel caso il failover scatta anche quando cade il solo
+# nginx, cosa che con lo schema attivo/passivo non avviene (vedi README).
+nginx_managed_by_keepalived: true
+
 # Porta su cui lo script verifica che nginx sia davvero in ascolto. La 80 e'
 # il server di redirect verso https, presente in nginx.conf su ogni nodo.
 nginx_health_check_port: 80

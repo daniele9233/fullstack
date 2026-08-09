@@ -1,13 +1,24 @@
 ---
+# Entrambi i task ascoltano il topic "restart nginx", l'unico notificato dal
+# ruolo.
+#
+# nginx puo' essere legittimamente fermo: nello schema attivo/passivo gira solo
+# sul nodo che tiene il VIP. Un "reloaded" su un servizio inattivo fallisce con
+# "Job type reload is not applicable", quindi prima si verifica lo stato.
+# Sul nodo passivo la configurazione nuova viene letta da keepalived al
+# prossimo avvio del servizio.
+- name: Verifica se nginx e' attivo
+  command: systemctl is-active nginx
+  register: nginx_is_active
+  changed_when: false
+  failed_when: false
+  listen: restart nginx
+
 # reload e non restart: nginx rilegge configurazione e certificati avviando
 # nuovi worker e lasciando chiudere in modo pulito le connessioni in corso.
-# Gli handler girano a fine play, quando il servizio e' gia' stato avviato.
-- name: restart nginx
+- name: Ricarica nginx
   systemd:
     name: nginx
     state: reloaded
-
-- name: reload nginx
-  systemd:
-    name: nginx
-    state: reloaded
+  when: nginx_is_active.stdout | default('') | trim == 'active'
+  listen: restart nginx

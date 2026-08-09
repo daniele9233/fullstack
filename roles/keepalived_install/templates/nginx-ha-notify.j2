@@ -1,0 +1,25 @@
+#!/bin/bash
+{{ '#' }} {{ ansible_managed }} - roles/keepalived_install
+{{ '#' }}
+{{ '#' }} keepalived invoca questo script a ogni TRANSIZIONE di stato, passando
+{{ '#' }} tipo, nome istanza e nuovo stato. nginx viene avviato solo sul nodo che
+{{ '#' }} prende il VIP e fermato sugli altri: schema attivo/passivo.
+{{ '#' }}
+{{ '#' }} Attenzione: essendo legato alle transizioni, non e' un ciclo di
+{{ '#' }} riconciliazione. Se qualcuno avvia nginx a mano sul nodo passivo, resta
+{{ '#' }} avviato finche' non avviene una transizione.
+
+TYPE=$1
+NAME=$2
+STATE=$3
+
+echo "$STATE" > "/run/keepalive.${TYPE}.${NAME}.state"
+
+case "$STATE" in
+  MASTER)
+    systemctl start nginx
+    ;;
+  BACKUP|FAULT)
+    systemctl stop nginx
+    ;;
+esac

@@ -1,25 +1,10 @@
 #!/bin/bash
-# {{ ansible_managed }} - roles/keepalived_install
-#
-# Health check di nginx per keepalived, eseguito ogni
-# {{ keepalived_nginx_check_interval }} secondi.
-#
-# Uscita 0  -> nginx sano, keepalived aggiunge {{ keepalived_nginx_check_weight }} alla priorita'
-# Uscita 1  -> nginx non utilizzabile, la priorita' scende e il VIP passa all'altro nodo
-#
-# Deve limitarsi a CONTROLLARE. Una versione che avvia o ferma nginx e poi esce
-# sempre 0 non fa scattare nessun failover quando nginx e' rotto: il VIP resta
-# dov'e' e il servizio resta giu'.
-
-# 1. Il servizio deve risultare attivo per systemd.
-if ! systemctl is-active --quiet nginx; then
-    exit 1
-fi
-
-# 2. E deve essere davvero in ascolto: un master process vivo con i worker
-#    morti supererebbe il controllo precedente.
-if ! ss -lnt | awk '$4 ~ /:{{ nginx_health_check_port }}$/ {found=1} END {exit !found}'; then
-    exit 1
-fi
-
-exit 0
+{{ '#' }} {{ ansible_managed }} - roles/keepalived_install
+{{ '#' }}
+{{ '#' }} Health check invocato da keepalived ogni {{ keepalived_nginx_check_interval }} secondi.
+{{ '#' }} Uscita 0 -> nginx attivo, keepalived somma {{ keepalived_nginx_check_weight }} alla priorita'.
+{{ '#' }} Uscita != 0 -> il peso non viene applicato.
+{{ '#' }}
+{{ '#' }} Lo start/stop del servizio NON sta qui ma in nginx-ha-notify: uno
+{{ '#' }} script tracciato deve limitarsi a riportare uno stato.
+systemctl is-active --quiet nginx

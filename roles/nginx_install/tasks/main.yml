@@ -98,14 +98,26 @@
   debug:
     var: nginx_test.stdout_lines
 
-# Su un bilanciatore in HA nginx e' attivo/passivo: keepalived lo avvia sul
-# nodo che tiene il VIP e lo ferma sugli altri entro pochi secondi. Qui viene
-# comunque avviato, poi lo stato lo decide keepalived.
+# Schema attivo/passivo: nginx gira solo sul nodo che tiene il VIP, avviato e
+# fermato da nginx-ha-notify di keepalived.
+#
+# Ansible qui non lo avvia di proposito. nginx-ha-notify reagisce alle
+# TRANSIZIONI di stato, non e' un ciclo di riconciliazione: se Ansible lo
+# avviasse anche sul nodo passivo, resterebbe avviato fino alla transizione
+# successiva e il comportamento del failover dipenderebbe dalla storia delle
+# transizioni invece che dalla configurazione.
+- name: Lascia il servizio nginx a keepalived
+  systemd:
+    name: nginx
+    enabled: false
+  when: nginx_managed_by_keepalived | bool
+
 - name: Enable and start Nginx service
   systemd:
     name: nginx
     enabled: yes
     state: started
+  when: not (nginx_managed_by_keepalived | bool)
 
 - name: Check if Nginx is running
   systemd:

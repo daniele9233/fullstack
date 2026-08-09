@@ -41,6 +41,7 @@ vrrp_instance {{ keepalived_rancher_instance }} {
     track_script {
         chk_nginx_service
     }
+   notify "{{ keepalived_config_dir }}/nginx-ha-notify"
 }
 vrrp_script chk_haproxy {
     script "pkill -0 haproxy"
