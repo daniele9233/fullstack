@@ -1,7 +1,6 @@
 ---
 # Valori di ripiego: group_vars/all.yml ha precedenza maggiore.
 
-vip_patroni_ip: ""
 
 haproxy_stats_port: 7000
 haproxy_primary_port: 5000
@@ -11,7 +10,7 @@ haproxy_patroni_api_port: 8008
 
 haproxy_maxconn_global: 4000
 haproxy_maxconn_default: 3000
-haproxy_maxconn_server: 100
+haproxy_maxconn_server: 1000
 
 haproxy_chroot: "/var/lib/haproxy"
 haproxy_user: "haproxy"

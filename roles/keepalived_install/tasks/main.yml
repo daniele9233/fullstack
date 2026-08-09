@@ -22,8 +22,10 @@
     update_cache: yes
     cache_valid_time: 3600
 
-# nginx e haproxy fanno il bind del VIP anche sul nodo che in quel momento non
-# lo possiede. Senza questo sysctl il bind fallisce e i servizi non partono.
+# nginx fa il bind esplicito su vip_rancher_ip:443 anche sul nodo che in quel
+# momento non possiede il VIP: senza questo sysctl il bind fallisce con
+# "Cannot assign requested address" e nginx non parte affatto.
+# haproxy non ne ha bisogno, perche' ascolta su *:porta.
 - name: Consenti il bind su indirizzi non locali
   sysctl:
     name: net.ipv4.ip_nonlocal_bind
