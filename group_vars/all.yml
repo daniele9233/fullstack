@@ -292,17 +292,37 @@ gluster_replica_count: 3
 gluster_arbiter_count: 1
 
 # Un volume per riga: name e' il nome Gluster, brick la sottodirectory sotto
-# gluster_brick_root, pseudo il percorso con cui il client NFS lo monta.
+# gluster_brick_root.
+#
+# NFS e' solo per Kubernetes: l'unico volume esportato da Ganesha e' quello che
+# montano i nodi del cluster. Si dichiara con nfs_export: true e allora servono
+# anche pseudo (il percorso con cui il client monta la share) ed export_name
+# (il nome del file in ganesha_export_dir).
+# Gli altri volumi esistono solo come volumi Gluster con i loro brick: PostgreSQL
+# ed Elastic scrivono sul filesystem locale o montano il volume con il client
+# nativo Gluster, non passano da NFS. Aggiungere nfs_export ad altri volumi vuol
+# dire esporre dati di database via NFS: farlo solo di proposito.
+#
+# options sono le "Options Reconfigured" da applicare al volume dopo la
+# creazione, con "gluster volume set". Le opzioni che Gluster imposta da solo
+# alla creazione (transport.address-family, storage.fips-mode-rchecksum,
+# cluster.granular-entry-heal, performance.client-io-threads) non vanno ripetute.
 gluster_volumes:
   - name: "INFRA"
     brick: "infra"
+    nfs_export: true
     pseudo: "/infra"
+    export_name: "k8s"
+    # Accelerano il listing di directory con molti file, tipico delle share
+    # Kubernetes: i pod ci tengono dentro migliaia di piccoli oggetti.
+    options:
+      performance.parallel-readdir: "on"
+      performance.readdir-ahead: "on"
+      performance.md-cache-timeout: "600"
   - name: "POSTGRESQL"
     brick: "postgresql"
-    pseudo: "/postgresql"
   - name: "ELASTIC"
     brick: "elastic"
-    pseudo: "/elastic"
 
 # Ganesha
 ganesha_config_path: "/etc/ganesha/ganesha.conf"

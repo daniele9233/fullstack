@@ -142,6 +142,27 @@
     - inventory_hostname == groups['gluster_servers'][0]
     - item.stdout | default('') | trim != 'Started'
 
+# "gluster volume get" restituisce anche il valore di default di un'opzione mai
+# impostata, quindi il confronto basta a rendere il task idempotente: senza,
+# ogni esecuzione risulterebbe changed.
+- name: Applica le opzioni dei volumi
+  shell: |
+    {% for key, value in item.options.items() %}
+    current=$(gluster volume get {{ item.name }} {{ key }} 2>/dev/null | awk 'NR>2 {print $2; exit}')
+    if [ "$current" != "{{ value }}" ]; then
+        gluster --mode=script volume set {{ item.name }} {{ key }} {{ value }}
+        echo "SET {{ key }}"
+    fi
+    {% endfor %}
+  args:
+    executable: /bin/bash
+  register: gluster_vol_set
+  loop: "{{ gluster_volumes | selectattr('options', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  changed_when: "'SET' in gluster_vol_set.stdout"
+  when: inventory_hostname == groups['gluster_servers'][0]
+
 - name: Riepilogo dei volumi
   command: gluster volume status
   register: gluster_status

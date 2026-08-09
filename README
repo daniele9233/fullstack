@@ -155,7 +155,22 @@ I volumi si dichiarano in gluster_volumes, un elemento per volume:
   gluster_volumes:
     - name: "INFRA"          nome del volume Gluster
       brick: "infra"         sottodirectory sotto gluster_brick_root
+      nfs_export: true       esportato da Ganesha
       pseudo: "/infra"       percorso con cui il client monta la share
+      export_name: "k8s"     nome del file in ganesha_export_dir
+      options:               "gluster volume set" dopo la creazione
+        performance.parallel-readdir: "on"
+    - name: "POSTGRESQL"     nessun nfs_export: solo volume e brick
+      brick: "postgresql"
+
+NFS serve solo a Kubernetes. Ganesha esporta SOLO i volumi con nfs_export: true,
+oggi il solo INFRA, in /etc/ganesha/exports/k8s.conf. POSTGRESQL ed ELASTIC
+esistono come volumi Gluster con i loro brick e non hanno alcun export: chi li
+usa monta il volume con il client nativo Gluster. Marcarli con nfs_export vuol
+dire esporre dati di database via NFS.
+
+Togliere nfs_export a un volume gia' esportato ne rimuove anche il file di
+export dai nodi, non solo la riga %include.
 
 Con "replica 3 arbiter 1" servono esattamente 3 nodi: i primi due tengono i
 dati, il TERZO dell'inventario fa da arbitro e conserva solo i metadati, per
@@ -167,10 +182,16 @@ Gluster rifiuta di creare un brick sulla partizione di root. gluster_brick_force
 e' a true per questo: se puoi, monta un volume dedicato su gluster_brick_root
 e rimettilo a false.
 
-Ganesha genera un export per ogni volume in ganesha_export_dir, con Export_Id
-progressivo, e le righe %include vengono aggiunte a ganesha.conf. I client
-autorizzati in scrittura derivano dai gruppi elencati in ganesha_client_groups
-(di default tutti i nodi Kubernetes), piu' eventuali ganesha_extra_clients.
+Ganesha genera un export per ogni volume esportato in ganesha_export_dir, con
+Export_Id progressivo, e le righe %include vengono aggiunte a ganesha.conf.
+L'export e' in Access_Type RO: scrive solo chi compare in un blocco CLIENT.
+I client autorizzati in scrittura derivano dai gruppi elencati in
+ganesha_client_groups (di default tutti i nodi Kubernetes), piu' eventuali
+ganesha_extra_clients, ognuno con Access_Type RW e no_root_squash.
+
+Ogni nodo punta a se stesso nel campo Hostname del blocco FSAL: puntare tutti a
+un nodo fisso vorrebbe dire che, se quel nodo e' giu', Ganesha non riparte sugli
+altri e il failover Pacemaker non serve a niente.
 
 Il servizio nfs-ganesha NON viene abilitato in systemd: lo avvia Pacemaker
 insieme al VIP, nello stesso gruppo di risorse, cosi' stanno sempre sullo
@@ -185,6 +206,8 @@ Variabili principali:
   ganesha_export_path       percorso dentro il volume, "/" per il volume intero
   ganesha_client_groups     gruppi di inventario autorizzati in scrittura
   nfs_vip_ip                VIP NFS gestito da Pacemaker
+  nfs_vip_prefix            netmask del VIP, in bit: deve essere quella della
+                            VLAN dei nodi, non un valore a caso
   pcs_cluster_password      password di hacluster. CAMBIALA
   pcs_stonith_enabled       false come da procedura di riferimento
 

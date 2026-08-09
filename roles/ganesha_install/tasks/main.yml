@@ -3,6 +3,41 @@
 # systemd: lo avvia e lo sposta Pacemaker insieme al VIP. Due gestori sullo
 # stesso servizio farebbero a pugni.
 
+# NFS serve solo a Kubernetes: si esportano SOLO i volumi marcati con
+# nfs_export: true in gluster_volumes. Gli altri (POSTGRESQL, ELASTIC) restano
+# volumi Gluster con i loro brick, senza alcun export.
+- name: Seleziona i volumi da esportare via NFS
+  set_fact:
+    ganesha_volumes: >-
+      {{ gluster_volumes
+         | selectattr('nfs_export', 'defined')
+         | selectattr('nfs_export')
+         | list }}
+
+- name: Verifica che ci sia almeno un volume da esportare
+  assert:
+    that:
+      - ganesha_volumes | length > 0
+    fail_msg: >-
+      Nessun volume con nfs_export: true in gluster_volumes: Ganesha non
+      avrebbe nulla da esportare e Pacemaker avvierebbe un servizio vuoto.
+    success_msg: >-
+      Esportati via NFS: {{ ganesha_volumes | map(attribute='name') | join(', ') }}.
+      Non esportati: {{ (gluster_volumes | map(attribute='name') | list)
+                        | difference(ganesha_volumes | map(attribute='name') | list)
+                        | join(', ') | default('nessuno', true) }}.
+
+- name: Verifica che i volumi esportati abbiano pseudo
+  assert:
+    that:
+      - item.pseudo | default('') | length > 0
+    fail_msg: >-
+      Il volume {{ item.name }} ha nfs_export: true ma nessun pseudo: senza il
+      percorso NFSv4 il client non saprebbe cosa montare.
+  loop: "{{ ganesha_volumes }}"
+  loop_control:
+    label: "{{ item.name }}"
+
 # Un client per riga, in CIDR: gli host dei gruppi indicati piu' gli extra.
 - name: Componi l'elenco dei client autorizzati
   set_fact:
@@ -40,20 +75,31 @@
     group: root
     mode: '0755'
 
-- name: Deploy di un export per ogni volume Gluster
+- name: Deploy di un export per ogni volume da esportare
   template:
     src: export.conf.j2
-    dest: "{{ ganesha_export_dir }}/{{ item.name | lower }}.conf"
+    dest: "{{ ganesha_export_dir }}/{{ item.export_name | default(item.name | lower) }}.conf"
     owner: root
     group: root
     mode: '0644'
     backup: yes
-  loop: "{{ gluster_volumes }}"
+  loop: "{{ ganesha_volumes }}"
   loop_control:
     label: "{{ item.name }}"
     index_var: volume_index
   vars:
     export_id: "{{ volume_index + 1 }}"
+  notify: restart ganesha
+
+# Un volume tolto da nfs_export lascerebbe dietro il suo file di export: senza
+# questa rimozione resterebbe esportato fino al prossimo reinstall del nodo.
+- name: Rimuovi gli export dei volumi non piu' esportati
+  file:
+    path: "{{ ganesha_export_dir }}/{{ item.export_name | default(item.name | lower) }}.conf"
+    state: absent
+  loop: "{{ gluster_volumes | difference(ganesha_volumes) }}"
+  loop_control:
+    label: "{{ item.name }}"
   notify: restart ganesha
 
 # blockinfile e non template: ganesha.conf arriva dal pacchetto con blocchi
@@ -67,8 +113,8 @@
     group: root
     mode: '0644'
     block: |
-      {% for volume in gluster_volumes %}
-      %include "{{ ganesha_export_dir }}/{{ volume.name | lower }}.conf"
+      {% for volume in ganesha_volumes %}
+      %include "{{ ganesha_export_dir }}/{{ volume.export_name | default(volume.name | lower) }}.conf"
       {% endfor %}
   notify: restart ganesha
 
