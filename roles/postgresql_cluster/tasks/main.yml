@@ -1,14 +1,13 @@
 ---
-# Cluster PostgreSQL {{ postgres_version }} con Patroni ed etcd.
+# Cluster PostgreSQL con Patroni ed etcd sul gruppo [db_servers].
 #
-# ATTENZIONE: questo ruolo NON e' idempotente ed e' DISTRUTTIVO per costruzione.
-# Azzera la directory dati di PostgreSQL e quella di etcd a ogni esecuzione.
-# Rilanciarlo su un cluster in produzione CANCELLA IL DATABASE. E' un ruolo di
-# prima installazione: si usa su macchine nuove, non per riconvergere.
+# Il ruolo e' IDEMPOTENTE: rilanciarlo su un cluster gia' attivo non cancella
+# nulla e non riavvia niente. Le directory dati vengono create solo se mancano,
+# e i passi di bootstrap girano solo alla prima installazione.
 #
-# La sequenza e' quella del playbook originale, gia' collaudato. Le uniche
-# modifiche sono la versione parametrizzata, i nodi derivati dall'inventario e
-# la rimozione della disattivazione di ufw, che ora fa host_prep.
+# Per ripartire da zero azzerando i dati serve una richiesta esplicita:
+#   ansible-playbook -i inventory.ini site.yml -e postgres_force_reinit=true
+# che CANCELLA il database e il datastore etcd su tutti i nodi.
 
 - name: Verifica di avere tre nodi nel gruppo
   assert:
@@ -20,9 +19,44 @@
       Patroni con etcd richiede un numero dispari di nodi per il quorum: tre.
   run_once: true
 
+# --- Rilevamento dello stato esistente -------------------------------------
+# PG_VERSION esiste solo dentro una PGDATA inizializzata; la directory member
+# solo dentro un datastore etcd gia' formato. Sono i due segnali che
+# distinguono una prima installazione da una riesecuzione.
+
+- name: Verifica se PostgreSQL e' gia' inizializzato
+  stat:
+    path: "{{ postgres_data_dir }}/PG_VERSION"
+  register: pg_version_file
+
+- name: Verifica se etcd ha gia' un datastore
+  stat:
+    path: "{{ etcd_data_dir }}/member"
+  register: etcd_member_dir
+
+- name: Determina cosa va inizializzato
+  set_fact:
+    pg_needs_bootstrap: "{{ postgres_force_reinit | bool or not pg_version_file.stat.exists }}"
+    etcd_needs_bootstrap: "{{ postgres_force_reinit | bool or not etcd_member_dir.stat.exists }}"
+
+- name: Mostra lo stato rilevato
+  debug:
+    msg: >-
+      {{ inventory_hostname }}:
+      PostgreSQL {{ 'da inizializzare' if pg_needs_bootstrap else 'gia inizializzato in ' ~ postgres_data_dir }},
+      etcd {{ 'da inizializzare' if etcd_needs_bootstrap else 'datastore gia presente' }}
+      {{ '(FORZATO: i dati verranno CANCELLATI)' if postgres_force_reinit | bool else '' }}
+
+# --- Preparazione del sistema ----------------------------------------------
+
+- name: Leggi il timezone corrente
+  command: timedatectl show -p Timezone --value
+  register: current_timezone
+  changed_when: false
+
 - name: Set timezone
   ansible.builtin.command: "timedatectl set-timezone {{ timezone }}"
-  changed_when: false
+  when: current_timezone.stdout | trim != timezone
 
 - name: Update and upgrade system
   apt:
@@ -35,9 +69,6 @@
     name: "{{ postgres_utility_packages }}"
     state: present
 
-# Derivate dall'inventario invece che da un elenco separato: nel playbook
-# originale gli stessi tre nodi erano ripetuti in pg_nodes e patroni_nodes,
-# oltre che nell'inventario, e le tre copie potevano divergere.
 - name: Add /etc/hosts entries
   lineinfile:
     path: /etc/hosts
@@ -47,20 +78,41 @@
     backup: yes
   loop: "{{ groups[postgres_cluster_group] }}"
 
+# --- Repository Percona -----------------------------------------------------
+
+- name: Verifica se percona-release e' gia' installato
+  stat:
+    path: /usr/bin/percona-release
+  register: percona_release_bin
+
 - name: Ensure curl is installed
   apt:
     name: curl
     state: present
+  when: not percona_release_bin.stat.exists
 
 - name: Download Percona repo via curl (workaround bug)
   shell: "curl -fsSL -o /tmp/percona-release.deb {{ percona_release_deb_url }}"
+  when: not percona_release_bin.stat.exists
 
 - name: Install Percona repo
   apt:
     deb: /tmp/percona-release.deb
+  when: not percona_release_bin.stat.exists
+
+# Il nome del file generato da percona-release varia fra le versioni: si cerca
+# per pattern invece di indovinarlo.
+- name: Verifica se il repo {{ percona_repo }} e' gia' abilitato
+  find:
+    paths: /etc/apt/sources.list.d
+    patterns: "*{{ percona_repo }}*"
+  register: percona_repo_files
 
 - name: "Setup Percona PostgreSQL {{ postgres_version }} repo"
   command: "percona-release setup {{ percona_repo }}"
+  when: percona_repo_files.matched == 0
+
+# --- Pacchetti --------------------------------------------------------------
 
 - name: "Install PostgreSQL {{ postgres_version }} and tools"
   apt:
@@ -68,18 +120,33 @@
     state: present
     update_cache: yes
 
+- name: Install etcd specific version
+  apt:
+    name: "etcd={{ etcd_version }}"
+    state: present
+
+# Il servizio postgresql del pacchetto va disattivato: e' Patroni ad avviare e
+# fermare PostgreSQL. Idempotente, non cambia nulla se e' gia' cosi'.
 - name: Stop and disable system PostgreSQL service
   systemd:
     name: postgresql
     state: stopped
     enabled: no
 
-- name: "Clear PostgreSQL {{ postgres_version }} data directory"
-  file:
-    path: "{{ postgres_data_dir }}"
-    state: absent
+# --- Directory dati ---------------------------------------------------------
+# Cancellazione solo su richiesta esplicita. Senza postgres_force_reinit le
+# directory vengono soltanto create se mancanti.
 
-- name: Recreate main directory
+- name: Azzera le directory dati (SOLO con postgres_force_reinit)
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ postgres_data_dir }}"
+    - "{{ etcd_data_dir }}"
+  when: postgres_force_reinit | bool
+
+- name: Assicura la directory dati di PostgreSQL
   file:
     path: "{{ postgres_data_dir }}"
     state: directory
@@ -87,45 +154,7 @@
     group: postgres
     mode: '0700'
 
-- name: Install etcd specific version
-  apt:
-    name: "etcd={{ etcd_version }}"
-    state: present
-
-- name: Stop and disable etcd service
-  systemd:
-    name: etcd
-    state: stopped
-    enabled: no
-
-- name: Configure etcd cluster
-  template:
-    src: etcd.conf.yaml.j2
-    dest: /etc/etcd/etcd.conf.yaml
-    mode: '0644'
-
-- name: Include Patroni tasks
-  include_tasks: patroni.yml
-
-- name: "Clear PostgreSQL {{ postgres_version }} data directory"
-  file:
-    path: "{{ postgres_data_dir }}"
-    state: absent
-
-- name: Recreate PostgreSQL data directory
-  file:
-    path: "{{ postgres_data_dir }}"
-    state: directory
-    owner: postgres
-    group: postgres
-    mode: '0700'
-
-- name: Clear ETCD data directory
-  file:
-    path: "{{ etcd_data_dir }}"
-    state: absent
-
-- name: Recreate ETCD data directory
+- name: Assicura la directory dati di etcd
   file:
     path: "{{ etcd_data_dir }}"
     state: directory
@@ -133,8 +162,51 @@
     group: etcd
     mode: '0700'
 
+# --- etcd -------------------------------------------------------------------
+# etcd viene configurato e avviato PRIMA di Patroni, che senza il DCS non puo'
+# acquisire la leadership.
+
+- name: Configure etcd cluster
+  template:
+    src: etcd.conf.yaml.j2
+    dest: /etc/etcd/etcd.conf.yaml
+    mode: '0644'
+    backup: yes
+  register: etcd_config
+
 - name: Start etcd service
   systemd:
     name: etcd
     state: started
     enabled: yes
+    daemon_reload: yes
+
+- name: Attendi che etcd risponda
+  uri:
+    url: "http://{{ hostvars[inventory_hostname].ansible_host }}:{{ etcd_client_port }}/health"
+    status_code: 200
+  register: etcd_health
+  until: etcd_health.status | default(0) == 200
+  retries: 30
+  delay: 5
+  changed_when: false
+
+# --- Patroni ----------------------------------------------------------------
+
+- name: Include Patroni tasks
+  include_tasks: patroni.yml
+
+# --- Riepilogo --------------------------------------------------------------
+# I riavvii dei servizi non sono automatici: su un cluster di produzione un
+# restart va deciso da chi opera, non innescato da un template modificato.
+
+- name: Segnala le configurazioni cambiate
+  debug:
+    msg: >-
+      {{ inventory_hostname }}: configurazione modificata
+      {{ '[etcd]' if etcd_config is changed else '' }}
+      {{ '[patroni]' if patroni_config is changed else '' }}.
+      Per applicarla:
+      {{ 'systemctl restart etcd (UN NODO ALLA VOLTA, verificando il quorum)' if etcd_config is changed else '' }}
+      {{ 'patronictl -c /etc/patroni/patroni.yml reload ' ~ patroni_scope if patroni_config is changed else '' }}
+  when: etcd_config is changed or patroni_config is changed

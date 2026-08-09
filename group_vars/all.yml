@@ -222,6 +222,12 @@ haproxy_group: "haproxy"
 
 postgres_version: "17"
 
+# Sui tre nodi DB il disco dati di PostgreSQL e' dedicato e montato A MANO su
+# questo percorso. Il play si ferma con un errore se il mount non c'e',
+# invece di lasciare che il database venga inizializzato sul disco di sistema.
+# La directory dati effettiva e' <mount>/<major>/main.
+postgres_mount_point: "/var/lib/postgresql"
+
 # Il repo Percona e i nomi dei pacchetti seguono la versione. Verificali sul
 # nodo dopo "percona-release setup ppg-17", in particolare
 # percona-pgaudit17-set-user e percona-postgresql-17-wal2json.
@@ -231,6 +237,12 @@ postgres_version: "17"
 # "etcd" non esiste (ci sono etcd-server ed etcd-client, fermi alla 3.4.30).
 # Verifica con "apt-cache madison etcd" dopo aver abilitato il repo.
 etcd_version: "1:3.5.18-1.noble"
+
+# Con false il ruolo non cancella nulla: e' idempotente e rilanciabile.
+# Con true AZZERA la directory dati di PostgreSQL e il datastore etcd su tutti
+# i nodi, per ripartire da un cluster nuovo. Da passare a mano quando serve:
+#   ansible-playbook -i inventory.ini site.yml -e postgres_force_reinit=true
+postgres_force_reinit: false
 
 # "upgrade: dist" a ogni esecuzione, come nel playbook di partenza.
 postgres_dist_upgrade: true

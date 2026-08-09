@@ -117,13 +117,22 @@
   become: yes
   gather_facts: yes
   pre_tasks:
-    # Controllo del playbook originale: la directory dati deve stare su un
-    # filesystem dedicato, non sulla radice.
-    - name: Fail if /var/lib/postgresql is not mounted
-      command: df -h
-      register: df_output
+    # Il disco dati viene montato a mano su postgres_mount_point. Questo e' il
+    # controllo che impedisce a Patroni di inizializzare il database sulla
+    # partizione di sistema se il mount manca o non e' stato fatto.
+    #
+    # findmnt e non "df -h | grep": il grep passa anche quando a essere montata
+    # e' solo una sottodirectory, o quando la stringa compare nel nome di un
+    # device. findmnt sul percorso corrisponde al mountpoint esatto e basta.
+    - name: Verifica che il disco dati sia montato su {{ postgres_mount_point }}
+      command: "findmnt -n -o TARGET,SOURCE,FSTYPE {{ postgres_mount_point }}"
+      register: postgres_mount
       changed_when: false
-      failed_when: "'/var/lib/postgresql' not in df_output.stdout"
+      failed_when: postgres_mount.rc != 0
+
+    - name: Mostra il filesystem dei dati
+      debug:
+        msg: "{{ inventory_hostname }}: {{ postgres_mount.stdout | trim }}"
   roles:
     - postgresql_cluster
   post_tasks:

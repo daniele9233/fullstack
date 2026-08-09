@@ -4,12 +4,6 @@
     name: percona-patroni
     state: present
 
-- name: Stop and disable Patroni service
-  systemd:
-    name: patroni
-    state: stopped
-    enabled: no
-
 - name: Create patroni configuration file
   template:
     src: patroni.yml.j2
@@ -17,22 +11,58 @@
     owner: root
     group: root
     mode: '0644'
+    backup: yes
+  register: patroni_config
+
+# Al primo bootstrap il primo nodo deve acquisire la leadership e fare initdb
+# prima che gli altri provino a clonarlo: da qui l'avvio in due tempi con la
+# pausa in mezzo.
+#
+# A cluster gia' inizializzato non serve nessuna sequenza: "state: started" e'
+# idempotente e non tocca un Patroni gia' in esecuzione, quindi i due gruppi di
+# task si riducono a una verifica.
 
 - name: Start Patroni on primary node only
   systemd:
     name: patroni
     state: started
     enabled: yes
+    daemon_reload: yes
   when: inventory_hostname == patroni_primary_node
 
 - name: Wait 20 seconds for Patroni leader election
   pause:
-    seconds: 20
-  when: inventory_hostname == patroni_primary_node
+    seconds: "{{ patroni_bootstrap_wait }}"
+  when:
+    - inventory_hostname == patroni_primary_node
+    - pg_needs_bootstrap | bool
 
 - name: Start Patroni on remaining nodes
   systemd:
     name: patroni
     state: started
     enabled: yes
+    daemon_reload: yes
   when: inventory_hostname != patroni_primary_node
+
+- name: Attendi che la REST API di Patroni risponda
+  uri:
+    url: "http://{{ hostvars[inventory_hostname].ansible_host }}:{{ patroni_restapi_port }}/health"
+    status_code: [200, 503]
+  register: patroni_health
+  until: patroni_health.status | default(0) in [200, 503]
+  retries: 30
+  delay: 5
+  changed_when: false
+
+- name: Mostra lo stato del cluster Patroni
+  command: "patronictl -c /etc/patroni/patroni.yml list"
+  register: patroni_list
+  changed_when: false
+  failed_when: false
+  when: inventory_hostname == patroni_primary_node
+
+- name: Riepilogo cluster
+  debug:
+    msg: "{{ patroni_list.stdout_lines | default(['patronictl non disponibile']) }}"
+  when: inventory_hostname == patroni_primary_node
