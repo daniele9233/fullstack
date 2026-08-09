@@ -298,10 +298,11 @@ gluster_arbiter_count: 1
 # montano i nodi del cluster. Si dichiara con nfs_export: true e allora servono
 # anche pseudo (il percorso con cui il client monta la share) ed export_name
 # (il nome del file in ganesha_export_dir).
-# Gli altri volumi esistono solo come volumi Gluster con i loro brick: PostgreSQL
-# ed Elastic scrivono sul filesystem locale o montano il volume con il client
-# nativo Gluster, non passano da NFS. Aggiungere nfs_export ad altri volumi vuol
-# dire esporre dati di database via NFS: farlo solo di proposito.
+# Gli altri volumi esistono solo come volumi Gluster con i loro brick, senza
+# alcun export. PostgreSQL non passa di qui: scrive sul disco locale che
+# create_disk prepara come vg_data/lv_data su {{ postgres_mount_point }}.
+# Aggiungere nfs_export ad altri volumi vuol dire esporre dati di database via
+# NFS: farlo solo di proposito.
 #
 # options sono le "Options Reconfigured" da applicare al volume dopo la
 # creazione, con "gluster volume set". Le opzioni che Gluster imposta da solo

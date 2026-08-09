@@ -1,16 +1,33 @@
 ---
 # Variabili valide solo per il gruppo [db_servers].
 
-# Il disco dati di PostgreSQL va montato su postgres_mount_point, non su
-# /var/lib/rancher come sui nodi RKE2. Nomi di volume group e logical volume
-# distinti, cosi' sono riconoscibili e non collidono se una macchina venisse
-# riusata per un ruolo diverso.
+# Disco dati di PostgreSQL. Riproduce il layout dei db in esercizio:
+#
+#   sdb          150G  disk
+#   └─sdb1       150G  part
+#     └─vg_data-lv_data  lvm  /var/lib/postgresql
+#
+# Il disco di sistema resta sda (sda1 /boot/efi, sda2 /boot, sda3 con
+# ubuntu-vg/ubuntu-lv su /), che il ruolo esclude da solo.
 disk_mount_point: "{{ postgres_mount_point }}"
-disk_vg_name: "vg_pgdata"
-disk_lv_name: "lv_pgdata"
+disk_vg_name: "vg_data"
+disk_lv_name: "lv_data"
 
-# Dichiara qui, o per host nell'inventario, il device da usare:
-#   disk_device: "/dev/sdb"
-# Lasciandolo vuoto il ruolo cerca il primo disco libero, che su una macchina
-# con piu' dischi aggiuntivi non e' detto sia quello giusto.
-disk_device: ""
+# Device dichiarato, non cercato: il ruolo saprebbe trovare il primo disco
+# libero, ma su una macchina con piu' dischi aggiuntivi prende quello che il
+# kernel enumera per primo. Dichiarandolo, un disco sbagliato si vede leggendo
+# questo file e non a formattazione avvenuta.
+# Se su un host il disco dati non e' sdb, sovrascrivilo nell'inventario:
+#   dbserver02 ansible_host=... disk_device=/dev/sdc
+disk_device: "/dev/sdb"
+
+# 100%FREE: l'LV prende tutta la partizione, come i 150G in esercizio.
+disk_lv_size: "100%FREE"
+
+# >>> VERIFICA CHE COINCIDA CON LA PRODUZIONE <<<
+# Sui db gia' installati leggilo con:
+#   findmnt -n -o FSTYPE,OPTIONS /var/lib/postgresql
+# Se e' ext4, cambia qui: il ruolo non riformatta nulla di gia' montato, ma un
+# nodo nuovo nascerebbe con un filesystem diverso dagli altri.
+disk_fs_type: "xfs"
+disk_mount_options: "defaults,noatime"

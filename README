@@ -140,6 +140,38 @@ e haproxy non riescono a fare il bind del VIP sul nodo che non lo possiede e
 non partono affatto. Per questo keepalived_install gira prima degli altri due.
 
 
+DISCO DATI (ruolo create_disk)
+
+Un disco dedicato per i dati, partizionato con LVM e messo in fstab: partizione
+unica sul device, volume group, logical volume su tutto lo spazio, filesystem,
+mount per UUID. Gira sui nodi RKE2 e sui database, non sui bilanciatori (non
+hanno un disco dati) ne' sui nodi Gluster (i brick si montano a mano).
+
+Destinazione e nomi cambiano per gruppo:
+
+  nodi RKE2      /dev/sd?  ->  vg_rancher/lv_rancher  ->  /var/lib/rancher
+  [db_servers]   /dev/sdb  ->  vg_data/lv_data        ->  /var/lib/postgresql
+
+Il layout dei database e' quello delle macchine in esercizio: sda per il sistema
+(sda1 /boot/efi, sda2 /boot, sda3 con ubuntu-vg/ubuntu-lv su /) e sdb interamente
+per i dati. Il device e' dichiarato in group_vars/db_servers.yml e si sovrascrive
+per host nell'inventario, se su qualche macchina non e' sdb:
+
+  dbserver02 ansible_host=... disk_device=/dev/sdc
+
+Il ruolo non tocca nulla dove disk_mount_point risulta gia' montato: sulle
+macchine gia' installate stampa il mount esistente e passa oltre. Su un disco
+nuovo, invece, pretende che il device esista, non abbia partizioni, non sia
+montato e non sia il disco di sistema, altrimenti si ferma prima di partizionare.
+
+Prima di aggiungere un nodo, verifica che disk_fs_type coincida con quello degli
+altri:
+
+  findmnt -n -o FSTYPE,OPTIONS /var/lib/postgresql
+
+PostgreSQL scrive su questo disco locale, non sul volume Gluster POSTGRESQL.
+
+
 STORAGE: GLUSTERFS + GANESHA NFS + PACEMAKER (gruppo [gluster_servers])
 
 Tre nodi con GlusterFS replicato, esportato via NFS da Ganesha, con VIP e
