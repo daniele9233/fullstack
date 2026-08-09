@@ -2,40 +2,37 @@
 {% set idx = balancers.index(inventory_hostname) %}
 {% set is_master = (idx == 0) %}
 {% set priority = keepalived_priority_master - (idx * keepalived_priority_step) %}
-# {{ ansible_managed }} - roles/keepalived_install
-# {{ inventory_hostname }}: {{ 'MASTER' if is_master else 'BACKUP' }} (priorita' {{ priority }})
-
+{{ '#' }} {{ ansible_managed }} - roles/keepalived_install
+{{ '#' }} {{ inventory_hostname }}: {{ 'MASTER' if is_master else 'BACKUP' }} (priorita' {{ priority }})
 global_defs {
+    #vrrp_version 3
     script_user root
+    {{ '#' }} Non presente nella configurazione di produzione. Senza,
+    {{ '#' }} "keepalived --config-test" esce con 6 e la validazione del
+    {{ '#' }} template blocca il deploy. Gli script sono root:root 0750,
+    {{ '#' }} quindi soddisfano il controllo senza cambiare comportamento.
     enable_script_security
 }
-
-# --- VIP 1: {{ vip_rancher_ip }} - console Rancher e servizi, servito da nginx ---
-
-# Health check vero: se nginx cade sul nodo che tiene il VIP, la priorita'
-# scende di {{ keepalived_nginx_check_weight }} e il VIP passa all'altro nodo, dove nginx e' gia'
-# in esecuzione. fall/rise a 2 per non spostare il VIP a ogni singolo campione.
+# Script to check whether Nginx is running or not
 vrrp_script chk_nginx_service {
-    script "{{ keepalived_config_dir }}/nginx-ha-check"
-    interval {{ keepalived_nginx_check_interval }}
-    weight {{ keepalived_nginx_check_weight }}
-    fall 2
-    rise 2
+ script "{{ keepalived_config_dir }}/nginx-ha-check"
+ interval {{ keepalived_nginx_check_interval }}
+ weight   {{ keepalived_nginx_check_weight }}
+ {{ '#' }} fall/rise a 2 per non spostare il VIP su un singolo campione.
+ fall 2
+ rise 2
 }
-
+# Virtual interface - The priority specifies the order in which the assigned interface to take over in a failover
 vrrp_instance {{ keepalived_rancher_instance }} {
-    state {{ 'MASTER' if is_master else 'BACKUP' }}
-    priority {{ priority }}
-    interface {{ keepalived_interface }}
-    virtual_router_id {{ keepalived_vrid_rancher }}
-    advert_int {{ keepalived_advert_int }}
-    accept
-    garp_master_refresh {{ keepalived_garp_master_refresh }}
-    garp_master_refresh_repeat {{ keepalived_garp_master_refresh_repeat }}
-    unicast_src_ip {{ hostvars[inventory_hostname].ansible_host }}
+  state {{ 'MASTER' if is_master else 'BACKUP' }}
+  priority {{ priority }}
+  interface {{ keepalived_interface }}
+  virtual_router_id {{ keepalived_vrid_rancher }}
+    advert_int                 {{ keepalived_advert_int }}
+    unicast_src_ip {{ hostvars[inventory_hostname].ansible_host }}/{{ vip_rancher_prefix }}
     unicast_peer {
 {% for peer in balancers if peer != inventory_hostname %}
-        {{ hostvars[peer].ansible_host }}
+        {{ hostvars[peer].ansible_host }}/{{ vip_rancher_prefix }}
 {% endfor %}
     }
     virtual_ipaddress {
@@ -45,11 +42,8 @@ vrrp_instance {{ keepalived_rancher_instance }} {
         chk_nginx_service
     }
 }
-
-# --- VIP 2: {{ vip_patroni_ip }} - Patroni/PgBouncer, servito da haproxy ---
-
 vrrp_script chk_haproxy {
-    script "/usr/bin/pkill -0 haproxy"
+    script "pkill -0 haproxy"
     interval 5
     weight -4
     fall 2
@@ -57,27 +51,43 @@ vrrp_script chk_haproxy {
 }
 
 vrrp_script chk_lb {
-    script "/usr/bin/pkill -0 keepalived"
+    script "pkill -0 keepalived"
     interval 1
     weight 6
     fall 2
     rise 1
 }
 
+vrrp_script chk_servers {
+    script "echo 'GET /are-you-ok' | nc 127.0.0.1 {{ haproxy_stats_port }} | grep -q '200 OK'"
+    interval 2
+    weight 2
+    fall 2
+    rise 2
+}
+
 vrrp_instance {{ keepalived_patroni_instance }} {
-    state {{ 'MASTER' if is_master else 'BACKUP' }}
-    priority {{ priority }}
     interface {{ keepalived_interface }}
+    state {{ 'MASTER' if is_master else 'BACKUP' }}
     virtual_router_id {{ keepalived_vrid_patroni }}
+    priority {{ priority }}
+
+    {{ '#' }} La produzione usa virtual_ipaddress_excluded. Un indirizzo
+    {{ '#' }} "excluded" viene assegnato all'interfaccia ma non annunciato nei
+    {{ '#' }} pacchetti VRRP, e keepalived considera l'istanza priva di VIP:
+    {{ '#' }} "No VIP specified", con --config-test che esce 5. Con un solo
+    {{ '#' }} indirizzo la forma normale e' equivalente e non da' warning.
     virtual_ipaddress {
-        {{ vip_patroni_ip }}
+       {{ vip_patroni_ip }}
     }
-    {{ '#' }} Niente track_interface su {{ keepalived_interface }}: e' l'interfaccia dell'istanza,
-    {{ '#' }} che keepalived traccia gia' da sola. Dichiararla esplicitamente non
-    {{ '#' }} aggiunge nulla e fa uscire "keepalived --config-test" con codice 5,
-    {{ '#' }} bloccando la validazione del template.
+
+    {{ '#' }} La produzione traccia qui l'interfaccia dell'istanza. keepalived
+    {{ '#' }} la ignora ("Ignoring track_interface since own interface"),
+    {{ '#' }} perche' la traccia gia' da sola, e --config-test esce 5.
+
     track_script {
         chk_haproxy
         chk_lb
+        chk_servers
     }
 }

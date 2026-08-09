@@ -17,7 +17,12 @@
 
 - name: Installa keepalived
   apt:
-    name: keepalived
+    name:
+      - keepalived
+      # Serve a chk_servers, che interroga la dashboard haproxy con nc.
+      # Su Ubuntu Server minimale non e' detto che ci sia, e senza lo script
+      # fallirebbe sempre in silenzio.
+      - netcat-openbsd
     state: present
     update_cache: yes
     cache_valid_time: 3600

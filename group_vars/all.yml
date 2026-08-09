@@ -167,7 +167,7 @@ keepalived_vrid_rancher: 151
 keepalived_vrid_patroni: 51
 
 # Nomi delle istanze VRRP, uguali su tutti i bilanciatori.
-keepalived_rancher_instance: "VI_1"
+keepalived_rancher_instance: "VI_NGINX"
 keepalived_patroni_instance: "vrrp_1"
 
 # Priorita' del primo bilanciatore dell'inventario; gli altri scalano di step.
@@ -176,8 +176,6 @@ keepalived_priority_master: 101
 keepalived_priority_step: 1
 
 keepalived_advert_int: 1
-keepalived_garp_master_refresh: 5
-keepalived_garp_master_refresh_repeat: 1
 
 # Peso che il check di nginx aggiunge alla priorita' quando nginx e' sano.
 # Deve superare il divario di priorita' fra i nodi, altrimenti la caduta di
