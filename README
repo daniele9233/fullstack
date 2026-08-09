@@ -232,6 +232,22 @@ insieme al VIP, nello stesso gruppo di risorse, cosi' stanno sempre sullo
 stesso nodo e il VIP non viene annunciato prima che il servizio risponda.
 Con ganesha_managed_by_pacemaker a false lo si gestisce con systemd.
 
+Il cluster Pacemaker comprende i soli host di pcs_cluster_nodes, di default i
+DUE nodi con i dati, come i cluster in esercizio. L'arbitro Gluster resta fuori:
+il ruolo pacemaker_nfs_ha non installa e non configura niente su di lui. Ganesha
+invece viene installato su tutti e tre, cosi' il terzo nodo e' pronto se un
+giorno lo si aggiunge al cluster; li' resta disabilitato e non parte.
+
+Con due nodi "pcs cluster setup" scrive da solo two_node: 1 in corosync.conf e
+il cluster resta sempre in quorum: il failover per caduta di un nodo funziona,
+mentre non e' coperto il caso in cui i due nodi restano vivi ma smettono di
+vedersi, perche' entrambi prenderebbero VIP e Ganesha. Il rimedio previsto e' lo
+stonith, qui disattivo come nella procedura di riferimento. Mettendo in
+pcs_cluster_nodes tutti e tre gli host si ha invece il quorum per maggioranza;
+in quel caso conviene tenere le risorse lontane dall'arbitro:
+
+  pcs constraint location nfs_group avoids <arbitro>=INFINITY
+
 Variabili principali:
 
   gluster_brick_root        radice dei brick
@@ -239,6 +255,7 @@ Variabili principali:
   gluster_arbiter_count     1 per arbitro, 0 per replica piena
   ganesha_export_path       percorso dentro il volume, "/" per il volume intero
   ganesha_client_groups     gruppi di inventario autorizzati in scrittura
+  pcs_cluster_nodes         host del cluster Pacemaker, di default i primi due
   nfs_vip_ip                VIP NFS gestito da Pacemaker
   nfs_vip_prefix            netmask del VIP, in bit: deve essere quella della
                             VLAN dei nodi, non un valore a caso

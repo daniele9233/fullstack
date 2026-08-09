@@ -3,7 +3,7 @@
 # systemd: un restart diretto verrebbe visto dal cluster come un guasto.
 - name: restart ganesha
   command: "pcs resource restart {{ pcs_resource_ganesha }}"
-  when: ganesha_managed_by_pacemaker and inventory_hostname == groups['gluster_servers'][0]
+  when: ganesha_managed_by_pacemaker and inventory_hostname == pcs_cluster_nodes[0]
   failed_when: false
   changed_when: true
 

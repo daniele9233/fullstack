@@ -1,6 +1,8 @@
 ---
 # Valori di ripiego: group_vars/all.yml ha precedenza maggiore.
 pcs_cluster_name: "nfs_export"
+# I due nodi con i dati: l'arbitro Gluster resta fuori dal cluster Pacemaker.
+pcs_cluster_nodes: "{{ groups['gluster_servers'][:2] }}"
 pcs_cluster_user: "hacluster"
 pcs_cluster_password: ""
 pcs_stonith_enabled: false

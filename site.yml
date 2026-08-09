@@ -177,6 +177,8 @@
           - "Volumi: {{ gluster_volumes | map(attribute='name') | join(', ') }}"
           - "Esportati via NFS: {{ ganesha_volumes | map(attribute='name') | join(', ') }}"
           - "Solo volume Gluster, nessun export: {{ (gluster_volumes | map(attribute='name') | list) | difference(ganesha_volumes | map(attribute='name') | list) | join(', ') | default('nessuno', true) }}"
+          - "Cluster Pacemaker: {{ pcs_cluster_nodes | join(', ') }}"
+          - "Fuori dal cluster Pacemaker: {{ groups['gluster_servers'] | difference(pcs_cluster_nodes) | join(', ') | default('nessuno', true) }}"
           - "VIP NFS gestito da Pacemaker: {{ nfs_vip_ip }}"
           - "Mount dal client: mount -t nfs4 {{ nfs_vip_ip }}:{{ ganesha_volumes[0].pseudo }} /mnt"
       run_once: true

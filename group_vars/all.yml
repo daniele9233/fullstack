@@ -361,6 +361,22 @@ nfs_vip_prefix: 24
 
 # Pacemaker
 pcs_cluster_name: "nfs_export"
+
+# Nodi del cluster Pacemaker: i due che tengono i dati, come i cluster in
+# esercizio. L'arbitro Gluster, cioe' l'ULTIMO host di [gluster_servers], resta
+# fuori: e' un nodo di soli metadati e non deve servire NFS.
+#
+# Conseguenza da conoscere: con due nodi "pcs cluster setup" scrive da solo
+# two_node: 1 in corosync.conf, che tiene il cluster sempre in quorum. Il
+# failover per caduta di un nodo funziona; a non essere coperto e' il caso in
+# cui i due nodi restano vivi ma smettono di vedersi, perche' entrambi
+# prenderebbero VIP e Ganesha. Il rimedio previsto e' lo stonith, qui disattivo.
+#
+# Mettendo qui tutti e tre gli host si ottiene il quorum per maggioranza; in
+# quel caso conviene aggiungere un vincolo che tenga le risorse lontane
+# dall'arbitro.
+pcs_cluster_nodes: "{{ groups['gluster_servers'][:2] }}"
+
 pcs_cluster_user: "hacluster"
 # CAMBIA QUESTA PASSWORD. Serve a pcs per autenticare i nodi fra loro.
 pcs_cluster_password: "CambiaMiSubito-hacluster"

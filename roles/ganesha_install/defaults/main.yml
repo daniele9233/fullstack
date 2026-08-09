@@ -16,3 +16,7 @@ gluster_volumes: []
 # Mettere a false per gestirlo direttamente con systemd, senza cluster.
 ganesha_managed_by_pacemaker: true
 pcs_resource_ganesha: "nfs_server"
+
+# Serve all'handler, che riavvia la risorsa dal primo nodo del cluster. Stesso
+# default del ruolo pacemaker_nfs_ha; group_vars/all.yml ha la precedenza.
+pcs_cluster_nodes: "{{ groups['gluster_servers'][:2] }}"
