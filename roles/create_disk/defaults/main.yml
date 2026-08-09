@@ -1,0 +1,21 @@
+---
+# Valori di ripiego: group_vars ha precedenza maggiore.
+# I default valgono per i nodi RKE2; [db_servers] li sovrascrive in
+# group_vars/db_servers.yml.
+
+# Device da usare, per esempio /dev/sdb. Si puo' dichiarare per host
+# nell'inventario:  dbserver01 ansible_host=... disk_device=/dev/sdb
+#
+# Lasciandolo vuoto il ruolo cerca da solo il primo disco non di sistema,
+# senza partizioni e non montato. Funziona, ma e' una scelta a indovinare:
+# su una macchina con due dischi aggiuntivi prende quello che il kernel
+# enumera per primo. Con un device dichiarato l'errore si vede leggendo
+# l'inventario, non a formattazione avvenuta.
+disk_device: ""
+
+disk_mount_point: "/var/lib/rancher"
+disk_vg_name: "vg_rancher"
+disk_lv_name: "lv_rancher"
+disk_lv_size: "100%FREE"
+disk_fs_type: "xfs"
+disk_mount_options: "defaults,noatime"

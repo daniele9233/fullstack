@@ -1,97 +1,173 @@
 ---
-- name: "Gather facts to access ansible_devices"
-  setup:
-    gather_subset: hardware
-  when: ansible_devices is not defined
-- name: "Get root device"
-  command: "findmnt -n -o SOURCE /"
-  register: root_device_raw
-- name: "Extract root block device name"
-  set_fact:
-    root_device: "{{ root_device_raw.stdout | regex_replace('^/dev/', '') | regex_replace('[0-9]+$', '') }}"
-- name: "Find usable disk with shell command"
-  shell: |
-    for device in $(lsblk -nd -o NAME | grep -E '^(sd|vd|nvme)'); do
-      # Skip root device
-      if [ "$device" = "{{ root_device }}" ]; then
-        continue
-      fi
-      # Check if device has no partitions
-      if [ $(lsblk -n /dev/$device | wc -l) -eq 1 ]; then
-        # Check if not mounted
-        if ! lsblk -n -o MOUNTPOINT /dev/$device | grep -q .; then
-          echo $device
-          break
-        fi
-      fi
-    done
-  register: usable_disk_result
+# Disco dati dedicato: partizione, LVM, filesystem e mount.
+#
+# Destinazione e nomi arrivano da variabili, cosi' lo stesso ruolo serve sia i
+# nodi RKE2 (/var/lib/rancher) sia i database (/var/lib/postgresql).
+#
+# Il ruolo non tocca nulla se disk_mount_point risulta gia' un mountpoint:
+# questo lo rende idempotente e fa si' che rispetti i dischi montati a mano.
+
+- name: "Verifica se {{ disk_mount_point }} e' gia' montato"
+  command: "findmnt -n -o SOURCE {{ disk_mount_point }}"
+  register: disk_existing_mount
   changed_when: false
-- name: "Set usable disk"
-  set_fact:
-    selected_disk: "/dev/{{ usable_disk_result.stdout }}"
-  when: usable_disk_result.stdout != ""
-- name: "Skip LVM setup if no usable disk found"
+  failed_when: false
+
+- name: Mostra il mount gia' presente
   debug:
-    msg: "No additional disk found, skipping LVM setup"
-  when: usable_disk_result.stdout == ""
-- name: "Show selected disk"
-  debug:
-    msg: "Selected disk: {{ selected_disk }}"
-  when: usable_disk_result.stdout != ""
-- name: "Partition disk with parted"
-  parted:
-    device: "{{ selected_disk }}"
-    number: 1
-    state: present
-    part_type: primary
-    fs_type: "ext4"
-    align: optimal
-  when: usable_disk_result.stdout != ""
-- name: "Set partition path"
-  set_fact:
-    rancher_partition: "{{ selected_disk }}1"
-  when: usable_disk_result.stdout != ""
-- name: "Create physical volume"
-  command: "pvcreate {{ rancher_partition }}"
-  args:
-    creates: "/etc/lvm/archive"
-  when: usable_disk_result.stdout != ""
-- name: "Create volume group"
-  command: "vgcreate {{ vg_name }} {{ rancher_partition }}"
-  args:
-    creates: "/dev/{{ vg_name }}"
-  when: usable_disk_result.stdout != ""
-- name: "Create logical volume"
-  command: "lvcreate -n {{ lv_name }} {{ vg_name }} -l 100%FREE"
-  args:
-    creates: "/dev/{{ vg_name }}/{{ lv_name }}"
-  when: usable_disk_result.stdout != ""
-- name: "Format logical volume as {{ filesystem_type }}"
-  filesystem:
-    fstype: "{{ filesystem_type }}"
-    dev: "/dev/{{ vg_name }}/{{ lv_name }}"
-  when: usable_disk_result.stdout != ""
-- name: "Ensure mount point {{ rancher_mount_point }} exists"
+    msg: >-
+      {{ inventory_hostname }}: {{ disk_mount_point }} e' gia' montato su
+      {{ disk_existing_mount.stdout | trim }}. Il ruolo non tocca i dischi.
+  when: disk_existing_mount.rc == 0
+
+# Tutto quello che segue gira solo se il mount non c'e'.
+- name: Predisposizione del disco dati
+  when: disk_existing_mount.rc != 0
+  block:
+
+    - name: Gather facts to access ansible_devices
+      setup:
+        gather_subset: hardware
+      when: ansible_devices is not defined
+
+    - name: Get root device
+      command: "findmnt -n -o SOURCE /"
+      register: root_device_raw
+      changed_when: false
+
+    - name: Extract root block device name
+      set_fact:
+        root_device: "{{ root_device_raw.stdout | regex_replace('^/dev/', '') | regex_replace('[0-9]+$', '') }}"
+
+    # Ricerca automatica, usata solo quando disk_device non e' dichiarato.
+    - name: Find usable disk with shell command
+      shell: |
+        for device in $(lsblk -nd -o NAME | grep -E '^(sd|vd|nvme)'); do
+          # Skip root device
+          if [ "$device" = "{{ root_device }}" ]; then
+            continue
+          fi
+          # Check if device has no partitions
+          if [ $(lsblk -n /dev/$device | wc -l) -eq 1 ]; then
+            # Check if not mounted
+            if ! lsblk -n -o MOUNTPOINT /dev/$device | grep -q .; then
+              echo $device
+              break
+            fi
+          fi
+        done
+      register: usable_disk_result
+      changed_when: false
+      when: disk_device | length == 0
+
+    - name: Set usable disk
+      set_fact:
+        selected_disk: >-
+          {{ disk_device if disk_device | length > 0
+             else ('/dev/' ~ usable_disk_result.stdout | trim) }}
+        disk_autodetected: "{{ disk_device | length == 0 }}"
+
+    - name: "Skip LVM setup if no usable disk found"
+      debug:
+        msg: >-
+          Nessun disco aggiuntivo libero trovato su {{ inventory_hostname }}:
+          {{ disk_mount_point }} restera' sul filesystem di sistema.
+          Dichiara disk_device nell'inventario se il disco esiste ma non viene
+          riconosciuto.
+      when: selected_disk | trim in ['', '/dev/']
+
+    - name: Predisposizione LVM
+      when: selected_disk | trim not in ['', '/dev/']
+      block:
+
+        # Controlli di sicurezza: prima di partizionare un device bisogna
+        # essere certi che sia quello giusto e che non contenga gia' dati.
+        - name: Raccogli lo stato del device scelto
+          shell: |
+            set -o pipefail
+            echo "EXISTS=$( [ -b {{ selected_disk }} ] && echo yes || echo no )"
+            echo "PARTS=$(lsblk -n {{ selected_disk }} 2>/dev/null | wc -l)"
+            echo "MOUNTED=$(lsblk -n -o MOUNTPOINT {{ selected_disk }} 2>/dev/null | grep -c . || true)"
+          args:
+            executable: /bin/bash
+          register: disk_probe
+          changed_when: false
+
+        - name: Verifica che il device sia utilizzabile
+          assert:
+            that:
+              - "'EXISTS=yes' in disk_probe.stdout"
+              - "'PARTS=1' in disk_probe.stdout"
+              - "'MOUNTED=0' in disk_probe.stdout"
+              - selected_disk | regex_replace('^/dev/', '') | regex_replace('[0-9]+$', '') != root_device
+            fail_msg: >-
+              {{ selected_disk }} non e' utilizzabile su {{ inventory_hostname }}:
+              deve esistere, non avere partizioni, non essere montato e non
+              essere il disco di sistema ({{ root_device }}).
+              Stato rilevato: {{ disk_probe.stdout_lines | join(' ') }}
+
+        - name: "Mostra il disco selezionato"
+          debug:
+            msg: >-
+              {{ inventory_hostname }}: uso {{ selected_disk }}
+              ({{ 'rilevato automaticamente' if disk_autodetected | bool else 'dichiarato in inventario' }})
+              per {{ disk_vg_name }}/{{ disk_lv_name }} su {{ disk_mount_point }}
+
+        - name: "Partition disk with parted"
+          parted:
+            device: "{{ selected_disk }}"
+            number: 1
+            state: present
+            part_type: primary
+            fs_type: "ext4"
+            align: optimal
+
+        - name: "Set partition path"
+          set_fact:
+            rancher_partition: >-
+              {{ selected_disk ~ ('p1' if 'nvme' in selected_disk else '1') }}
+
+        # lvg e lvol al posto di pvcreate/vgcreate/lvcreate: sono idempotenti
+        # di loro. Il pvcreate precedente era protetto da
+        # "creates: /etc/lvm/archive", una directory che esiste dopo qualsiasi
+        # operazione LVM, quindi su una macchina con LVM gia' presente veniva
+        # saltato e i task successivi fallivano.
+        - name: "Create volume group"
+          lvg:
+            vg: "{{ disk_vg_name }}"
+            pvs: "{{ rancher_partition }}"
+            state: present
+
+        - name: "Create logical volume"
+          lvol:
+            vg: "{{ disk_vg_name }}"
+            lv: "{{ disk_lv_name }}"
+            size: "{{ disk_lv_size }}"
+            state: present
+            shrink: false
+
+        - name: "Format logical volume as {{ disk_fs_type }}"
+          filesystem:
+            fstype: "{{ disk_fs_type }}"
+            dev: "/dev/{{ disk_vg_name }}/{{ disk_lv_name }}"
+
+        - name: "Get UUID of logical volume"
+          command: "blkid -s UUID -o value /dev/{{ disk_vg_name }}/{{ disk_lv_name }}"
+          register: rancher_lv_uuid
+          changed_when: false
+
+        # Il modulo mount scrive fstab e monta in un'unica operazione
+        # idempotente, senza bisogno di un lineinfile separato.
+        - name: "Mount volume su {{ disk_mount_point }}"
+          mount:
+            path: "{{ disk_mount_point }}"
+            src: "UUID={{ rancher_lv_uuid.stdout | trim }}"
+            fstype: "{{ disk_fs_type }}"
+            opts: "{{ disk_mount_options }}"
+            state: mounted
+
+- name: "Assicura che {{ disk_mount_point }} esista"
   file:
-    path: "{{ rancher_mount_point }}"
+    path: "{{ disk_mount_point }}"
     state: directory
     mode: "0755"
-- name: "Get UUID of logical volume"
-  command: "blkid -s UUID -o value /dev/{{ vg_name }}/{{ lv_name }}"
-  register: rancher_lv_uuid
-  when: usable_disk_result.stdout != ""
-- name: "Add mount to /etc/fstab"
-  lineinfile:
-    path: /etc/fstab
-    line: "UUID={{ rancher_lv_uuid.stdout }} {{ rancher_mount_point }} {{ filesystem_type }} {{ mount_options }} 0 0"
-    state: present
-  when: usable_disk_result.stdout != ""
-- name: "Mount volume"
-  mount:
-    path: "{{ rancher_mount_point }}"
-    src: "UUID={{ rancher_lv_uuid.stdout }}"
-    fstype: "{{ filesystem_type }}"
-    opts: "{{ mount_options }}"
-    state: mounted
-  when: usable_disk_result.stdout != ""

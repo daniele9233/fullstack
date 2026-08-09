@@ -1,0 +1,16 @@
+---
+# Variabili valide solo per il gruppo [db_servers].
+
+# Il disco dati di PostgreSQL va montato su postgres_mount_point, non su
+# /var/lib/rancher come sui nodi RKE2. Nomi di volume group e logical volume
+# distinti, cosi' sono riconoscibili e non collidono se una macchina venisse
+# riusata per un ruolo diverso.
+disk_mount_point: "{{ postgres_mount_point }}"
+disk_vg_name: "vg_pgdata"
+disk_lv_name: "lv_pgdata"
+
+# Dichiara qui, o per host nell'inventario, il device da usare:
+#   disk_device: "/dev/sdb"
+# Lasciandolo vuoto il ruolo cerca il primo disco libero, che su una macchina
+# con piu' dischi aggiuntivi non e' detto sia quello giusto.
+disk_device: ""

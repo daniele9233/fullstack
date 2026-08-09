@@ -12,9 +12,18 @@
     - role: host_prep
 
 
-# PRIMO PLAY: Setup disco dedicato per Rancher su tutti i server
-# Escluso il gruppo [local]: e' la macchina di controllo, non va partizionata.
-- hosts: all:!local
+# PRIMO PLAY: disco dati dedicato.
+# Destinazione per gruppo: /var/lib/rancher sui nodi RKE2,
+# postgres_mount_point sui database (group_vars/db_servers.yml).
+#
+# Esclusi:
+#   [local]           macchina di controllo, non va partizionata
+#   [nginx_servers]   i bilanciatori non hanno un disco dati
+#   [gluster_servers] i brick vengono montati a mano
+#
+# Il ruolo non tocca nulla dove il mount point risulta gia' montato, quindi
+# convive con i dischi predisposti manualmente.
+- hosts: all:!local:!nginx_servers:!gluster_servers
   become: yes
   gather_facts: yes
   roles:
@@ -106,10 +115,9 @@
 
 # PLAY DATABASE: cluster PostgreSQL con Patroni ed etcd.
 #
-# ATTENZIONE: il ruolo azzera la directory dati di PostgreSQL e quella di etcd
-# a ogni esecuzione. E' un play di PRIMA INSTALLAZIONE: rilanciarlo su un
-# cluster in produzione CANCELLA IL DATABASE. Su un ambiente gia' attivo usa
-# --limit per escludere [db_servers].
+# Il ruolo e' idempotente: rilanciarlo non cancella dati e non riavvia servizi.
+# Per ripartire da zero serve -e postgres_force_reinit=true, che AZZERA il
+# database e il datastore etcd su tutti i nodi.
 #
 # Deve girare prima del play dei bilanciatori: haproxy indirizza questi nodi.
 - name: Setup PostgreSQL {{ postgres_version }} cluster with Patroni
@@ -117,9 +125,9 @@
   become: yes
   gather_facts: yes
   pre_tasks:
-    # Il disco dati viene montato a mano su postgres_mount_point. Questo e' il
-    # controllo che impedisce a Patroni di inizializzare il database sulla
-    # partizione di sistema se il mount manca o non e' stato fatto.
+    # Il disco dati e' predisposto dal primo play, oppure montato a mano.
+    # In entrambi i casi questo controllo impedisce a Patroni di inizializzare
+    # il database sulla partizione di sistema se il mount non c'e'.
     #
     # findmnt e non "df -h | grep": il grep passa anche quando a essere montata
     # e' solo una sottodirectory, o quando la stringa compare nel nome di un
