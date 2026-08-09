@@ -1,0 +1,89 @@
+{% set nodes = groups[postgres_cluster_group] %}
+{{ '#' }} {{ ansible_managed }} - roles/postgresql_cluster
+scope: {{ patroni_scope }}
+namespace: {{ patroni_namespace }}
+name: {{ inventory_hostname }}
+
+restapi:
+  listen: 0.0.0.0:{{ patroni_restapi_port }}
+  connect_address: {{ hostvars[inventory_hostname].ansible_host }}:{{ patroni_restapi_port }}
+
+etcd:
+  hosts:
+{% for host in nodes %}
+    - {{ hostvars[host].ansible_host }}:{{ etcd_client_port }}
+{% endfor %}
+  protocol: http
+  etcd3: true
+
+bootstrap:
+  dcs:
+    ttl: 30
+    loop_wait: 10
+    retry_timeout: 10
+    maximum_lag_on_failover: 1048576
+    synchronous_mode: false
+    postgresql:
+      use_pg_rewind: true
+      use_slots: true
+      parameters:
+        wal_level: replica
+        hot_standby: "on"
+        logging_collector: 'on'
+        max_wal_senders: 5
+        max_replication_slots: 5
+        wal_log_hints: "on"
+
+  initdb:
+    - encoding: UTF8
+    - data-checksums
+
+  pg_hba:
+    - host replication {{ patroni_users.replication.username }} 127.0.0.1/32 md5
+    - host all {{ patroni_users.replication.username }} 127.0.0.1/32 md5
+    - host replication {{ patroni_users.replication.username }} 0.0.0.0/0 md5
+    - host all {{ patroni_users.replication.username }} 0.0.0.0/0 md5
+    - host all all 0.0.0.0/0 md5
+
+  users:
+    admin:
+      password: {{ patroni_users.admin.password }}
+      options:
+        - createrole
+        - createdb
+    {{ patroni_users.replication.username }}:
+      password: {{ patroni_users.replication.password }}
+      options:
+        - replication
+    {{ patroni_users.rewind.username }}:
+      password: {{ patroni_users.rewind.password }}
+
+postgresql:
+  listen: 0.0.0.0:{{ patroni_postgres_port }}
+  connect_address: {{ hostvars[inventory_hostname].ansible_host }}:{{ patroni_postgres_port }}
+  data_dir: "{{ postgres_data_dir }}/"
+  bin_dir: "{{ postgres_bin_dir }}"
+  pgpass: /tmp/pgpass0
+  authentication:
+    replication:
+      username: {{ patroni_users.replication.username }}
+      password: {{ patroni_users.replication.password }}
+    superuser:
+      username: {{ patroni_users.superuser.username }}
+      password: {{ patroni_users.superuser.password }}
+    rewind:
+      username: {{ patroni_users.rewind.username }}
+      password: {{ patroni_users.rewind.password }}
+  parameters:
+    unix_socket_directories: '/var/run/postgresql'
+
+watchdog:
+  mode: off
+  device: /dev/watchdog
+  safety_margin: 5
+
+tags:
+  nofailover: false
+  noloadbalance: false
+  clonefrom: false
+  nosync: false

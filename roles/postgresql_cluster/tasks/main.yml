@@ -1,0 +1,140 @@
+---
+# Cluster PostgreSQL {{ postgres_version }} con Patroni ed etcd.
+#
+# ATTENZIONE: questo ruolo NON e' idempotente ed e' DISTRUTTIVO per costruzione.
+# Azzera la directory dati di PostgreSQL e quella di etcd a ogni esecuzione.
+# Rilanciarlo su un cluster in produzione CANCELLA IL DATABASE. E' un ruolo di
+# prima installazione: si usa su macchine nuove, non per riconvergere.
+#
+# La sequenza e' quella del playbook originale, gia' collaudato. Le uniche
+# modifiche sono la versione parametrizzata, i nodi derivati dall'inventario e
+# la rimozione della disattivazione di ufw, che ora fa host_prep.
+
+- name: Verifica di avere tre nodi nel gruppo
+  assert:
+    that:
+      - groups[postgres_cluster_group] | default([]) | length == 3
+    fail_msg: >-
+      Il gruppo [{{ postgres_cluster_group }}] ha
+      {{ groups[postgres_cluster_group] | default([]) | length }} host.
+      Patroni con etcd richiede un numero dispari di nodi per il quorum: tre.
+  run_once: true
+
+- name: Set timezone
+  ansible.builtin.command: "timedatectl set-timezone {{ timezone }}"
+  changed_when: false
+
+- name: Update and upgrade system
+  apt:
+    update_cache: yes
+    upgrade: dist
+  when: postgres_dist_upgrade | bool
+
+- name: Install utility packages
+  apt:
+    name: "{{ postgres_utility_packages }}"
+    state: present
+
+# Derivate dall'inventario invece che da un elenco separato: nel playbook
+# originale gli stessi tre nodi erano ripetuti in pg_nodes e patroni_nodes,
+# oltre che nell'inventario, e le tre copie potevano divergere.
+- name: Add /etc/hosts entries
+  lineinfile:
+    path: /etc/hosts
+    regexp: '^\S+\s+{{ item }}\s*$'
+    line: "{{ hostvars[item].ansible_host }} {{ item }}"
+    state: present
+    backup: yes
+  loop: "{{ groups[postgres_cluster_group] }}"
+
+- name: Ensure curl is installed
+  apt:
+    name: curl
+    state: present
+
+- name: Download Percona repo via curl (workaround bug)
+  shell: "curl -fsSL -o /tmp/percona-release.deb {{ percona_release_deb_url }}"
+
+- name: Install Percona repo
+  apt:
+    deb: /tmp/percona-release.deb
+
+- name: "Setup Percona PostgreSQL {{ postgres_version }} repo"
+  command: "percona-release setup {{ percona_repo }}"
+
+- name: "Install PostgreSQL {{ postgres_version }} and tools"
+  apt:
+    name: "{{ postgres_packages }}"
+    state: present
+    update_cache: yes
+
+- name: Stop and disable system PostgreSQL service
+  systemd:
+    name: postgresql
+    state: stopped
+    enabled: no
+
+- name: "Clear PostgreSQL {{ postgres_version }} data directory"
+  file:
+    path: "{{ postgres_data_dir }}"
+    state: absent
+
+- name: Recreate main directory
+  file:
+    path: "{{ postgres_data_dir }}"
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: '0700'
+
+- name: Install etcd specific version
+  apt:
+    name: "etcd={{ etcd_version }}"
+    state: present
+
+- name: Stop and disable etcd service
+  systemd:
+    name: etcd
+    state: stopped
+    enabled: no
+
+- name: Configure etcd cluster
+  template:
+    src: etcd.conf.yaml.j2
+    dest: /etc/etcd/etcd.conf.yaml
+    mode: '0644'
+
+- name: Include Patroni tasks
+  include_tasks: patroni.yml
+
+- name: "Clear PostgreSQL {{ postgres_version }} data directory"
+  file:
+    path: "{{ postgres_data_dir }}"
+    state: absent
+
+- name: Recreate PostgreSQL data directory
+  file:
+    path: "{{ postgres_data_dir }}"
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: '0700'
+
+- name: Clear ETCD data directory
+  file:
+    path: "{{ etcd_data_dir }}"
+    state: absent
+
+- name: Recreate ETCD data directory
+  file:
+    path: "{{ etcd_data_dir }}"
+    state: directory
+    owner: etcd
+    group: etcd
+    mode: '0700'
+
+- name: Start etcd service
+  systemd:
+    name: etcd
+    state: started
+    enabled: yes

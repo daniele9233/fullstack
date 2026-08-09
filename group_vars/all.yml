@@ -215,6 +215,44 @@ haproxy_user: "haproxy"
 haproxy_group: "haproxy"
 
 # ---------------------------------------------------------------------------
+# DATABASE (gruppo [db_servers]): PostgreSQL + Patroni + etcd + PgBouncer
+# ---------------------------------------------------------------------------
+# I nodi, i peer etcd e le voci di /etc/hosts derivano dal gruppo
+# [db_servers]: il primo host bootstrappa il cluster.
+
+postgres_version: "17"
+
+# Il repo Percona e i nomi dei pacchetti seguono la versione. Verificali sul
+# nodo dopo "percona-release setup ppg-17", in particolare
+# percona-pgaudit17-set-user e percona-postgresql-17-wal2json.
+# Da qui il repo Percona non e' raggiungibile e non ho potuto controllarli.
+
+# Versione etcd dal repo Percona: nell'archivio Ubuntu Noble il pacchetto
+# "etcd" non esiste (ci sono etcd-server ed etcd-client, fermi alla 3.4.30).
+# Verifica con "apt-cache madison etcd" dopo aver abilitato il repo.
+etcd_version: "1:3.5.18-1.noble"
+
+# "upgrade: dist" a ogni esecuzione, come nel playbook di partenza.
+postgres_dist_upgrade: true
+
+# CAMBIA QUESTE PASSWORD prima di andare in produzione: con
+# "host all all 0.0.0.0/0 md5" nel pg_hba, chiunque raggiunga la 5432 puo'
+# provarle.
+patroni_users:
+  superuser:
+    username: postgres
+    password: postgres
+  replication:
+    username: replicator
+    password: replicator
+  rewind:
+    username: pgrewind
+    password: pgrewind
+  admin:
+    password: admin
+
+
+# ---------------------------------------------------------------------------
 # STORAGE (gruppo [gluster_servers]): GlusterFS + Ganesha NFS + Pacemaker
 # ---------------------------------------------------------------------------
 

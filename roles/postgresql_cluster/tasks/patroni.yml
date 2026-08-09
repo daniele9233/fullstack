@@ -1,0 +1,38 @@
+---
+- name: Install Percona Patroni
+  apt:
+    name: percona-patroni
+    state: present
+
+- name: Stop and disable Patroni service
+  systemd:
+    name: patroni
+    state: stopped
+    enabled: no
+
+- name: Create patroni configuration file
+  template:
+    src: patroni.yml.j2
+    dest: /etc/patroni/patroni.yml
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Start Patroni on primary node only
+  systemd:
+    name: patroni
+    state: started
+    enabled: yes
+  when: inventory_hostname == patroni_primary_node
+
+- name: Wait 20 seconds for Patroni leader election
+  pause:
+    seconds: 20
+  when: inventory_hostname == patroni_primary_node
+
+- name: Start Patroni on remaining nodes
+  systemd:
+    name: patroni
+    state: started
+    enabled: yes
+  when: inventory_hostname != patroni_primary_node

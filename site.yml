@@ -104,6 +104,40 @@
     - kubectl_setup
 
 
+# PLAY DATABASE: cluster PostgreSQL con Patroni ed etcd.
+#
+# ATTENZIONE: il ruolo azzera la directory dati di PostgreSQL e quella di etcd
+# a ogni esecuzione. E' un play di PRIMA INSTALLAZIONE: rilanciarlo su un
+# cluster in produzione CANCELLA IL DATABASE. Su un ambiente gia' attivo usa
+# --limit per escludere [db_servers].
+#
+# Deve girare prima del play dei bilanciatori: haproxy indirizza questi nodi.
+- name: Setup PostgreSQL {{ postgres_version }} cluster with Patroni
+  hosts: db_servers
+  become: yes
+  gather_facts: yes
+  pre_tasks:
+    # Controllo del playbook originale: la directory dati deve stare su un
+    # filesystem dedicato, non sulla radice.
+    - name: Fail if /var/lib/postgresql is not mounted
+      command: df -h
+      register: df_output
+      changed_when: false
+      failed_when: "'/var/lib/postgresql' not in df_output.stdout"
+  roles:
+    - postgresql_cluster
+  post_tasks:
+    - name: Riepilogo cluster database
+      debug:
+        msg:
+          - "Nodi: {{ groups['db_servers'] | join(', ') }}"
+          - "Bootstrap dal nodo: {{ patroni_primary_node }}"
+          - "PostgreSQL {{ postgres_version }} in {{ postgres_data_dir }}"
+          - "Stato cluster: patronictl -c /etc/patroni/patroni.yml list"
+          - "PgBouncer installato ma NON configurato: haproxy punta alla {{ haproxy_backend_port }}, che restera' chiusa"
+      run_once: true
+
+
 # PLAY STORAGE: GlusterFS replicato, Ganesha NFS e Pacemaker.
 # Ordine obbligato: i volumi Gluster devono esistere prima che Ganesha li
 # esporti, e gli export devono esistere prima che Pacemaker avvii il servizio.
