@@ -2747,3 +2747,1542 @@ Preconfiguring packages ...
 2026-08-07 15:15:49,843 p=32532 u=root n=ansible INFO| rancher01c                 : ok=35   changed=10   unreachable=0    failed=0    skipped=17   rescued=0    ignored=0   
 2026-08-07 15:15:49,843 p=32532 u=root n=ansible INFO| rancher02c                 : ok=37   changed=12   unreachable=0    failed=0    skipped=14   rescued=0    ignored=0   
 2026-08-07 15:15:49,844 p=32532 u=root n=ansible INFO| rancher03c                 : ok=30   changed=9    unreachable=0    failed=1    skipped=13   rescued=0    ignored=0   
+2026-08-10 08:33:51,447 p=3947 u=root n=ansible INFO| PLAY [Prepara i nodi] *****************************************************************************************************
+2026-08-10 08:33:51,462 p=3947 u=root n=ansible INFO| TASK [host_prep : Rileva i servizi presenti sul nodo] *********************************************************************
+2026-08-10 08:33:54,838 p=3947 u=root n=ansible INFO| ok: [rancher03c]
+2026-08-10 08:33:54,906 p=3947 u=root n=ansible INFO| ok: [rancher01c]
+2026-08-10 08:33:54,914 p=3947 u=root n=ansible INFO| ok: [rancher02c]
+2026-08-10 08:33:55,179 p=3947 u=root n=ansible INFO| ok: [k8sworker01c]
+2026-08-10 08:33:55,217 p=3947 u=root n=ansible INFO| ok: [k8smanager01c]
+2026-08-10 08:33:57,862 p=3947 u=root n=ansible INFO| ok: [balancer01c]
+2026-08-10 08:33:58,272 p=3947 u=root n=ansible INFO| ok: [balancer02c]
+2026-08-10 08:33:58,416 p=3947 u=root n=ansible INFO| ok: [k8sIngres01c]
+2026-08-10 08:33:58,425 p=3947 u=root n=ansible INFO| TASK [host_prep : Determina quali servizi sono presenti] ******************************************************************
+2026-08-10 08:33:58,476 p=3947 u=root n=ansible INFO| ok: [rancher01c]
+2026-08-10 08:33:58,538 p=3947 u=root n=ansible INFO| ok: [rancher03c]
+2026-08-10 08:33:58,563 p=3947 u=root n=ansible INFO| ok: [rancher02c]
+2026-08-10 08:33:58,587 p=3947 u=root n=ansible INFO| ok: [k8smanager01c]
+2026-08-10 08:33:58,621 p=3947 u=root n=ansible INFO| ok: [k8sIngres01c]
+2026-08-10 08:33:58,623 p=3947 u=root n=ansible INFO| ok: [k8sworker01c]
+2026-08-10 08:33:58,641 p=3947 u=root n=ansible INFO| ok: [balancer02c]
+2026-08-10 08:33:58,653 p=3947 u=root n=ansible INFO| ok: [balancer01c]
+2026-08-10 08:33:58,661 p=3947 u=root n=ansible INFO| TASK [host_prep : Leggi lo stato di ufw] **********************************************************************************
+2026-08-10 08:33:59,336 p=3947 u=root n=ansible INFO| ok: [rancher03c]
+2026-08-10 08:33:59,354 p=3947 u=root n=ansible INFO| ok: [k8sworker01c]
+2026-08-10 08:33:59,380 p=3947 u=root n=ansible INFO| ok: [rancher01c]
+2026-08-10 08:33:59,381 p=3947 u=root n=ansible INFO| ok: [rancher02c]
+2026-08-10 08:33:59,381 p=3947 u=root n=ansible INFO| ok: [k8smanager01c]
+2026-08-10 08:33:59,695 p=3947 u=root n=ansible INFO| ok: [k8sIngres01c]
+2026-08-10 08:33:59,744 p=3947 u=root n=ansible INFO| ok: [balancer01c]
+2026-08-10 08:33:59,749 p=3947 u=root n=ansible INFO| ok: [balancer02c]
+2026-08-10 08:33:59,755 p=3947 u=root n=ansible INFO| TASK [host_prep : Disattiva ufw] ******************************************************************************************
+2026-08-10 08:33:59,893 p=3947 u=root n=ansible INFO| skipping: [rancher01c]
+2026-08-10 08:33:59,926 p=3947 u=root n=ansible INFO| skipping: [rancher02c]
+2026-08-10 08:33:59,953 p=3947 u=root n=ansible INFO| skipping: [rancher03c]
+2026-08-10 08:33:59,954 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c]
+2026-08-10 08:33:59,954 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c]
+2026-08-10 08:33:59,963 p=3947 u=root n=ansible INFO| skipping: [k8sIngres01c]
+2026-08-10 08:33:59,973 p=3947 u=root n=ansible INFO| skipping: [balancer01c]
+2026-08-10 08:33:59,984 p=3947 u=root n=ansible INFO| skipping: [balancer02c]
+2026-08-10 08:33:59,989 p=3947 u=root n=ansible INFO| TASK [host_prep : Disattiva firewalld se presente] ************************************************************************
+2026-08-10 08:34:00,027 p=3947 u=root n=ansible INFO| skipping: [rancher01c]
+2026-08-10 08:34:00,069 p=3947 u=root n=ansible INFO| skipping: [rancher02c]
+2026-08-10 08:34:00,092 p=3947 u=root n=ansible INFO| skipping: [rancher03c]
+2026-08-10 08:34:00,122 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c]
+2026-08-10 08:34:00,138 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c]
+2026-08-10 08:34:00,144 p=3947 u=root n=ansible INFO| skipping: [k8sIngres01c]
+2026-08-10 08:34:00,167 p=3947 u=root n=ansible INFO| skipping: [balancer01c]
+2026-08-10 08:34:00,171 p=3947 u=root n=ansible INFO| skipping: [balancer02c]
+2026-08-10 08:34:00,176 p=3947 u=root n=ansible INFO| TASK [host_prep : Disattiva AppArmor] *************************************************************************************
+2026-08-10 08:34:00,959 p=3947 u=root n=ansible INFO| ok: [k8sworker01c]
+2026-08-10 08:34:01,716 p=3947 u=root n=ansible INFO| changed: [rancher03c]
+2026-08-10 08:34:01,762 p=3947 u=root n=ansible INFO| changed: [k8smanager01c]
+2026-08-10 08:34:01,970 p=3947 u=root n=ansible INFO| ok: [rancher01c]
+2026-08-10 08:34:02,192 p=3947 u=root n=ansible INFO| ok: [balancer02c]
+2026-08-10 08:34:02,211 p=3947 u=root n=ansible INFO| changed: [k8sIngres01c]
+2026-08-10 08:34:02,732 p=3947 u=root n=ansible INFO| changed: [rancher02c]
+2026-08-10 08:34:03,872 p=3947 u=root n=ansible INFO| changed: [balancer01c]
+2026-08-10 08:34:03,881 p=3947 u=root n=ansible INFO| TASK [host_prep : Verifica l'hostname corrente] ***************************************************************************
+2026-08-10 08:34:03,950 p=3947 u=root n=ansible INFO| skipping: [rancher01c]
+2026-08-10 08:34:04,066 p=3947 u=root n=ansible INFO| skipping: [rancher03c]
+2026-08-10 08:34:04,183 p=3947 u=root n=ansible INFO| skipping: [rancher02c]
+2026-08-10 08:34:04,183 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c]
+2026-08-10 08:34:04,184 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c]
+2026-08-10 08:34:04,187 p=3947 u=root n=ansible INFO| skipping: [k8sIngres01c]
+2026-08-10 08:34:04,198 p=3947 u=root n=ansible INFO| skipping: [balancer01c]
+2026-08-10 08:34:04,209 p=3947 u=root n=ansible INFO| skipping: [balancer02c]
+2026-08-10 08:34:04,214 p=3947 u=root n=ansible INFO| TASK [host_prep : Allinea l'hostname al nome di inventario] ***************************************************************
+2026-08-10 08:34:04,294 p=3947 u=root n=ansible INFO| skipping: [rancher01c]
+2026-08-10 08:34:04,317 p=3947 u=root n=ansible INFO| skipping: [rancher02c]
+2026-08-10 08:34:04,335 p=3947 u=root n=ansible INFO| skipping: [rancher03c]
+2026-08-10 08:34:04,349 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c]
+2026-08-10 08:34:04,352 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c]
+2026-08-10 08:34:04,363 p=3947 u=root n=ansible INFO| skipping: [k8sIngres01c]
+2026-08-10 08:34:04,382 p=3947 u=root n=ansible INFO| skipping: [balancer01c]
+2026-08-10 08:34:04,384 p=3947 u=root n=ansible INFO| skipping: [balancer02c]
+2026-08-10 08:34:04,392 p=3947 u=root n=ansible INFO| TASK [host_prep : Riepilogo preparazione host] ****************************************************************************
+2026-08-10 08:34:04,459 p=3947 u=root n=ansible INFO| ok: [rancher01c] => {
+    "msg": "rancher01c: ufw disattivato, apparmor disattivato, hostname lasciato invariato"
+}
+2026-08-10 08:34:04,485 p=3947 u=root n=ansible INFO| ok: [rancher02c] => {
+    "msg": "rancher02c: ufw disattivato, apparmor disattivato, hostname lasciato invariato"
+}
+2026-08-10 08:34:04,509 p=3947 u=root n=ansible INFO| ok: [rancher03c] => {
+    "msg": "rancher03c: ufw disattivato, apparmor disattivato, hostname lasciato invariato"
+}
+2026-08-10 08:34:04,533 p=3947 u=root n=ansible INFO| ok: [k8smanager01c] => {
+    "msg": "k8smanager01c: ufw disattivato, apparmor disattivato, hostname lasciato invariato"
+}
+2026-08-10 08:34:04,559 p=3947 u=root n=ansible INFO| ok: [k8sworker01c] => {
+    "msg": "k8sworker01c: ufw disattivato, apparmor disattivato, hostname lasciato invariato"
+}
+2026-08-10 08:34:04,568 p=3947 u=root n=ansible INFO| ok: [k8sIngres01c] => {
+    "msg": "k8sIngres01c: ufw disattivato, apparmor disattivato, hostname lasciato invariato"
+}
+2026-08-10 08:34:04,573 p=3947 u=root n=ansible INFO| ok: [balancer01c] => {
+    "msg": "balancer01c: ufw disattivato, apparmor disattivato, hostname lasciato invariato"
+}
+2026-08-10 08:34:04,598 p=3947 u=root n=ansible INFO| ok: [balancer02c] => {
+    "msg": "balancer02c: ufw disattivato, apparmor disattivato, hostname lasciato invariato"
+}
+2026-08-10 08:34:04,632 p=3947 u=root n=ansible INFO| PLAY [all:!local:!nginx_servers:!gluster_servers] *************************************************************************
+2026-08-10 08:34:04,641 p=3947 u=root n=ansible INFO| TASK [Gathering Facts] ****************************************************************************************************
+2026-08-10 08:34:05,678 p=3947 u=root n=ansible INFO| ok: [rancher03c]
+2026-08-10 08:34:05,788 p=3947 u=root n=ansible INFO| ok: [rancher02c]
+2026-08-10 08:34:05,807 p=3947 u=root n=ansible INFO| ok: [k8sworker01c]
+2026-08-10 08:34:05,828 p=3947 u=root n=ansible INFO| ok: [k8smanager01c]
+2026-08-10 08:34:05,838 p=3947 u=root n=ansible INFO| ok: [rancher01c]
+2026-08-10 08:34:06,517 p=3947 u=root n=ansible INFO| ok: [k8sIngres01c]
+2026-08-10 08:34:06,526 p=3947 u=root n=ansible INFO| TASK [create_disk : Verifica se /var/lib/rancher e' gia' montato] *********************************************************
+2026-08-10 08:34:06,800 p=3947 u=root n=ansible INFO| ok: [rancher01c]
+2026-08-10 08:34:06,850 p=3947 u=root n=ansible INFO| ok: [rancher02c]
+2026-08-10 08:34:06,853 p=3947 u=root n=ansible INFO| ok: [rancher03c]
+2026-08-10 08:34:06,870 p=3947 u=root n=ansible INFO| ok: [k8smanager01c]
+2026-08-10 08:34:06,885 p=3947 u=root n=ansible INFO| ok: [k8sworker01c]
+2026-08-10 08:34:07,029 p=3947 u=root n=ansible INFO| ok: [k8sIngres01c]
+2026-08-10 08:34:07,038 p=3947 u=root n=ansible INFO| TASK [create_disk : Mostra il mount gia' presente] ************************************************************************
+2026-08-10 08:34:07,055 p=3947 u=root n=ansible INFO| skipping: [rancher01c]
+2026-08-10 08:34:07,070 p=3947 u=root n=ansible INFO| skipping: [rancher02c]
+2026-08-10 08:34:07,085 p=3947 u=root n=ansible INFO| skipping: [rancher03c]
+2026-08-10 08:34:07,100 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c]
+2026-08-10 08:34:07,141 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c]
+2026-08-10 08:34:07,147 p=3947 u=root n=ansible INFO| skipping: [k8sIngres01c]
+2026-08-10 08:34:07,155 p=3947 u=root n=ansible INFO| TASK [create_disk : Gather facts to access ansible_devices] ***************************************************************
+2026-08-10 08:34:07,194 p=3947 u=root n=ansible INFO| skipping: [rancher01c]
+2026-08-10 08:34:07,212 p=3947 u=root n=ansible INFO| skipping: [rancher02c]
+2026-08-10 08:34:07,231 p=3947 u=root n=ansible INFO| skipping: [rancher03c]
+2026-08-10 08:34:07,248 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c]
+2026-08-10 08:34:07,249 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c]
+2026-08-10 08:34:07,259 p=3947 u=root n=ansible INFO| skipping: [k8sIngres01c]
+2026-08-10 08:34:07,270 p=3947 u=root n=ansible INFO| TASK [create_disk : Get root device] **************************************************************************************
+2026-08-10 08:34:07,603 p=3947 u=root n=ansible INFO| ok: [rancher02c]
+2026-08-10 08:34:07,623 p=3947 u=root n=ansible INFO| ok: [rancher01c]
+2026-08-10 08:34:07,633 p=3947 u=root n=ansible INFO| ok: [rancher03c]
+2026-08-10 08:34:07,644 p=3947 u=root n=ansible INFO| ok: [k8smanager01c]
+2026-08-10 08:34:07,662 p=3947 u=root n=ansible INFO| ok: [k8sworker01c]
+2026-08-10 08:34:07,843 p=3947 u=root n=ansible INFO| ok: [k8sIngres01c]
+2026-08-10 08:34:07,852 p=3947 u=root n=ansible INFO| TASK [create_disk : Extract root block device name] ***********************************************************************
+2026-08-10 08:34:07,899 p=3947 u=root n=ansible INFO| ok: [rancher01c]
+2026-08-10 08:34:07,930 p=3947 u=root n=ansible INFO| ok: [rancher02c]
+2026-08-10 08:34:07,959 p=3947 u=root n=ansible INFO| ok: [rancher03c]
+2026-08-10 08:34:07,984 p=3947 u=root n=ansible INFO| ok: [k8smanager01c]
+2026-08-10 08:34:07,998 p=3947 u=root n=ansible INFO| ok: [k8sworker01c]
+2026-08-10 08:34:08,012 p=3947 u=root n=ansible INFO| ok: [k8sIngres01c]
+2026-08-10 08:34:08,021 p=3947 u=root n=ansible INFO| TASK [create_disk : Find usable disk with shell command] ******************************************************************
+2026-08-10 08:34:08,367 p=3947 u=root n=ansible INFO| ok: [rancher01c]
+2026-08-10 08:34:08,375 p=3947 u=root n=ansible INFO| ok: [rancher02c]
+2026-08-10 08:34:08,448 p=3947 u=root n=ansible INFO| ok: [rancher03c]
+2026-08-10 08:34:08,452 p=3947 u=root n=ansible INFO| ok: [k8smanager01c]
+2026-08-10 08:34:08,458 p=3947 u=root n=ansible INFO| ok: [k8sworker01c]
+2026-08-10 08:34:08,620 p=3947 u=root n=ansible INFO| ok: [k8sIngres01c]
+2026-08-10 08:34:08,629 p=3947 u=root n=ansible INFO| TASK [create_disk : Set usable disk] **************************************************************************************
+2026-08-10 08:34:08,681 p=3947 u=root n=ansible INFO| ok: [rancher01c]
+2026-08-10 08:34:08,711 p=3947 u=root n=ansible INFO| ok: [rancher02c]
+2026-08-10 08:34:08,743 p=3947 u=root n=ansible INFO| ok: [rancher03c]
+2026-08-10 08:34:08,775 p=3947 u=root n=ansible INFO| ok: [k8smanager01c]
+2026-08-10 08:34:08,789 p=3947 u=root n=ansible INFO| ok: [k8sworker01c]
+2026-08-10 08:34:08,806 p=3947 u=root n=ansible INFO| ok: [k8sIngres01c]
+2026-08-10 08:34:08,814 p=3947 u=root n=ansible INFO| TASK [create_disk : Skip LVM setup if no usable disk found] ***************************************************************
+2026-08-10 08:34:08,867 p=3947 u=root n=ansible INFO| ok: [rancher01c] => {
+    "msg": "Nessun disco aggiuntivo libero trovato su rancher01c: /var/lib/rancher restera' sul filesystem di sistema. Dichiara disk_device nell'inventario se il disco esiste ma non viene riconosciuto."
+}
+2026-08-10 08:34:08,898 p=3947 u=root n=ansible INFO| ok: [rancher02c] => {
+    "msg": "Nessun disco aggiuntivo libero trovato su rancher02c: /var/lib/rancher restera' sul filesystem di sistema. Dichiara disk_device nell'inventario se il disco esiste ma non viene riconosciuto."
+}
+2026-08-10 08:34:08,926 p=3947 u=root n=ansible INFO| ok: [rancher03c] => {
+    "msg": "Nessun disco aggiuntivo libero trovato su rancher03c: /var/lib/rancher restera' sul filesystem di sistema. Dichiara disk_device nell'inventario se il disco esiste ma non viene riconosciuto."
+}
+2026-08-10 08:34:08,955 p=3947 u=root n=ansible INFO| ok: [k8smanager01c] => {
+    "msg": "Nessun disco aggiuntivo libero trovato su k8smanager01c: /var/lib/rancher restera' sul filesystem di sistema. Dichiara disk_device nell'inventario se il disco esiste ma non viene riconosciuto."
+}
+2026-08-10 08:34:08,971 p=3947 u=root n=ansible INFO| ok: [k8sworker01c] => {
+    "msg": "Nessun disco aggiuntivo libero trovato su k8sworker01c: /var/lib/rancher restera' sul filesystem di sistema. Dichiara disk_device nell'inventario se il disco esiste ma non viene riconosciuto."
+}
+2026-08-10 08:34:08,988 p=3947 u=root n=ansible INFO| ok: [k8sIngres01c] => {
+    "msg": "Nessun disco aggiuntivo libero trovato su k8sIngres01c: /var/lib/rancher restera' sul filesystem di sistema. Dichiara disk_device nell'inventario se il disco esiste ma non viene riconosciuto."
+}
+2026-08-10 08:34:08,997 p=3947 u=root n=ansible INFO| TASK [create_disk : Raccogli lo stato del device scelto] ******************************************************************
+2026-08-10 08:34:09,044 p=3947 u=root n=ansible INFO| skipping: [rancher01c]
+2026-08-10 08:34:09,072 p=3947 u=root n=ansible INFO| skipping: [rancher02c]
+2026-08-10 08:34:09,098 p=3947 u=root n=ansible INFO| skipping: [rancher03c]
+2026-08-10 08:34:09,125 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c]
+2026-08-10 08:34:09,133 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c]
+2026-08-10 08:34:09,151 p=3947 u=root n=ansible INFO| skipping: [k8sIngres01c]
+2026-08-10 08:34:09,160 p=3947 u=root n=ansible INFO| TASK [create_disk : Verifica che il device sia utilizzabile] **************************************************************
+2026-08-10 08:34:09,209 p=3947 u=root n=ansible INFO| skipping: [rancher01c]
+2026-08-10 08:34:09,308 p=3947 u=root n=ansible INFO| skipping: [rancher02c]
+2026-08-10 08:34:09,331 p=3947 u=root n=ansible INFO| skipping: [rancher03c]
+2026-08-10 08:34:09,353 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c]
+2026-08-10 08:34:09,376 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c]
+2026-08-10 08:34:09,385 p=3947 u=root n=ansible INFO| skipping: [k8sIngres01c]
+2026-08-10 08:34:09,393 p=3947 u=root n=ansible INFO| TASK [create_disk : Mostra il disco selezionato] **************************************************************************
+2026-08-10 08:34:09,445 p=3947 u=root n=ansible INFO| skipping: [rancher01c]
+2026-08-10 08:34:09,470 p=3947 u=root n=ansible INFO| skipping: [rancher02c]
+2026-08-10 08:34:09,494 p=3947 u=root n=ansible INFO| skipping: [rancher03c]
+2026-08-10 08:34:09,522 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c]
+2026-08-10 08:34:09,535 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c]
+2026-08-10 08:34:09,548 p=3947 u=root n=ansible INFO| skipping: [k8sIngres01c]
+2026-08-10 08:34:09,556 p=3947 u=root n=ansible INFO| TASK [create_disk : Partition disk with parted] ***************************************************************************
+2026-08-10 08:34:09,603 p=3947 u=root n=ansible INFO| skipping: [rancher01c]
+2026-08-10 08:34:09,632 p=3947 u=root n=ansible INFO| skipping: [rancher02c]
+2026-08-10 08:34:09,658 p=3947 u=root n=ansible INFO| skipping: [rancher03c]
+2026-08-10 08:34:09,685 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c]
+2026-08-10 08:34:09,694 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c]
+2026-08-10 08:34:09,712 p=3947 u=root n=ansible INFO| skipping: [k8sIngres01c]
+2026-08-10 08:34:09,720 p=3947 u=root n=ansible INFO| TASK [create_disk : Set partition path] ***********************************************************************************
+2026-08-10 08:34:09,769 p=3947 u=root n=ansible INFO| skipping: [rancher01c]
+2026-08-10 08:34:09,795 p=3947 u=root n=ansible INFO| skipping: [rancher02c]
+2026-08-10 08:34:09,853 p=3947 u=root n=ansible INFO| skipping: [rancher03c]
+2026-08-10 08:34:09,854 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c]
+2026-08-10 08:34:09,869 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c]
+2026-08-10 08:34:09,880 p=3947 u=root n=ansible INFO| skipping: [k8sIngres01c]
+2026-08-10 08:34:09,888 p=3947 u=root n=ansible INFO| TASK [create_disk : Create volume group] **********************************************************************************
+2026-08-10 08:34:09,935 p=3947 u=root n=ansible INFO| skipping: [rancher01c]
+2026-08-10 08:34:09,964 p=3947 u=root n=ansible INFO| skipping: [rancher02c]
+2026-08-10 08:34:09,990 p=3947 u=root n=ansible INFO| skipping: [rancher03c]
+2026-08-10 08:34:10,017 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c]
+2026-08-10 08:34:10,026 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c]
+2026-08-10 08:34:10,044 p=3947 u=root n=ansible INFO| skipping: [k8sIngres01c]
+2026-08-10 08:34:10,052 p=3947 u=root n=ansible INFO| TASK [create_disk : Create logical volume] ********************************************************************************
+2026-08-10 08:34:10,100 p=3947 u=root n=ansible INFO| skipping: [rancher01c]
+2026-08-10 08:34:10,127 p=3947 u=root n=ansible INFO| skipping: [rancher02c]
+2026-08-10 08:34:10,155 p=3947 u=root n=ansible INFO| skipping: [rancher03c]
+2026-08-10 08:34:10,184 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c]
+2026-08-10 08:34:10,193 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c]
+2026-08-10 08:34:10,208 p=3947 u=root n=ansible INFO| skipping: [k8sIngres01c]
+2026-08-10 08:34:10,217 p=3947 u=root n=ansible INFO| TASK [create_disk : Format logical volume as xfs] *************************************************************************
+2026-08-10 08:34:10,312 p=3947 u=root n=ansible INFO| skipping: [rancher01c]
+2026-08-10 08:34:10,333 p=3947 u=root n=ansible INFO| skipping: [rancher02c]
+2026-08-10 08:34:10,354 p=3947 u=root n=ansible INFO| skipping: [rancher03c]
+2026-08-10 08:34:10,358 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c]
+2026-08-10 08:34:10,378 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c]
+2026-08-10 08:34:10,385 p=3947 u=root n=ansible INFO| skipping: [k8sIngres01c]
+2026-08-10 08:34:10,394 p=3947 u=root n=ansible INFO| TASK [create_disk : Mount volume su /var/lib/rancher] *********************************************************************
+2026-08-10 08:34:10,443 p=3947 u=root n=ansible INFO| skipping: [rancher01c]
+2026-08-10 08:34:10,470 p=3947 u=root n=ansible INFO| skipping: [rancher02c]
+2026-08-10 08:34:10,497 p=3947 u=root n=ansible INFO| skipping: [rancher03c]
+2026-08-10 08:34:10,524 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c]
+2026-08-10 08:34:10,584 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c]
+2026-08-10 08:34:10,600 p=3947 u=root n=ansible INFO| skipping: [k8sIngres01c]
+2026-08-10 08:34:10,637 p=3947 u=root n=ansible INFO| TASK [create_disk : Assicura che /var/lib/rancher esista] *****************************************************************
+2026-08-10 08:34:11,119 p=3947 u=root n=ansible INFO| ok: [rancher02c]
+2026-08-10 08:34:11,120 p=3947 u=root n=ansible INFO| ok: [k8sworker01c]
+2026-08-10 08:34:11,121 p=3947 u=root n=ansible INFO| ok: [rancher03c]
+2026-08-10 08:34:11,125 p=3947 u=root n=ansible INFO| ok: [rancher01c]
+2026-08-10 08:34:11,126 p=3947 u=root n=ansible INFO| ok: [k8smanager01c]
+2026-08-10 08:34:11,348 p=3947 u=root n=ansible INFO| ok: [k8sIngres01c]
+2026-08-10 08:34:11,391 p=3947 u=root n=ansible INFO| PLAY [all,local] **********************************************************************************************************
+2026-08-10 08:34:11,401 p=3947 u=root n=ansible INFO| TASK [update_hosts_file : Get master node IP from inventory] **************************************************************
+2026-08-10 08:34:11,435 p=3947 u=root n=ansible INFO| ok: [rancher01c]
+2026-08-10 08:34:11,444 p=3947 u=root n=ansible INFO| TASK [update_hosts_file : Debug values] ***********************************************************************************
+2026-08-10 08:34:11,463 p=3947 u=root n=ansible INFO| ok: [rancher01c] => {
+    "msg": "Rancher Domain: kikko.app.inail-svil.almaviva.it\nMaster IP: 10.205.166.214\nCurrent Host: rancher01c\n"
+}
+2026-08-10 08:34:11,496 p=3947 u=root n=ansible INFO| ok: [rancher02c] => {
+    "msg": "Rancher Domain: kikko.app.inail-svil.almaviva.it\nMaster IP: 10.205.166.214\nCurrent Host: rancher02c\n"
+}
+2026-08-10 08:34:11,513 p=3947 u=root n=ansible INFO| ok: [rancher03c] => {
+    "msg": "Rancher Domain: kikko.app.inail-svil.almaviva.it\nMaster IP: 10.205.166.214\nCurrent Host: rancher03c\n"
+}
+2026-08-10 08:34:11,530 p=3947 u=root n=ansible INFO| ok: [k8smanager01c] => {
+    "msg": "Rancher Domain: kikko.app.inail-svil.almaviva.it\nMaster IP: 10.205.166.214\nCurrent Host: k8smanager01c\n"
+}
+2026-08-10 08:34:11,538 p=3947 u=root n=ansible INFO| ok: [k8sworker01c] => {
+    "msg": "Rancher Domain: kikko.app.inail-svil.almaviva.it\nMaster IP: 10.205.166.214\nCurrent Host: k8sworker01c\n"
+}
+2026-08-10 08:34:11,554 p=3947 u=root n=ansible INFO| ok: [k8sIngres01c] => {
+    "msg": "Rancher Domain: kikko.app.inail-svil.almaviva.it\nMaster IP: 10.205.166.214\nCurrent Host: k8sIngres01c\n"
+}
+2026-08-10 08:34:11,567 p=3947 u=root n=ansible INFO| ok: [localhost] => {
+    "msg": "Rancher Domain: kikko.app.inail-svil.almaviva.it\nMaster IP: 10.205.166.214\nCurrent Host: localhost\n"
+}
+2026-08-10 08:34:11,567 p=3947 u=root n=ansible INFO| ok: [balancer01c] => {
+    "msg": "Rancher Domain: kikko.app.inail-svil.almaviva.it\nMaster IP: 10.205.166.214\nCurrent Host: balancer01c\n"
+}
+2026-08-10 08:34:11,574 p=3947 u=root n=ansible INFO| ok: [balancer02c] => {
+    "msg": "Rancher Domain: kikko.app.inail-svil.almaviva.it\nMaster IP: 10.205.166.214\nCurrent Host: balancer02c\n"
+}
+2026-08-10 08:34:11,583 p=3947 u=root n=ansible INFO| TASK [update_hosts_file : Remove old entries for rancher domain from /etc/hosts] ******************************************
+2026-08-10 08:34:12,062 p=3947 u=root n=ansible INFO| ok: [rancher01c]
+2026-08-10 08:34:12,079 p=3947 u=root n=ansible INFO| ok: [k8smanager01c]
+2026-08-10 08:34:12,095 p=3947 u=root n=ansible INFO| ok: [rancher02c]
+2026-08-10 08:34:12,128 p=3947 u=root n=ansible INFO| ok: [rancher03c]
+2026-08-10 08:34:12,130 p=3947 u=root n=ansible INFO| ok: [k8sworker01c]
+2026-08-10 08:34:12,380 p=3947 u=root n=ansible INFO| ok: [k8sIngres01c]
+2026-08-10 08:34:12,413 p=3947 u=root n=ansible INFO| ok: [balancer01c]
+2026-08-10 08:34:12,424 p=3947 u=root n=ansible INFO| ok: [balancer02c]
+2026-08-10 08:34:13,369 p=3947 u=root n=ansible INFO| [0;31m--- before: /etc/hosts (content)[0m
+[0;31m[0m[0;32m+++ after: /etc/hosts (content)[0m
+[0;32m[0m[0;36m@@ -22,4 +22,3 @@[0m
+[0;36m[0m 10.205.166.221 balancer01c
+ 
+ 
+[0;31m-10.205.166.214 kikko.app.inail-svil.almaviva.it[0m
+[0;31m[0m
+
+2026-08-10 08:34:13,369 p=3947 u=root n=ansible INFO| changed: [localhost]
+2026-08-10 08:34:13,378 p=3947 u=root n=ansible INFO| TASK [update_hosts_file : Remove old entries by IP (cleanup any existing entries with the master IP)] *********************
+2026-08-10 08:34:13,711 p=3947 u=root n=ansible INFO| ok: [rancher01c]
+2026-08-10 08:34:13,762 p=3947 u=root n=ansible INFO| ok: [rancher02c]
+2026-08-10 08:34:13,807 p=3947 u=root n=ansible INFO| ok: [rancher03c]
+2026-08-10 08:34:13,838 p=3947 u=root n=ansible INFO| ok: [k8smanager01c]
+2026-08-10 08:34:13,842 p=3947 u=root n=ansible INFO| ok: [k8sworker01c]
+2026-08-10 08:34:13,999 p=3947 u=root n=ansible INFO| ok: [k8sIngres01c]
+2026-08-10 08:34:14,048 p=3947 u=root n=ansible INFO| ok: [localhost]
+2026-08-10 08:34:14,107 p=3947 u=root n=ansible INFO| ok: [balancer01c]
+2026-08-10 08:34:14,120 p=3947 u=root n=ansible INFO| ok: [balancer02c]
+2026-08-10 08:34:14,129 p=3947 u=root n=ansible INFO| TASK [update_hosts_file : Add new entry for rancher domain in /etc/hosts] *************************************************
+2026-08-10 08:34:14,466 p=3947 u=root n=ansible INFO| [0;31m--- before: /etc/hosts (content)[0m
+[0;31m[0m[0;32m+++ after: /etc/hosts (content)[0m
+[0;32m[0m[0;36m@@ -7,3 +7,4 @@[0m
+[0;36m[0m ff02::2 ip6-allrouters
+ ff02::3 ip6-allhosts
+ 
+[0;32m+10.205.166.214 kikko.app.inail-svil.almaviva.it[0m
+[0;32m[0m
+
+2026-08-10 08:34:14,469 p=3947 u=root n=ansible INFO| changed: [rancher01c]
+2026-08-10 08:34:14,525 p=3947 u=root n=ansible INFO| [0;31m--- before: /etc/hosts (content)[0m
+[0;31m[0m[0;32m+++ after: /etc/hosts (content)[0m
+[0;32m[0m[0;36m@@ -7,3 +7,4 @@[0m
+[0;36m[0m ff02::2 ip6-allrouters
+ ff02::3 ip6-allhosts
+ 
+[0;32m+10.205.166.214 kikko.app.inail-svil.almaviva.it[0m
+[0;32m[0m
+
+2026-08-10 08:34:14,526 p=3947 u=root n=ansible INFO| changed: [rancher02c]
+2026-08-10 08:34:14,582 p=3947 u=root n=ansible INFO| [0;31m--- before: /etc/hosts (content)[0m
+[0;31m[0m[0;32m+++ after: /etc/hosts (content)[0m
+[0;32m[0m[0;36m@@ -7,3 +7,4 @@[0m
+[0;36m[0m ff02::2 ip6-allrouters
+ ff02::3 ip6-allhosts
+ 
+[0;32m+10.205.166.214 kikko.app.inail-svil.almaviva.it[0m
+[0;32m[0m
+
+2026-08-10 08:34:14,584 p=3947 u=root n=ansible INFO| changed: [rancher03c]
+2026-08-10 08:34:14,618 p=3947 u=root n=ansible INFO| [0;31m--- before: /etc/hosts (content)[0m
+[0;31m[0m[0;32m+++ after: /etc/hosts (content)[0m
+[0;32m[0m[0;36m@@ -7,3 +7,4 @@[0m
+[0;36m[0m ff02::2 ip6-allrouters
+ ff02::3 ip6-allhosts
+ 
+[0;32m+10.205.166.214 kikko.app.inail-svil.almaviva.it[0m
+[0;32m[0m
+
+2026-08-10 08:34:14,620 p=3947 u=root n=ansible INFO| changed: [k8smanager01c]
+2026-08-10 08:34:14,622 p=3947 u=root n=ansible INFO| [0;31m--- before: /etc/hosts (content)[0m
+[0;31m[0m[0;32m+++ after: /etc/hosts (content)[0m
+[0;32m[0m[0;36m@@ -6,3 +6,4 @@[0m
+[0;36m[0m ff02::1 ip6-allnodes
+ ff02::2 ip6-allrouters
+ ff02::3 ip6-allhosts
+[0;32m+10.205.166.214 kikko.app.inail-svil.almaviva.it[0m
+[0;32m[0m
+
+2026-08-10 08:34:14,623 p=3947 u=root n=ansible INFO| changed: [k8sworker01c]
+2026-08-10 08:34:14,848 p=3947 u=root n=ansible INFO| [0;31m--- before: /etc/hosts (content)[0m
+[0;31m[0m[0;32m+++ after: /etc/hosts (content)[0m
+[0;32m[0m[0;36m@@ -7,3 +7,4 @@[0m
+[0;36m[0m ff02::2 ip6-allrouters
+ ff02::3 ip6-allhosts
+ 
+[0;32m+10.205.166.214 kikko.app.inail-svil.almaviva.it[0m
+[0;32m[0m
+
+2026-08-10 08:34:14,848 p=3947 u=root n=ansible INFO| changed: [k8sIngres01c]
+2026-08-10 08:34:14,855 p=3947 u=root n=ansible INFO| [0;31m--- before: /etc/hosts (content)[0m
+[0;31m[0m[0;32m+++ after: /etc/hosts (content)[0m
+[0;32m[0m[0;36m@@ -22,3 +22,4 @@[0m
+[0;36m[0m 10.205.166.221 balancer01c
+ 
+ 
+[0;32m+10.205.166.214 kikko.app.inail-svil.almaviva.it[0m
+[0;32m[0m
+
+2026-08-10 08:34:14,856 p=3947 u=root n=ansible INFO| changed: [localhost]
+2026-08-10 08:34:14,893 p=3947 u=root n=ansible INFO| [0;31m--- before: /etc/hosts (content)[0m
+[0;31m[0m[0;32m+++ after: /etc/hosts (content)[0m
+[0;32m[0m[0;36m@@ -7,3 +7,4 @@[0m
+[0;36m[0m ff02::2 ip6-allrouters
+ ff02::3 ip6-allhosts
+ 
+[0;32m+10.205.166.214 kikko.app.inail-svil.almaviva.it[0m
+[0;32m[0m
+
+2026-08-10 08:34:14,893 p=3947 u=root n=ansible INFO| changed: [balancer01c]
+2026-08-10 08:34:14,917 p=3947 u=root n=ansible INFO| [0;31m--- before: /etc/hosts (content)[0m
+[0;31m[0m[0;32m+++ after: /etc/hosts (content)[0m
+[0;32m[0m[0;36m@@ -7,3 +7,4 @@[0m
+[0;36m[0m ff02::2 ip6-allrouters
+ ff02::3 ip6-allhosts
+ 
+[0;32m+10.205.166.214 kikko.app.inail-svil.almaviva.it[0m
+[0;32m[0m
+
+2026-08-10 08:34:14,917 p=3947 u=root n=ansible INFO| changed: [balancer02c]
+2026-08-10 08:34:14,926 p=3947 u=root n=ansible INFO| TASK [update_hosts_file : Verify /etc/hosts entry] ************************************************************************
+2026-08-10 08:34:15,271 p=3947 u=root n=ansible INFO| ok: [rancher01c]
+2026-08-10 08:34:15,324 p=3947 u=root n=ansible INFO| ok: [rancher02c]
+2026-08-10 08:34:15,390 p=3947 u=root n=ansible INFO| ok: [k8smanager01c]
+2026-08-10 08:34:15,423 p=3947 u=root n=ansible INFO| ok: [rancher03c]
+2026-08-10 08:34:15,426 p=3947 u=root n=ansible INFO| ok: [k8sworker01c]
+2026-08-10 08:34:15,517 p=3947 u=root n=ansible INFO| ok: [k8sIngres01c]
+2026-08-10 08:34:15,585 p=3947 u=root n=ansible INFO| ok: [localhost]
+2026-08-10 08:34:15,672 p=3947 u=root n=ansible INFO| ok: [balancer01c]
+2026-08-10 08:34:15,688 p=3947 u=root n=ansible INFO| ok: [balancer02c]
+2026-08-10 08:34:15,696 p=3947 u=root n=ansible INFO| TASK [update_hosts_file : Show hosts file verification] *******************************************************************
+2026-08-10 08:34:15,715 p=3947 u=root n=ansible INFO| ok: [rancher01c] => {
+    "msg": "Hosts file updated: True\nCurrent entry: 10.205.166.214 kikko.app.inail-svil.almaviva.it\n"
+}
+2026-08-10 08:34:15,733 p=3947 u=root n=ansible INFO| ok: [rancher02c] => {
+    "msg": "Hosts file updated: True\nCurrent entry: 10.205.166.214 kikko.app.inail-svil.almaviva.it\n"
+}
+2026-08-10 08:34:15,749 p=3947 u=root n=ansible INFO| ok: [rancher03c] => {
+    "msg": "Hosts file updated: True\nCurrent entry: 10.205.166.214 kikko.app.inail-svil.almaviva.it\n"
+}
+2026-08-10 08:34:15,766 p=3947 u=root n=ansible INFO| ok: [k8smanager01c] => {
+    "msg": "Hosts file updated: True\nCurrent entry: 10.205.166.214 kikko.app.inail-svil.almaviva.it\n"
+}
+2026-08-10 08:34:15,783 p=3947 u=root n=ansible INFO| ok: [k8sworker01c] => {
+    "msg": "Hosts file updated: True\nCurrent entry: 10.205.166.214 kikko.app.inail-svil.almaviva.it\n"
+}
+2026-08-10 08:34:15,807 p=3947 u=root n=ansible INFO| ok: [k8sIngres01c] => {
+    "msg": "Hosts file updated: True\nCurrent entry: 10.205.166.214 kikko.app.inail-svil.almaviva.it\n"
+}
+2026-08-10 08:34:15,820 p=3947 u=root n=ansible INFO| ok: [localhost] => {
+    "msg": "Hosts file updated: True\nCurrent entry: 10.205.166.214 kikko.app.inail-svil.almaviva.it\n"
+}
+2026-08-10 08:34:15,821 p=3947 u=root n=ansible INFO| ok: [balancer01c] => {
+    "msg": "Hosts file updated: True\nCurrent entry: 10.205.166.214 kikko.app.inail-svil.almaviva.it\n"
+}
+2026-08-10 08:34:15,828 p=3947 u=root n=ansible INFO| ok: [balancer02c] => {
+    "msg": "Hosts file updated: True\nCurrent entry: 10.205.166.214 kikko.app.inail-svil.almaviva.it\n"
+}
+2026-08-10 08:34:15,836 p=3947 u=root n=ansible INFO| TASK [update_hosts_file : Test DNS resolution] ****************************************************************************
+2026-08-10 08:34:16,201 p=3947 u=root n=ansible INFO| ok: [rancher01c]
+2026-08-10 08:34:16,223 p=3947 u=root n=ansible INFO| ok: [rancher02c]
+2026-08-10 08:34:16,250 p=3947 u=root n=ansible INFO| ok: [rancher03c]
+2026-08-10 08:34:16,284 p=3947 u=root n=ansible INFO| ok: [k8smanager01c]
+2026-08-10 08:34:16,287 p=3947 u=root n=ansible INFO| ok: [k8sworker01c]
+2026-08-10 08:34:16,558 p=3947 u=root n=ansible INFO| ok: [k8sIngres01c]
+2026-08-10 08:34:16,586 p=3947 u=root n=ansible INFO| ok: [balancer01c]
+2026-08-10 08:34:16,607 p=3947 u=root n=ansible INFO| ok: [balancer02c]
+2026-08-10 08:34:16,616 p=3947 u=root n=ansible INFO| ok: [localhost]
+2026-08-10 08:34:16,629 p=3947 u=root n=ansible INFO| TASK [update_hosts_file : Show DNS resolution test] ***********************************************************************
+2026-08-10 08:34:16,667 p=3947 u=root n=ansible INFO| ok: [rancher01c] => {
+    "msg": "DNS Resolution Test:\nServer:\t\t127.0.0.53\nAddress:\t127.0.0.53#53\n\nName:\tkikko.app.inail-svil.almaviva.it\nAddress: 10.205.166.214\n"
+}
+2026-08-10 08:34:16,707 p=3947 u=root n=ansible INFO| ok: [rancher02c] => {
+    "msg": "DNS Resolution Test:\nServer:\t\t127.0.0.53\nAddress:\t127.0.0.53#53\n\nName:\tkikko.app.inail-svil.almaviva.it\nAddress: 10.205.166.214\n"
+}
+2026-08-10 08:34:16,723 p=3947 u=root n=ansible INFO| ok: [rancher03c] => {
+    "msg": "DNS Resolution Test:\nServer:\t\t127.0.0.53\nAddress:\t127.0.0.53#53\n\nName:\tkikko.app.inail-svil.almaviva.it\nAddress: 10.205.166.214\n"
+}
+2026-08-10 08:34:16,741 p=3947 u=root n=ansible INFO| ok: [k8smanager01c] => {
+    "msg": "DNS Resolution Test:\nServer:\t\t127.0.0.53\nAddress:\t127.0.0.53#53\n\nName:\tkikko.app.inail-svil.almaviva.it\nAddress: 10.205.166.214\n"
+}
+2026-08-10 08:34:16,747 p=3947 u=root n=ansible INFO| ok: [k8sworker01c] => {
+    "msg": "DNS Resolution Test:\nServer:\t\t127.0.0.53\nAddress:\t127.0.0.53#53\n\nName:\tkikko.app.inail-svil.almaviva.it\nAddress: 10.205.166.214\n"
+}
+2026-08-10 08:34:16,779 p=3947 u=root n=ansible INFO| ok: [k8sIngres01c] => {
+    "msg": "DNS Resolution Test:\nServer:\t\t127.0.0.53\nAddress:\t127.0.0.53#53\n\nName:\tkikko.app.inail-svil.almaviva.it\nAddress: 10.205.166.214\n"
+}
+2026-08-10 08:34:16,780 p=3947 u=root n=ansible INFO| ok: [localhost] => {
+    "msg": "DNS Resolution Test:\nServer:\t\t127.0.0.53\nAddress:\t127.0.0.53#53\n\nName:\tkikko.app.inail-svil.almaviva.it\nAddress: 10.205.166.214\n"
+}
+2026-08-10 08:34:16,780 p=3947 u=root n=ansible INFO| ok: [balancer01c] => {
+    "msg": "DNS Resolution Test:\nServer:\t\t127.0.0.53\nAddress:\t127.0.0.53#53\n\nName:\tkikko.app.inail-svil.almaviva.it\nAddress: 10.205.166.214\n"
+}
+2026-08-10 08:34:16,788 p=3947 u=root n=ansible INFO| ok: [balancer02c] => {
+    "msg": "DNS Resolution Test:\nServer:\t\t127.0.0.53\nAddress:\t127.0.0.53#53\n\nName:\tkikko.app.inail-svil.almaviva.it\nAddress: 10.205.166.214\n"
+}
+2026-08-10 08:34:16,796 p=3947 u=root n=ansible INFO| TASK [update_hosts_file : Test connectivity to rancher domain] ************************************************************
+2026-08-10 08:34:18,161 p=3947 u=root n=ansible INFO| ok: [rancher02c]
+2026-08-10 08:34:18,175 p=3947 u=root n=ansible INFO| ok: [rancher01c]
+2026-08-10 08:34:18,199 p=3947 u=root n=ansible INFO| ok: [rancher03c]
+2026-08-10 08:34:18,248 p=3947 u=root n=ansible INFO| ok: [k8sworker01c]
+2026-08-10 08:34:18,251 p=3947 u=root n=ansible INFO| ok: [k8smanager01c]
+2026-08-10 08:34:19,508 p=3947 u=root n=ansible INFO| ok: [k8sIngres01c]
+2026-08-10 08:34:19,542 p=3947 u=root n=ansible INFO| ok: [balancer01c]
+2026-08-10 08:34:19,575 p=3947 u=root n=ansible INFO| ok: [balancer02c]
+2026-08-10 08:34:29,503 p=3947 u=root n=ansible INFO| fatal: [localhost]: FAILED! => {"changed": false, "cmd": "ping -c 2 kikko.app.inail-svil.almaviva.it", "delta": "0:00:11.064276", "end": "2026-08-10 08:34:29.473301", "msg": "non-zero return code", "rc": 1, "start": "2026-08-10 08:34:18.409025", "stderr": "", "stderr_lines": [], "stdout": "PING kikko.app.inail-svil.almaviva.it (10.205.166.214) 56(84) bytes of data.\n\n--- kikko.app.inail-svil.almaviva.it ping statistics ---\n2 packets transmitted, 0 received, 100% packet loss, time 1058ms", "stdout_lines": ["PING kikko.app.inail-svil.almaviva.it (10.205.166.214) 56(84) bytes of data.", "", "--- kikko.app.inail-svil.almaviva.it ping statistics ---", "2 packets transmitted, 0 received, 100% packet loss, time 1058ms"]}
+2026-08-10 08:34:29,503 p=3947 u=root n=ansible INFO| ...ignoring
+2026-08-10 08:34:29,519 p=3947 u=root n=ansible INFO| TASK [update_hosts_file : Show connectivity test] *************************************************************************
+2026-08-10 08:34:29,539 p=3947 u=root n=ansible INFO| ok: [rancher01c] => {
+    "msg": "Connectivity Test:\nSUCCESS - Can reach kikko.app.inail-svil.almaviva.it\n"
+}
+2026-08-10 08:34:29,556 p=3947 u=root n=ansible INFO| ok: [rancher02c] => {
+    "msg": "Connectivity Test:\nSUCCESS - Can reach kikko.app.inail-svil.almaviva.it\n"
+}
+2026-08-10 08:34:29,573 p=3947 u=root n=ansible INFO| ok: [rancher03c] => {
+    "msg": "Connectivity Test:\nSUCCESS - Can reach kikko.app.inail-svil.almaviva.it\n"
+}
+2026-08-10 08:34:29,590 p=3947 u=root n=ansible INFO| ok: [k8smanager01c] => {
+    "msg": "Connectivity Test:\nSUCCESS - Can reach kikko.app.inail-svil.almaviva.it\n"
+}
+2026-08-10 08:34:29,607 p=3947 u=root n=ansible INFO| ok: [k8sworker01c] => {
+    "msg": "Connectivity Test:\nSUCCESS - Can reach kikko.app.inail-svil.almaviva.it\n"
+}
+2026-08-10 08:34:29,631 p=3947 u=root n=ansible INFO| ok: [k8sIngres01c] => {
+    "msg": "Connectivity Test:\nSUCCESS - Can reach kikko.app.inail-svil.almaviva.it\n"
+}
+2026-08-10 08:34:29,644 p=3947 u=root n=ansible INFO| ok: [localhost] => {
+    "msg": "Connectivity Test:\nFAILED - Cannot reach kikko.app.inail-svil.almaviva.it\n"
+}
+2026-08-10 08:34:29,645 p=3947 u=root n=ansible INFO| ok: [balancer01c] => {
+    "msg": "Connectivity Test:\nSUCCESS - Can reach kikko.app.inail-svil.almaviva.it\n"
+}
+2026-08-10 08:34:29,653 p=3947 u=root n=ansible INFO| ok: [balancer02c] => {
+    "msg": "Connectivity Test:\nSUCCESS - Can reach kikko.app.inail-svil.almaviva.it\n"
+}
+2026-08-10 08:34:29,704 p=3947 u=root n=ansible INFO| PLAY [masters,new_managers,workers] ***************************************************************************************
+2026-08-10 08:34:29,713 p=3947 u=root n=ansible INFO| TASK [clean_node_state : Ferma e disabilita i servizi RKE2 e Rancher] *****************************************************
+2026-08-10 08:34:29,888 p=3947 u=root n=ansible INFO| skipping: [rancher01c] => (item=rancher-system-agent) 
+2026-08-10 08:34:29,889 p=3947 u=root n=ansible INFO| skipping: [rancher01c] => (item=rke2-server) 
+2026-08-10 08:34:29,894 p=3947 u=root n=ansible INFO| skipping: [rancher01c] => (item=rke2-agent) 
+2026-08-10 08:34:29,895 p=3947 u=root n=ansible INFO| skipping: [rancher02c] => (item=rancher-system-agent) 
+2026-08-10 08:34:29,895 p=3947 u=root n=ansible INFO| skipping: [rancher02c] => (item=rke2-server) 
+2026-08-10 08:34:29,903 p=3947 u=root n=ansible INFO| skipping: [rancher02c] => (item=rke2-agent) 
+2026-08-10 08:34:29,911 p=3947 u=root n=ansible INFO| skipping: [rancher01c]
+2026-08-10 08:34:29,925 p=3947 u=root n=ansible INFO| skipping: [rancher03c] => (item=rancher-system-agent) 
+2026-08-10 08:34:29,933 p=3947 u=root n=ansible INFO| skipping: [rancher03c] => (item=rke2-server) 
+2026-08-10 08:34:29,933 p=3947 u=root n=ansible INFO| skipping: [rancher03c] => (item=rke2-agent) 
+2026-08-10 08:34:29,945 p=3947 u=root n=ansible INFO| skipping: [rancher02c]
+2026-08-10 08:34:29,946 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c] => (item=rancher-system-agent) 
+2026-08-10 08:34:29,946 p=3947 u=root n=ansible INFO| skipping: [rancher03c]
+2026-08-10 08:34:29,949 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c] => (item=rke2-server) 
+2026-08-10 08:34:29,954 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c] => (item=rke2-agent) 
+2026-08-10 08:34:29,954 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c]
+2026-08-10 08:34:29,969 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c] => (item=rancher-system-agent) 
+2026-08-10 08:34:29,971 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c] => (item=rke2-server) 
+2026-08-10 08:34:29,973 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c] => (item=rke2-agent) 
+2026-08-10 08:34:29,974 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c]
+2026-08-10 08:34:29,982 p=3947 u=root n=ansible INFO| TASK [clean_node_state : Verifica quali script di uninstall sono presenti] ************************************************
+2026-08-10 08:34:30,047 p=3947 u=root n=ansible INFO| skipping: [rancher01c] => (item=/usr/local/bin/rke2-killall.sh) 
+2026-08-10 08:34:30,055 p=3947 u=root n=ansible INFO| skipping: [rancher01c] => (item=/usr/local/bin/rancher-system-agent-uninstall.sh) 
+2026-08-10 08:34:30,056 p=3947 u=root n=ansible INFO| skipping: [rancher01c] => (item=/usr/local/bin/rke2-uninstall.sh) 
+2026-08-10 08:34:30,056 p=3947 u=root n=ansible INFO| skipping: [rancher01c] => (item=/usr/local/bin/rke2-agent-uninstall.sh) 
+2026-08-10 08:34:30,064 p=3947 u=root n=ansible INFO| skipping: [rancher01c]
+2026-08-10 08:34:30,074 p=3947 u=root n=ansible INFO| skipping: [rancher02c] => (item=/usr/local/bin/rke2-killall.sh) 
+2026-08-10 08:34:30,088 p=3947 u=root n=ansible INFO| skipping: [rancher02c] => (item=/usr/local/bin/rancher-system-agent-uninstall.sh) 
+2026-08-10 08:34:30,088 p=3947 u=root n=ansible INFO| skipping: [rancher02c] => (item=/usr/local/bin/rke2-uninstall.sh) 
+2026-08-10 08:34:30,089 p=3947 u=root n=ansible INFO| skipping: [rancher02c] => (item=/usr/local/bin/rke2-agent-uninstall.sh) 
+2026-08-10 08:34:30,092 p=3947 u=root n=ansible INFO| skipping: [rancher03c] => (item=/usr/local/bin/rke2-killall.sh) 
+2026-08-10 08:34:30,092 p=3947 u=root n=ansible INFO| skipping: [rancher03c] => (item=/usr/local/bin/rancher-system-agent-uninstall.sh) 
+2026-08-10 08:34:30,093 p=3947 u=root n=ansible INFO| skipping: [rancher03c] => (item=/usr/local/bin/rke2-uninstall.sh) 
+2026-08-10 08:34:30,106 p=3947 u=root n=ansible INFO| skipping: [rancher02c]
+2026-08-10 08:34:30,106 p=3947 u=root n=ansible INFO| skipping: [rancher03c] => (item=/usr/local/bin/rke2-agent-uninstall.sh) 
+2026-08-10 08:34:30,107 p=3947 u=root n=ansible INFO| skipping: [rancher03c]
+2026-08-10 08:34:30,113 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c] => (item=/usr/local/bin/rke2-killall.sh) 
+2026-08-10 08:34:30,117 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c] => (item=/usr/local/bin/rancher-system-agent-uninstall.sh) 
+2026-08-10 08:34:30,121 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c] => (item=/usr/local/bin/rke2-uninstall.sh) 
+2026-08-10 08:34:30,126 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c] => (item=/usr/local/bin/rke2-agent-uninstall.sh) 
+2026-08-10 08:34:30,126 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c]
+2026-08-10 08:34:30,136 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c] => (item=/usr/local/bin/rke2-killall.sh) 
+2026-08-10 08:34:30,138 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c] => (item=/usr/local/bin/rancher-system-agent-uninstall.sh) 
+2026-08-10 08:34:30,140 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c] => (item=/usr/local/bin/rke2-uninstall.sh) 
+2026-08-10 08:34:30,142 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c] => (item=/usr/local/bin/rke2-agent-uninstall.sh) 
+2026-08-10 08:34:30,142 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c]
+2026-08-10 08:34:30,150 p=3947 u=root n=ansible INFO| TASK [clean_node_state : Esegui gli script di uninstall presenti] *********************************************************
+2026-08-10 08:34:30,214 p=3947 u=root n=ansible INFO| skipping: [rancher01c] => (item=/usr/local/bin/rke2-killall.sh) 
+2026-08-10 08:34:30,215 p=3947 u=root n=ansible INFO| skipping: [rancher01c] => (item=/usr/local/bin/rancher-system-agent-uninstall.sh) 
+2026-08-10 08:34:30,224 p=3947 u=root n=ansible INFO| skipping: [rancher01c] => (item=/usr/local/bin/rke2-uninstall.sh) 
+2026-08-10 08:34:30,224 p=3947 u=root n=ansible INFO| skipping: [rancher01c] => (item=/usr/local/bin/rke2-agent-uninstall.sh) 
+2026-08-10 08:34:30,232 p=3947 u=root n=ansible INFO| skipping: [rancher01c]
+2026-08-10 08:34:30,243 p=3947 u=root n=ansible INFO| skipping: [rancher02c] => (item=/usr/local/bin/rke2-killall.sh) 
+2026-08-10 08:34:30,244 p=3947 u=root n=ansible INFO| skipping: [rancher02c] => (item=/usr/local/bin/rancher-system-agent-uninstall.sh) 
+2026-08-10 08:34:30,244 p=3947 u=root n=ansible INFO| skipping: [rancher02c] => (item=/usr/local/bin/rke2-uninstall.sh) 
+2026-08-10 08:34:30,245 p=3947 u=root n=ansible INFO| skipping: [rancher02c] => (item=/usr/local/bin/rke2-agent-uninstall.sh) 
+2026-08-10 08:34:30,260 p=3947 u=root n=ansible INFO| skipping: [rancher03c] => (item=/usr/local/bin/rke2-killall.sh) 
+2026-08-10 08:34:30,267 p=3947 u=root n=ansible INFO| skipping: [rancher03c] => (item=/usr/local/bin/rancher-system-agent-uninstall.sh) 
+2026-08-10 08:34:30,267 p=3947 u=root n=ansible INFO| skipping: [rancher03c] => (item=/usr/local/bin/rke2-uninstall.sh) 
+2026-08-10 08:34:30,268 p=3947 u=root n=ansible INFO| skipping: [rancher03c] => (item=/usr/local/bin/rke2-agent-uninstall.sh) 
+2026-08-10 08:34:30,273 p=3947 u=root n=ansible INFO| skipping: [rancher02c]
+2026-08-10 08:34:30,274 p=3947 u=root n=ansible INFO| skipping: [rancher03c]
+2026-08-10 08:34:30,285 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c] => (item=/usr/local/bin/rke2-killall.sh) 
+2026-08-10 08:34:30,287 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c] => (item=/usr/local/bin/rancher-system-agent-uninstall.sh) 
+2026-08-10 08:34:30,291 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c] => (item=/usr/local/bin/rke2-uninstall.sh) 
+2026-08-10 08:34:30,296 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c] => (item=/usr/local/bin/rke2-agent-uninstall.sh) 
+2026-08-10 08:34:30,298 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c]
+2026-08-10 08:34:30,305 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c] => (item=/usr/local/bin/rke2-killall.sh) 
+2026-08-10 08:34:30,307 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c] => (item=/usr/local/bin/rancher-system-agent-uninstall.sh) 
+2026-08-10 08:34:30,309 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c] => (item=/usr/local/bin/rke2-uninstall.sh) 
+2026-08-10 08:34:30,311 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c] => (item=/usr/local/bin/rke2-agent-uninstall.sh) 
+2026-08-10 08:34:30,312 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c]
+2026-08-10 08:34:30,321 p=3947 u=root n=ansible INFO| TASK [clean_node_state : Rimuovi unit file, binari e directory di stato residui] ******************************************
+2026-08-10 08:34:30,377 p=3947 u=root n=ansible INFO| skipping: [rancher01c] => (item=/etc/cni/net.d) 
+2026-08-10 08:34:30,388 p=3947 u=root n=ansible INFO| skipping: [rancher01c] => (item=/var/lib/cni) 
+2026-08-10 08:34:30,389 p=3947 u=root n=ansible INFO| skipping: [rancher01c] => (item=/opt/cni) 
+2026-08-10 08:34:30,389 p=3947 u=root n=ansible INFO| skipping: [rancher01c] => (item=/etc/rancher/agent) 
+2026-08-10 08:34:30,398 p=3947 u=root n=ansible INFO| skipping: [rancher01c] => (item=/etc/rancher/rke2) 
+2026-08-10 08:34:30,399 p=3947 u=root n=ansible INFO| skipping: [rancher01c] => (item=/var/lib/rancher/agent) 
+2026-08-10 08:34:30,428 p=3947 u=root n=ansible INFO| skipping: [rancher01c] => (item=/var/lib/rancher/rke2) 
+2026-08-10 08:34:30,429 p=3947 u=root n=ansible INFO| skipping: [rancher02c] => (item=/etc/cni/net.d) 
+2026-08-10 08:34:30,435 p=3947 u=root n=ansible INFO| skipping: [rancher01c] => (item=/etc/systemd/system/rancher-system-agent.service) 
+2026-08-10 08:34:30,436 p=3947 u=root n=ansible INFO| skipping: [rancher02c] => (item=/var/lib/cni) 
+2026-08-10 08:34:30,436 p=3947 u=root n=ansible INFO| skipping: [rancher01c] => (item=/etc/systemd/system/rancher-system-agent.env) 
+2026-08-10 08:34:30,439 p=3947 u=root n=ansible INFO| skipping: [rancher02c] => (item=/opt/cni) 
+2026-08-10 08:34:30,439 p=3947 u=root n=ansible INFO| skipping: [rancher01c] => (item=/etc/systemd/system/rke2-server.service) 
+2026-08-10 08:34:30,440 p=3947 u=root n=ansible INFO| skipping: [rancher02c] => (item=/etc/rancher/agent) 
+2026-08-10 08:34:30,440 p=3947 u=root n=ansible INFO| skipping: [rancher01c] => (item=/etc/systemd/system/rke2-server.env) 
+2026-08-10 08:34:30,441 p=3947 u=root n=ansible INFO| skipping: [rancher02c] => (item=/etc/rancher/rke2) 
+2026-08-10 08:34:30,445 p=3947 u=root n=ansible INFO| skipping: [rancher01c] => (item=/etc/systemd/system/rke2-agent.service) 
+2026-08-10 08:34:30,458 p=3947 u=root n=ansible INFO| skipping: [rancher02c] => (item=/var/lib/rancher/agent) 
+2026-08-10 08:34:30,458 p=3947 u=root n=ansible INFO| skipping: [rancher01c] => (item=/etc/systemd/system/rke2-agent.env) 
+2026-08-10 08:34:30,459 p=3947 u=root n=ansible INFO| skipping: [rancher02c] => (item=/var/lib/rancher/rke2) 
+2026-08-10 08:34:30,459 p=3947 u=root n=ansible INFO| skipping: [rancher03c] => (item=/etc/cni/net.d) 
+2026-08-10 08:34:30,460 p=3947 u=root n=ansible INFO| skipping: [rancher01c] => (item=/usr/local/bin/rancher-system-agent) 
+2026-08-10 08:34:30,462 p=3947 u=root n=ansible INFO| skipping: [rancher03c] => (item=/var/lib/cni) 
+2026-08-10 08:34:30,462 p=3947 u=root n=ansible INFO| skipping: [rancher02c] => (item=/etc/systemd/system/rancher-system-agent.service) 
+2026-08-10 08:34:30,463 p=3947 u=root n=ansible INFO| skipping: [rancher01c] => (item=/usr/local/bin/rancher-system-agent-uninstall.sh) 
+2026-08-10 08:34:30,463 p=3947 u=root n=ansible INFO| skipping: [rancher03c] => (item=/opt/cni) 
+2026-08-10 08:34:30,470 p=3947 u=root n=ansible INFO| skipping: [rancher02c] => (item=/etc/systemd/system/rancher-system-agent.env) 
+2026-08-10 08:34:30,470 p=3947 u=root n=ansible INFO| skipping: [rancher03c] => (item=/etc/rancher/agent) 
+2026-08-10 08:34:30,471 p=3947 u=root n=ansible INFO| skipping: [rancher02c] => (item=/etc/systemd/system/rke2-server.service) 
+2026-08-10 08:34:30,471 p=3947 u=root n=ansible INFO| skipping: [rancher03c] => (item=/etc/rancher/rke2) 
+2026-08-10 08:34:30,472 p=3947 u=root n=ansible INFO| skipping: [rancher02c] => (item=/etc/systemd/system/rke2-server.env) 
+2026-08-10 08:34:30,477 p=3947 u=root n=ansible INFO| skipping: [rancher03c] => (item=/var/lib/rancher/agent) 
+2026-08-10 08:34:30,479 p=3947 u=root n=ansible INFO| skipping: [rancher01c]
+2026-08-10 08:34:30,480 p=3947 u=root n=ansible INFO| skipping: [rancher03c] => (item=/var/lib/rancher/rke2) 
+2026-08-10 08:34:30,480 p=3947 u=root n=ansible INFO| skipping: [rancher02c] => (item=/etc/systemd/system/rke2-agent.service) 
+2026-08-10 08:34:30,482 p=3947 u=root n=ansible INFO| skipping: [rancher03c] => (item=/etc/systemd/system/rancher-system-agent.service) 
+2026-08-10 08:34:30,483 p=3947 u=root n=ansible INFO| skipping: [rancher02c] => (item=/etc/systemd/system/rke2-agent.env) 
+2026-08-10 08:34:30,488 p=3947 u=root n=ansible INFO| skipping: [rancher02c] => (item=/usr/local/bin/rancher-system-agent) 
+2026-08-10 08:34:30,489 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c] => (item=/etc/cni/net.d) 
+2026-08-10 08:34:30,489 p=3947 u=root n=ansible INFO| skipping: [rancher02c] => (item=/usr/local/bin/rancher-system-agent-uninstall.sh) 
+2026-08-10 08:34:30,491 p=3947 u=root n=ansible INFO| skipping: [rancher02c]
+2026-08-10 08:34:30,492 p=3947 u=root n=ansible INFO| skipping: [rancher03c] => (item=/etc/systemd/system/rancher-system-agent.env) 
+2026-08-10 08:34:30,495 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c] => (item=/var/lib/cni) 
+2026-08-10 08:34:30,496 p=3947 u=root n=ansible INFO| skipping: [rancher03c] => (item=/etc/systemd/system/rke2-server.service) 
+2026-08-10 08:34:30,503 p=3947 u=root n=ansible INFO| skipping: [rancher03c] => (item=/etc/systemd/system/rke2-server.env) 
+2026-08-10 08:34:30,504 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c] => (item=/opt/cni) 
+2026-08-10 08:34:30,506 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c] => (item=/etc/rancher/agent) 
+2026-08-10 08:34:30,508 p=3947 u=root n=ansible INFO| skipping: [rancher03c] => (item=/etc/systemd/system/rke2-agent.service) 
+2026-08-10 08:34:30,513 p=3947 u=root n=ansible INFO| skipping: [rancher03c] => (item=/etc/systemd/system/rke2-agent.env) 
+2026-08-10 08:34:30,516 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c] => (item=/etc/rancher/rke2) 
+2026-08-10 08:34:30,519 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c] => (item=/var/lib/rancher/agent) 
+2026-08-10 08:34:30,519 p=3947 u=root n=ansible INFO| skipping: [rancher03c] => (item=/usr/local/bin/rancher-system-agent) 
+2026-08-10 08:34:30,526 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c] => (item=/etc/cni/net.d) 
+2026-08-10 08:34:30,526 p=3947 u=root n=ansible INFO| skipping: [rancher03c] => (item=/usr/local/bin/rancher-system-agent-uninstall.sh) 
+2026-08-10 08:34:30,528 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c] => (item=/var/lib/rancher/rke2) 
+2026-08-10 08:34:30,531 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c] => (item=/var/lib/cni) 
+2026-08-10 08:34:30,531 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c] => (item=/etc/systemd/system/rancher-system-agent.service) 
+2026-08-10 08:34:30,532 p=3947 u=root n=ansible INFO| skipping: [rancher03c]
+2026-08-10 08:34:30,534 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c] => (item=/opt/cni) 
+2026-08-10 08:34:30,535 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c] => (item=/etc/systemd/system/rancher-system-agent.env) 
+2026-08-10 08:34:30,537 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c] => (item=/etc/systemd/system/rke2-server.service) 
+2026-08-10 08:34:30,539 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c] => (item=/etc/rancher/agent) 
+2026-08-10 08:34:30,540 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c] => (item=/etc/rancher/rke2) 
+2026-08-10 08:34:30,541 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c] => (item=/etc/systemd/system/rke2-server.env) 
+2026-08-10 08:34:30,544 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c] => (item=/var/lib/rancher/agent) 
+2026-08-10 08:34:30,545 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c] => (item=/etc/systemd/system/rke2-agent.service) 
+2026-08-10 08:34:30,547 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c] => (item=/etc/systemd/system/rke2-agent.env) 
+2026-08-10 08:34:30,547 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c] => (item=/var/lib/rancher/rke2) 
+2026-08-10 08:34:30,550 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c] => (item=/usr/local/bin/rancher-system-agent) 
+2026-08-10 08:34:30,551 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c] => (item=/etc/systemd/system/rancher-system-agent.service) 
+2026-08-10 08:34:30,553 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c] => (item=/usr/local/bin/rancher-system-agent-uninstall.sh) 
+2026-08-10 08:34:30,556 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c] => (item=/etc/systemd/system/rancher-system-agent.env) 
+2026-08-10 08:34:30,556 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c]
+2026-08-10 08:34:30,557 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c] => (item=/etc/systemd/system/rke2-server.service) 
+2026-08-10 08:34:30,559 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c] => (item=/etc/systemd/system/rke2-server.env) 
+2026-08-10 08:34:30,561 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c] => (item=/etc/systemd/system/rke2-agent.service) 
+2026-08-10 08:34:30,563 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c] => (item=/etc/systemd/system/rke2-agent.env) 
+2026-08-10 08:34:30,565 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c] => (item=/usr/local/bin/rancher-system-agent) 
+2026-08-10 08:34:30,567 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c] => (item=/usr/local/bin/rancher-system-agent-uninstall.sh) 
+2026-08-10 08:34:30,568 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c]
+2026-08-10 08:34:30,576 p=3947 u=root n=ansible INFO| TASK [clean_node_state : Ricarica systemd dopo la rimozione degli unit file] **********************************************
+2026-08-10 08:34:30,646 p=3947 u=root n=ansible INFO| skipping: [rancher01c]
+2026-08-10 08:34:30,668 p=3947 u=root n=ansible INFO| skipping: [rancher02c]
+2026-08-10 08:34:30,668 p=3947 u=root n=ansible INFO| skipping: [rancher03c]
+2026-08-10 08:34:30,687 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c]
+2026-08-10 08:34:30,694 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c]
+2026-08-10 08:34:30,702 p=3947 u=root n=ansible INFO| TASK [clean_node_state : Verifica che non resti configurazione CNI] *******************************************************
+2026-08-10 08:34:30,775 p=3947 u=root n=ansible INFO| skipping: [rancher01c]
+2026-08-10 08:34:30,797 p=3947 u=root n=ansible INFO| skipping: [rancher02c]
+2026-08-10 08:34:30,797 p=3947 u=root n=ansible INFO| skipping: [rancher03c]
+2026-08-10 08:34:30,813 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c]
+2026-08-10 08:34:30,821 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c]
+2026-08-10 08:34:30,829 p=3947 u=root n=ansible INFO| TASK [clean_node_state : Verifica che non resti nessun servizio RKE2 o Rancher] *******************************************
+2026-08-10 08:34:30,900 p=3947 u=root n=ansible INFO| skipping: [rancher01c]
+2026-08-10 08:34:30,920 p=3947 u=root n=ansible INFO| skipping: [rancher02c]
+2026-08-10 08:34:30,922 p=3947 u=root n=ansible INFO| skipping: [rancher03c]
+2026-08-10 08:34:30,936 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c]
+2026-08-10 08:34:30,945 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c]
+2026-08-10 08:34:30,953 p=3947 u=root n=ansible INFO| TASK [clean_node_state : Verifica che le porte RKE2 siano libere] *********************************************************
+2026-08-10 08:34:31,006 p=3947 u=root n=ansible INFO| skipping: [rancher01c] => (item=9345) 
+2026-08-10 08:34:31,017 p=3947 u=root n=ansible INFO| skipping: [rancher01c] => (item=6443) 
+2026-08-10 08:34:31,030 p=3947 u=root n=ansible INFO| skipping: [rancher01c]
+2026-08-10 08:34:31,031 p=3947 u=root n=ansible INFO| skipping: [rancher02c] => (item=9345) 
+2026-08-10 08:34:31,032 p=3947 u=root n=ansible INFO| skipping: [rancher02c] => (item=6443) 
+2026-08-10 08:34:31,051 p=3947 u=root n=ansible INFO| skipping: [rancher03c] => (item=9345) 
+2026-08-10 08:34:31,054 p=3947 u=root n=ansible INFO| skipping: [rancher03c] => (item=6443) 
+2026-08-10 08:34:31,059 p=3947 u=root n=ansible INFO| skipping: [rancher02c]
+2026-08-10 08:34:31,059 p=3947 u=root n=ansible INFO| skipping: [rancher03c]
+2026-08-10 08:34:31,071 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c] => (item=9345) 
+2026-08-10 08:34:31,075 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c] => (item=6443) 
+2026-08-10 08:34:31,077 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c]
+2026-08-10 08:34:31,087 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c] => (item=9345) 
+2026-08-10 08:34:31,088 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c] => (item=6443) 
+2026-08-10 08:34:31,089 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c]
+2026-08-10 08:34:31,099 p=3947 u=root n=ansible INFO| TASK [clean_node_state : Interrompi se una porta RKE2 e' ancora occupata] *************************************************
+2026-08-10 08:34:31,154 p=3947 u=root n=ansible INFO| skipping: [rancher01c] => (item=porta 9345) 
+2026-08-10 08:34:31,155 p=3947 u=root n=ansible INFO| skipping: [rancher01c] => (item=porta 6443) 
+2026-08-10 08:34:31,172 p=3947 u=root n=ansible INFO| skipping: [rancher02c] => (item=porta 9345) 
+2026-08-10 08:34:31,172 p=3947 u=root n=ansible INFO| skipping: [rancher02c] => (item=porta 6443) 
+2026-08-10 08:34:31,178 p=3947 u=root n=ansible INFO| skipping: [rancher01c]
+2026-08-10 08:34:31,207 p=3947 u=root n=ansible INFO| skipping: [rancher03c] => (item=porta 9345) 
+2026-08-10 08:34:31,207 p=3947 u=root n=ansible INFO| skipping: [rancher03c] => (item=porta 6443) 
+2026-08-10 08:34:31,212 p=3947 u=root n=ansible INFO| skipping: [rancher02c]
+2026-08-10 08:34:31,213 p=3947 u=root n=ansible INFO| skipping: [rancher03c]
+2026-08-10 08:34:31,215 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c] => (item=porta 9345) 
+2026-08-10 08:34:31,217 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c] => (item=porta 6443) 
+2026-08-10 08:34:31,219 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c]
+2026-08-10 08:34:31,238 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c] => (item=porta 9345) 
+2026-08-10 08:34:31,240 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c] => (item=porta 6443) 
+2026-08-10 08:34:31,241 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c]
+2026-08-10 08:34:31,250 p=3947 u=root n=ansible INFO| TASK [clean_node_state : Mostra il risultato della pulizia] ***************************************************************
+2026-08-10 08:34:31,319 p=3947 u=root n=ansible INFO| skipping: [rancher01c]
+2026-08-10 08:34:31,341 p=3947 u=root n=ansible INFO| skipping: [rancher02c]
+2026-08-10 08:34:31,343 p=3947 u=root n=ansible INFO| skipping: [rancher03c]
+2026-08-10 08:34:31,406 p=3947 u=root n=ansible INFO| skipping: [k8smanager01c]
+2026-08-10 08:34:31,418 p=3947 u=root n=ansible INFO| skipping: [k8sworker01c]
+2026-08-10 08:34:31,545 p=3947 u=root n=ansible INFO| PLAY [masters] ************************************************************************************************************
+2026-08-10 08:34:31,564 p=3947 u=root n=ansible INFO| TASK [master1_install : Install RKE2 on master] ***************************************************************************
+2026-08-10 08:34:36,181 p=3947 u=root n=ansible INFO| changed: [rancher01c]
+2026-08-10 08:34:36,197 p=3947 u=root n=ansible INFO| TASK [master1_config : Crea la directory di configurazione RKE2] **********************************************************
+2026-08-10 08:34:36,431 p=3947 u=root n=ansible INFO| [0;31m--- before[0m
+[0;31m[0m[0;32m+++ after[0m
+[0;32m[0m[0;36m@@ -1,4 +1,4 @@[0m
+[0;36m[0m {
+     "path": "/etc/rancher/rke2",
+[0;31m-    "state": "absent"[0m
+[0;31m[0m[0;32m+    "state": "directory"[0m
+[0;32m[0m }
+
+
+2026-08-10 08:34:36,432 p=3947 u=root n=ansible INFO| changed: [rancher01c]
+2026-08-10 08:34:36,441 p=3947 u=root n=ansible INFO| TASK [master1_config : Verifica se rke2-server e' gia' attivo] ************************************************************
+2026-08-10 08:34:36,836 p=3947 u=root n=ansible INFO| ok: [rancher01c]
+2026-08-10 08:34:36,844 p=3947 u=root n=ansible INFO| TASK [master1_config : Usa il token pre-condiviso se configurato] *********************************************************
+2026-08-10 08:34:36,868 p=3947 u=root n=ansible INFO| skipping: [rancher01c]
+2026-08-10 08:34:36,877 p=3947 u=root n=ansible INFO| TASK [master1_config : Leggi il node-token generato dal primo master] *****************************************************
+2026-08-10 08:34:36,911 p=3947 u=root n=ansible INFO| skipping: [rancher01c]
+2026-08-10 08:34:36,919 p=3947 u=root n=ansible INFO| TASK [master1_config : Usa il node-token letto dal primo master] **********************************************************
+2026-08-10 08:34:36,945 p=3947 u=root n=ansible INFO| skipping: [rancher01c]
+2026-08-10 08:34:36,956 p=3947 u=root n=ansible INFO| TASK [master1_config : Create /etc/rancher/rke2/config.yaml] **************************************************************
+2026-08-10 08:34:37,785 p=3947 u=root n=ansible INFO| [0;31m--- before[0m
+[0;31m[0m[0;32m+++ after: /root/.ansible/tmp/ansible-local-3947z8r3gdo8/tmpbctz9xnb/config_master1.yaml.j2[0m
+[0;32m[0m[0;36m@@ -0,0 +1,10 @@[0m
+[0;36m[0m[0;32m+# Ansible managed - roles/master1_config/templates/config_master1.yaml.j2[0m
+[0;32m[0m[0;32m+# Nessun token: questo nodo bootstrappa il cluster e RKE2 ne genera uno[0m
+[0;32m[0m[0;32m+# in /var/lib/rancher/rke2/server/node-token, da cui lo leggono gli altri.[0m
+[0;32m[0m[0;32m+tls-san:[0m
+[0;32m[0m[0;32m+  - kikko.app.inail-svil.almaviva.it[0m
+[0;32m[0m[0;32m+  - 10.205.166.214[0m
+[0;32m[0m[0;32m+  - 10.205.166.217[0m
+[0;32m[0m[0;32m+  - 10.205.166.218[0m
+[0;32m[0m[0;32m+cni:[0m
+[0;32m[0m[0;32m+  - calico[0m
+[0;32m[0m
+
+2026-08-10 08:34:37,788 p=3947 u=root n=ansible INFO| changed: [rancher01c]
+2026-08-10 08:34:37,802 p=3947 u=root n=ansible INFO| TASK [master1_config : Verifica che la porta del supervisor sia libera] ***************************************************
+2026-08-10 08:34:38,073 p=3947 u=root n=ansible INFO| ok: [rancher01c]
+2026-08-10 08:34:38,082 p=3947 u=root n=ansible INFO| TASK [master1_config : Interrompi se la porta del supervisor e' gia' occupata] ********************************************
+2026-08-10 08:34:38,109 p=3947 u=root n=ansible INFO| skipping: [rancher01c]
+2026-08-10 08:34:38,117 p=3947 u=root n=ansible INFO| TASK [master1_config : Abilita e avvia rke2-server] ***********************************************************************
+2026-08-10 08:35:24,660 p=3947 u=root n=ansible INFO| changed: [rancher01c]
+2026-08-10 08:35:24,669 p=3947 u=root n=ansible INFO| TASK [master1_config : Riavvia rke2-server se la configurazione e' cambiata] **********************************************
+2026-08-10 08:35:24,697 p=3947 u=root n=ansible INFO| skipping: [rancher01c]
+2026-08-10 08:35:24,705 p=3947 u=root n=ansible INFO| TASK [master1_config : Attendi che l'API server del nodo risponda] ********************************************************
+2026-08-10 08:35:24,981 p=3947 u=root n=ansible INFO| ok: [rancher01c]
+2026-08-10 08:35:24,990 p=3947 u=root n=ansible INFO| TASK [master1_config : Attendi che tutti i master avviati finora siano Ready] *********************************************
+2026-08-10 08:35:25,296 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher01c]: Attendi che tutti i master avviati finora siano Ready (60 retries left).
+2026-08-10 08:35:35,912 p=3947 u=root n=ansible INFO| ok: [rancher01c]
+2026-08-10 08:35:35,922 p=3947 u=root n=ansible INFO| TASK [master1_config : Lascia stabilizzare etcd prima del master successivo] **********************************************
+2026-08-10 08:35:35,952 p=3947 u=root n=ansible INFO| Pausing for 45 seconds
+2026-08-10 08:35:35,952 p=3947 u=root n=ansible INFO| (ctrl+C then 'C' = continue early, ctrl+C then 'A' = abort)
+2026-08-10 08:36:20,955 p=3947 u=root n=ansible INFO| ok: [rancher01c]
+2026-08-10 08:36:20,965 p=3947 u=root n=ansible INFO| TASK [master1_config : Mostra lo stato del cluster locale] ****************************************************************
+2026-08-10 08:36:21,251 p=3947 u=root n=ansible INFO| ok: [rancher01c]
+2026-08-10 08:36:21,260 p=3947 u=root n=ansible INFO| TASK [master1_config : Riepilogo nodo] ************************************************************************************
+2026-08-10 08:36:21,273 p=3947 u=root n=ansible INFO| ok: [rancher01c] => {
+    "msg": "rancher01c (bootstrap)\nNAME         STATUS   ROLES                AGE   VERSION\nrancher01c   Ready    control-plane,etcd   75s   v1.35.7+rke2r1\n"
+}
+2026-08-10 08:36:21,288 p=3947 u=root n=ansible INFO| TASK [master1_kubectl : Copy kubectl binary to /usr/local/bin/] ***********************************************************
+2026-08-10 08:36:21,972 p=3947 u=root n=ansible INFO| changed: [rancher01c]
+2026-08-10 08:36:21,982 p=3947 u=root n=ansible INFO| TASK [master1_kubectl : Create /root/.kube directory] *********************************************************************
+2026-08-10 08:36:22,307 p=3947 u=root n=ansible INFO| ok: [rancher01c]
+2026-08-10 08:36:22,316 p=3947 u=root n=ansible INFO| TASK [master1_kubectl : Copy RKE2 kubeconfig to /root/.kube/config] *******************************************************
+2026-08-10 08:36:22,744 p=3947 u=root n=ansible INFO| changed: [rancher01c]
+2026-08-10 08:36:22,754 p=3947 u=root n=ansible INFO| PLAY [masters] ************************************************************************************************************
+2026-08-10 08:36:22,771 p=3947 u=root n=ansible INFO| TASK [master1_install : Install RKE2 on master] ***************************************************************************
+2026-08-10 08:36:26,631 p=3947 u=root n=ansible INFO| changed: [rancher02c]
+2026-08-10 08:36:26,648 p=3947 u=root n=ansible INFO| TASK [master1_config : Crea la directory di configurazione RKE2] **********************************************************
+2026-08-10 08:36:26,876 p=3947 u=root n=ansible INFO| [0;31m--- before[0m
+[0;31m[0m[0;32m+++ after[0m
+[0;32m[0m[0;36m@@ -1,4 +1,4 @@[0m
+[0;36m[0m {
+     "path": "/etc/rancher/rke2",
+[0;31m-    "state": "absent"[0m
+[0;31m[0m[0;32m+    "state": "directory"[0m
+[0;32m[0m }
+
+
+2026-08-10 08:36:26,876 p=3947 u=root n=ansible INFO| changed: [rancher02c]
+2026-08-10 08:36:26,884 p=3947 u=root n=ansible INFO| TASK [master1_config : Verifica se rke2-server e' gia' attivo] ************************************************************
+2026-08-10 08:36:27,262 p=3947 u=root n=ansible INFO| ok: [rancher02c]
+2026-08-10 08:36:27,271 p=3947 u=root n=ansible INFO| TASK [master1_config : Usa il token pre-condiviso se configurato] *********************************************************
+2026-08-10 08:36:27,297 p=3947 u=root n=ansible INFO| skipping: [rancher02c]
+2026-08-10 08:36:27,306 p=3947 u=root n=ansible INFO| TASK [master1_config : Leggi il node-token generato dal primo master] *****************************************************
+2026-08-10 08:36:27,865 p=3947 u=root n=ansible INFO| ok: [rancher02c -> rancher01c(10.205.166.214)]
+2026-08-10 08:36:27,875 p=3947 u=root n=ansible INFO| TASK [master1_config : Usa il node-token letto dal primo master] **********************************************************
+2026-08-10 08:36:27,907 p=3947 u=root n=ansible INFO| ok: [rancher02c]
+2026-08-10 08:36:27,916 p=3947 u=root n=ansible INFO| TASK [master1_config : Create /etc/rancher/rke2/config.yaml] **************************************************************
+2026-08-10 08:36:28,579 p=3947 u=root n=ansible INFO| [0;31m--- before[0m
+[0;31m[0m[0;32m+++ after: /root/.ansible/tmp/ansible-local-3947z8r3gdo8/tmpacz0nwpj/config_master1.yaml.j2[0m
+[0;32m[0m[0;36m@@ -0,0 +1,12 @@[0m
+[0;36m[0m[0;32m+# Ansible managed - roles/master1_config/templates/config_master1.yaml.j2[0m
+[0;32m[0m[0;32m+token: K105ff570e807fc9aca38bc1b9ffdbacdb2280a8851d76890c1122956e32ea74d22::server:e4d61134ee4cd7464ec676d4ad6e88de[0m
+[0;32m[0m[0;32m+# Nodo aggiuntivo: si registra sul supervisor del primo master.[0m
+[0;32m[0m[0;32m+# La porta e' 9345 (supervisor), non 6443 (API server).[0m
+[0;32m[0m[0;32m+server: https://10.205.166.214:9345[0m
+[0;32m[0m[0;32m+tls-san:[0m
+[0;32m[0m[0;32m+  - kikko.app.inail-svil.almaviva.it[0m
+[0;32m[0m[0;32m+  - 10.205.166.214[0m
+[0;32m[0m[0;32m+  - 10.205.166.217[0m
+[0;32m[0m[0;32m+  - 10.205.166.218[0m
+[0;32m[0m[0;32m+cni:[0m
+[0;32m[0m[0;32m+  - calico[0m
+[0;32m[0m
+
+2026-08-10 08:36:28,580 p=3947 u=root n=ansible INFO| changed: [rancher02c]
+2026-08-10 08:36:28,588 p=3947 u=root n=ansible INFO| TASK [master1_config : Verifica che la porta del supervisor sia libera] ***************************************************
+2026-08-10 08:36:28,860 p=3947 u=root n=ansible INFO| ok: [rancher02c]
+2026-08-10 08:36:28,870 p=3947 u=root n=ansible INFO| TASK [master1_config : Interrompi se la porta del supervisor e' gia' occupata] ********************************************
+2026-08-10 08:36:28,898 p=3947 u=root n=ansible INFO| skipping: [rancher02c]
+2026-08-10 08:36:28,906 p=3947 u=root n=ansible INFO| TASK [master1_config : Abilita e avvia rke2-server] ***********************************************************************
+2026-08-10 08:37:17,193 p=3947 u=root n=ansible INFO| changed: [rancher02c]
+2026-08-10 08:37:17,202 p=3947 u=root n=ansible INFO| TASK [master1_config : Riavvia rke2-server se la configurazione e' cambiata] **********************************************
+2026-08-10 08:37:17,230 p=3947 u=root n=ansible INFO| skipping: [rancher02c]
+2026-08-10 08:37:17,239 p=3947 u=root n=ansible INFO| TASK [master1_config : Attendi che l'API server del nodo risponda] ********************************************************
+2026-08-10 08:37:17,520 p=3947 u=root n=ansible INFO| ok: [rancher02c]
+2026-08-10 08:37:17,530 p=3947 u=root n=ansible INFO| TASK [master1_config : Attendi che tutti i master avviati finora siano Ready] *********************************************
+2026-08-10 08:37:17,857 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher02c]: Attendi che tutti i master avviati finora siano Ready (60 retries left).
+2026-08-10 08:37:28,129 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher02c]: Attendi che tutti i master avviati finora siano Ready (59 retries left).
+2026-08-10 08:37:38,418 p=3947 u=root n=ansible INFO| ok: [rancher02c]
+2026-08-10 08:37:38,427 p=3947 u=root n=ansible INFO| TASK [master1_config : Lascia stabilizzare etcd prima del master successivo] **********************************************
+2026-08-10 08:37:38,454 p=3947 u=root n=ansible INFO| Pausing for 45 seconds
+2026-08-10 08:37:38,455 p=3947 u=root n=ansible INFO| (ctrl+C then 'C' = continue early, ctrl+C then 'A' = abort)
+2026-08-10 08:38:23,458 p=3947 u=root n=ansible INFO| ok: [rancher02c]
+2026-08-10 08:38:23,467 p=3947 u=root n=ansible INFO| TASK [master1_config : Mostra lo stato del cluster locale] ****************************************************************
+2026-08-10 08:38:23,752 p=3947 u=root n=ansible INFO| ok: [rancher02c]
+2026-08-10 08:38:23,760 p=3947 u=root n=ansible INFO| TASK [master1_config : Riepilogo nodo] ************************************************************************************
+2026-08-10 08:38:23,783 p=3947 u=root n=ansible INFO| ok: [rancher02c] => {
+    "msg": "rancher02c (join su 10.205.166.214)\nNAME         STATUS   ROLES                AGE     VERSION\nrancher01c   Ready    control-plane,etcd   3m17s   v1.35.7+rke2r1\nrancher02c   Ready    control-plane,etcd   70s     v1.35.7+rke2r1\n"
+}
+2026-08-10 08:38:23,825 p=3947 u=root n=ansible INFO| TASK [master1_kubectl : Copy kubectl binary to /usr/local/bin/] ***********************************************************
+2026-08-10 08:38:24,314 p=3947 u=root n=ansible INFO| changed: [rancher02c]
+2026-08-10 08:38:24,323 p=3947 u=root n=ansible INFO| TASK [master1_kubectl : Create /root/.kube directory] *********************************************************************
+2026-08-10 08:38:24,555 p=3947 u=root n=ansible INFO| ok: [rancher02c]
+2026-08-10 08:38:24,563 p=3947 u=root n=ansible INFO| TASK [master1_kubectl : Copy RKE2 kubeconfig to /root/.kube/config] *******************************************************
+2026-08-10 08:38:24,790 p=3947 u=root n=ansible INFO| changed: [rancher02c]
+2026-08-10 08:38:24,800 p=3947 u=root n=ansible INFO| PLAY [masters] ************************************************************************************************************
+2026-08-10 08:38:24,811 p=3947 u=root n=ansible INFO| TASK [master1_install : Install RKE2 on master] ***************************************************************************
+2026-08-10 08:38:30,433 p=3947 u=root n=ansible INFO| changed: [rancher03c]
+2026-08-10 08:38:30,448 p=3947 u=root n=ansible INFO| TASK [master1_config : Crea la directory di configurazione RKE2] **********************************************************
+2026-08-10 08:38:30,676 p=3947 u=root n=ansible INFO| [0;31m--- before[0m
+[0;31m[0m[0;32m+++ after[0m
+[0;32m[0m[0;36m@@ -1,4 +1,4 @@[0m
+[0;36m[0m {
+     "path": "/etc/rancher/rke2",
+[0;31m-    "state": "absent"[0m
+[0;31m[0m[0;32m+    "state": "directory"[0m
+[0;32m[0m }
+
+
+2026-08-10 08:38:30,676 p=3947 u=root n=ansible INFO| changed: [rancher03c]
+2026-08-10 08:38:30,684 p=3947 u=root n=ansible INFO| TASK [master1_config : Verifica se rke2-server e' gia' attivo] ************************************************************
+2026-08-10 08:38:31,066 p=3947 u=root n=ansible INFO| ok: [rancher03c]
+2026-08-10 08:38:31,075 p=3947 u=root n=ansible INFO| TASK [master1_config : Usa il token pre-condiviso se configurato] *********************************************************
+2026-08-10 08:38:31,100 p=3947 u=root n=ansible INFO| skipping: [rancher03c]
+2026-08-10 08:38:31,108 p=3947 u=root n=ansible INFO| TASK [master1_config : Leggi il node-token generato dal primo master] *****************************************************
+2026-08-10 08:38:32,209 p=3947 u=root n=ansible INFO| ok: [rancher03c -> rancher01c(10.205.166.214)]
+2026-08-10 08:38:32,218 p=3947 u=root n=ansible INFO| TASK [master1_config : Usa il node-token letto dal primo master] **********************************************************
+2026-08-10 08:38:32,248 p=3947 u=root n=ansible INFO| ok: [rancher03c]
+2026-08-10 08:38:32,255 p=3947 u=root n=ansible INFO| TASK [master1_config : Create /etc/rancher/rke2/config.yaml] **************************************************************
+2026-08-10 08:38:32,931 p=3947 u=root n=ansible INFO| [0;31m--- before[0m
+[0;31m[0m[0;32m+++ after: /root/.ansible/tmp/ansible-local-3947z8r3gdo8/tmpbp6ittxb/config_master1.yaml.j2[0m
+[0;32m[0m[0;36m@@ -0,0 +1,12 @@[0m
+[0;36m[0m[0;32m+# Ansible managed - roles/master1_config/templates/config_master1.yaml.j2[0m
+[0;32m[0m[0;32m+token: K105ff570e807fc9aca38bc1b9ffdbacdb2280a8851d76890c1122956e32ea74d22::server:e4d61134ee4cd7464ec676d4ad6e88de[0m
+[0;32m[0m[0;32m+# Nodo aggiuntivo: si registra sul supervisor del primo master.[0m
+[0;32m[0m[0;32m+# La porta e' 9345 (supervisor), non 6443 (API server).[0m
+[0;32m[0m[0;32m+server: https://10.205.166.214:9345[0m
+[0;32m[0m[0;32m+tls-san:[0m
+[0;32m[0m[0;32m+  - kikko.app.inail-svil.almaviva.it[0m
+[0;32m[0m[0;32m+  - 10.205.166.214[0m
+[0;32m[0m[0;32m+  - 10.205.166.217[0m
+[0;32m[0m[0;32m+  - 10.205.166.218[0m
+[0;32m[0m[0;32m+cni:[0m
+[0;32m[0m[0;32m+  - calico[0m
+[0;32m[0m
+
+2026-08-10 08:38:32,931 p=3947 u=root n=ansible INFO| changed: [rancher03c]
+2026-08-10 08:38:32,941 p=3947 u=root n=ansible INFO| TASK [master1_config : Verifica che la porta del supervisor sia libera] ***************************************************
+2026-08-10 08:38:33,200 p=3947 u=root n=ansible INFO| ok: [rancher03c]
+2026-08-10 08:38:33,209 p=3947 u=root n=ansible INFO| TASK [master1_config : Interrompi se la porta del supervisor e' gia' occupata] ********************************************
+2026-08-10 08:38:33,235 p=3947 u=root n=ansible INFO| skipping: [rancher03c]
+2026-08-10 08:38:33,243 p=3947 u=root n=ansible INFO| TASK [master1_config : Abilita e avvia rke2-server] ***********************************************************************
+2026-08-10 08:39:21,229 p=3947 u=root n=ansible INFO| changed: [rancher03c]
+2026-08-10 08:39:21,246 p=3947 u=root n=ansible INFO| TASK [master1_config : Riavvia rke2-server se la configurazione e' cambiata] **********************************************
+2026-08-10 08:39:21,294 p=3947 u=root n=ansible INFO| skipping: [rancher03c]
+2026-08-10 08:39:21,308 p=3947 u=root n=ansible INFO| TASK [master1_config : Attendi che l'API server del nodo risponda] ********************************************************
+2026-08-10 08:39:21,607 p=3947 u=root n=ansible INFO| ok: [rancher03c]
+2026-08-10 08:39:21,617 p=3947 u=root n=ansible INFO| TASK [master1_config : Attendi che tutti i master avviati finora siano Ready] *********************************************
+2026-08-10 08:39:21,947 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher03c]: Attendi che tutti i master avviati finora siano Ready (60 retries left).
+2026-08-10 08:39:32,238 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher03c]: Attendi che tutti i master avviati finora siano Ready (59 retries left).
+2026-08-10 08:39:42,523 p=3947 u=root n=ansible INFO| ok: [rancher03c]
+2026-08-10 08:39:42,532 p=3947 u=root n=ansible INFO| TASK [master1_config : Lascia stabilizzare etcd prima del master successivo] **********************************************
+2026-08-10 08:39:42,557 p=3947 u=root n=ansible INFO| skipping: [rancher03c]
+2026-08-10 08:39:42,566 p=3947 u=root n=ansible INFO| TASK [master1_config : Mostra lo stato del cluster locale] ****************************************************************
+2026-08-10 08:39:42,893 p=3947 u=root n=ansible INFO| ok: [rancher03c]
+2026-08-10 08:39:42,902 p=3947 u=root n=ansible INFO| TASK [master1_config : Riepilogo nodo] ************************************************************************************
+2026-08-10 08:39:42,922 p=3947 u=root n=ansible INFO| ok: [rancher03c] => {
+    "msg": "rancher03c (join su 10.205.166.214)\nNAME         STATUS   ROLES                AGE     VERSION\nrancher01c   Ready    control-plane,etcd   4m36s   v1.35.7+rke2r1\nrancher02c   Ready    control-plane,etcd   2m29s   v1.35.7+rke2r1\nrancher03c   Ready    control-plane,etcd   25s     v1.35.7+rke2r1\n"
+}
+2026-08-10 08:39:42,938 p=3947 u=root n=ansible INFO| TASK [master1_kubectl : Copy kubectl binary to /usr/local/bin/] ***********************************************************
+2026-08-10 08:39:43,733 p=3947 u=root n=ansible INFO| changed: [rancher03c]
+2026-08-10 08:39:43,743 p=3947 u=root n=ansible INFO| TASK [master1_kubectl : Create /root/.kube directory] *********************************************************************
+2026-08-10 08:39:44,022 p=3947 u=root n=ansible INFO| ok: [rancher03c]
+2026-08-10 08:39:44,031 p=3947 u=root n=ansible INFO| TASK [master1_kubectl : Copy RKE2 kubeconfig to /root/.kube/config] *******************************************************
+2026-08-10 08:39:44,258 p=3947 u=root n=ansible INFO| changed: [rancher03c]
+2026-08-10 08:39:44,268 p=3947 u=root n=ansible INFO| PLAY [masters[0]] *********************************************************************************************************
+2026-08-10 08:39:44,278 p=3947 u=root n=ansible INFO| TASK [master1_helm_cert_manager_install : Download Helm] ******************************************************************
+2026-08-10 08:39:45,642 p=3947 u=root n=ansible INFO| changed: [rancher01c]
+2026-08-10 08:39:45,652 p=3947 u=root n=ansible INFO| TASK [master1_helm_cert_manager_install : Extract Helm] *******************************************************************
+2026-08-10 08:39:47,265 p=3947 u=root n=ansible INFO| changed: [rancher01c]
+2026-08-10 08:39:47,274 p=3947 u=root n=ansible INFO| TASK [master1_helm_cert_manager_install : Move Helm to /usr/local/bin] ****************************************************
+2026-08-10 08:39:47,503 p=3947 u=root n=ansible INFO| changed: [rancher01c]
+2026-08-10 08:39:47,512 p=3947 u=root n=ansible INFO| TASK [master1_helm_cert_manager_install : Copy kubectl binary to /usr/local/bin/] *****************************************
+2026-08-10 08:39:48,155 p=3947 u=root n=ansible INFO| ok: [rancher01c]
+2026-08-10 08:39:48,166 p=3947 u=root n=ansible INFO| TASK [master1_helm_cert_manager_install : Create /root/.kube directory] ***************************************************
+2026-08-10 08:39:48,403 p=3947 u=root n=ansible INFO| ok: [rancher01c]
+2026-08-10 08:39:48,411 p=3947 u=root n=ansible INFO| TASK [master1_helm_cert_manager_install : Copy RKE2 kubeconfig to /root/.kube/config] *************************************
+2026-08-10 08:39:48,643 p=3947 u=root n=ansible INFO| ok: [rancher01c]
+2026-08-10 08:39:48,653 p=3947 u=root n=ansible INFO| TASK [master1_helm_cert_manager_install : include_tasks] ******************************************************************
+2026-08-10 08:39:48,672 p=3947 u=root n=ansible INFO| included: /root/kikkoBetterThanAI/fullstack/roles/master1_helm_cert_manager_install/tasks/master1_helm_cert_manager_install.yml for rancher01c
+2026-08-10 08:39:48,679 p=3947 u=root n=ansible INFO| TASK [master1_helm_cert_manager_install : Add Rancher Helm repository] ****************************************************
+2026-08-10 08:39:48,944 p=3947 u=root n=ansible INFO| changed: [rancher01c]
+2026-08-10 08:39:48,952 p=3947 u=root n=ansible INFO| TASK [master1_helm_cert_manager_install : Create cattle-system namespace] *************************************************
+2026-08-10 08:39:49,234 p=3947 u=root n=ansible INFO| changed: [rancher01c]
+2026-08-10 08:39:49,242 p=3947 u=root n=ansible INFO| TASK [master1_helm_cert_manager_install : Update Helm repositories] *******************************************************
+2026-08-10 08:39:50,291 p=3947 u=root n=ansible INFO| changed: [rancher01c]
+2026-08-10 08:39:50,300 p=3947 u=root n=ansible INFO| TASK [master1_helm_cert_manager_install : Set kube permission] ************************************************************
+2026-08-10 08:39:50,527 p=3947 u=root n=ansible INFO| changed: [rancher01c]
+2026-08-10 08:39:50,537 p=3947 u=root n=ansible INFO| TASK [master1_helm_cert_manager_install : Copy cacerts.pem to remote host] ************************************************
+2026-08-10 08:39:50,990 p=3947 u=root n=ansible INFO| ok: [rancher01c]
+2026-08-10 08:39:50,999 p=3947 u=root n=ansible INFO| TASK [master1_helm_cert_manager_install : Create CA secret for Rancher] ***************************************************
+2026-08-10 08:39:51,282 p=3947 u=root n=ansible INFO| changed: [rancher01c]
+2026-08-10 08:39:51,290 p=3947 u=root n=ansible INFO| TASK [master1_helm_cert_manager_install : Verify secrets creation] ********************************************************
+2026-08-10 08:39:51,570 p=3947 u=root n=ansible INFO| changed: [rancher01c]
+2026-08-10 08:39:51,579 p=3947 u=root n=ansible INFO| TASK [master1_helm_cert_manager_install : Install Rancher with Helm] ******************************************************
+2026-08-10 08:39:53,254 p=3947 u=root n=ansible INFO| changed: [rancher01c]
+2026-08-10 08:39:53,264 p=3947 u=root n=ansible INFO| TASK [master1_helm_cert_manager_install : Wait for Rancher to be ready] ***************************************************
+2026-08-10 08:40:53,953 p=3947 u=root n=ansible INFO| changed: [rancher01c]
+2026-08-10 08:40:53,962 p=3947 u=root n=ansible INFO| TASK [master1_helm_cert_manager_install : Check Rancher pod status] *******************************************************
+2026-08-10 08:40:54,504 p=3947 u=root n=ansible INFO| changed: [rancher01c]
+2026-08-10 08:40:54,513 p=3947 u=root n=ansible INFO| TASK [master1_helm_cert_manager_install : Display Rancher pod status] *****************************************************
+2026-08-10 08:40:54,526 p=3947 u=root n=ansible INFO| ok: [rancher01c] => {
+    "rancher_pods.stdout_lines": [
+        "NAME                       READY   STATUS    RESTARTS   AGE",
+        "rancher-5b6596db67-2m652   1/1     Running   0          61s",
+        "rancher-5b6596db67-8kl6f   1/1     Running   0          61s",
+        "rancher-5b6596db67-wrw7m   1/1     Running   0          61s"
+    ]
+}
+2026-08-10 08:40:54,533 p=3947 u=root n=ansible INFO| TASK [master1_helm_cert_manager_install : Check Rancher service status] ***************************************************
+2026-08-10 08:40:55,076 p=3947 u=root n=ansible INFO| changed: [rancher01c]
+2026-08-10 08:40:55,087 p=3947 u=root n=ansible INFO| TASK [master1_helm_cert_manager_install : Display Rancher service status] *************************************************
+2026-08-10 08:40:55,099 p=3947 u=root n=ansible INFO| ok: [rancher01c] => {
+    "rancher_svc.stdout_lines": [
+        "NAME      TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)          AGE",
+        "rancher   ClusterIP   10.43.227.197   <none>        80/TCP,443/TCP   62s"
+    ]
+}
+2026-08-10 08:40:55,133 p=3947 u=root n=ansible INFO| PLAY [masters[0]] *********************************************************************************************************
+2026-08-10 08:40:55,143 p=3947 u=root n=ansible INFO| TASK [master1_create_cluster : Wait for Rancher cluster to be fully ready] ************************************************
+2026-08-10 08:40:55,153 p=3947 u=root n=ansible INFO| Pausing for 280 seconds
+2026-08-10 08:40:55,154 p=3947 u=root n=ansible INFO| (ctrl+C then 'C' = continue early, ctrl+C then 'A' = abort)
+2026-08-10 08:45:35,157 p=3947 u=root n=ansible INFO| ok: [rancher01c -> localhost]
+2026-08-10 08:45:35,167 p=3947 u=root n=ansible INFO| TASK [master1_create_cluster : Get Rancher API token] *********************************************************************
+2026-08-10 08:45:35,768 p=3947 u=root n=ansible INFO| ok: [rancher01c -> localhost]
+2026-08-10 08:45:35,779 p=3947 u=root n=ansible INFO| TASK [master1_create_cluster : Set Rancher server URL (completa setup iniziale)] ******************************************
+2026-08-10 08:45:36,250 p=3947 u=root n=ansible INFO| ok: [rancher01c -> localhost]
+2026-08-10 08:45:36,266 p=3947 u=root n=ansible INFO| TASK [master1_create_cluster : Accept Rancher EULA] ***********************************************************************
+2026-08-10 08:45:36,639 p=3947 u=root n=ansible INFO| fatal: [rancher01c -> localhost]: FAILED! => {"cache_control": "no-cache, no-store, must-revalidate", "changed": false, "connection": "close", "content_length": "111", "content_type": "application/json", "date": "Mon, 10 Aug 2026 06:45:36 GMT", "elapsed": 0, "expires": "Wed 24 Feb 1982 18:42:00 GMT", "json": {"baseType": "error", "code": "MethodNotAllow", "message": "Method POST not supported", "status": 405, "type": "error"}, "msg": "Status code was 405 and not [200, 204, 409]: HTTP Error 405: Method Not Allowed", "redirected": false, "status": 405, "strict_transport_security": "max-age=31536000; includeSubDomains", "url": "https://kikko.app.inail-svil.almaviva.it/v3/setting/first-login", "x_api_cattle_auth": "true", "x_api_schemas": "https://kikko.app.inail-svil.almaviva.it/v3/schemas", "x_content_type_options": "nosniff"}
+2026-08-10 08:45:36,639 p=3947 u=root n=ansible INFO| ...ignoring
+2026-08-10 08:45:36,654 p=3947 u=root n=ansible INFO| TASK [master1_create_cluster : Create a new Kubernetes RKE2 custom cluster via Rancher API] *******************************
+2026-08-10 08:45:37,116 p=3947 u=root n=ansible INFO| ok: [rancher01c -> localhost]
+2026-08-10 08:45:37,132 p=3947 u=root n=ansible INFO| TASK [master1_create_cluster : Show cluster creation result] **************************************************************
+2026-08-10 08:45:37,157 p=3947 u=root n=ansible INFO| ok: [rancher01c] => {
+    "create_cluster_result.json": {
+        "apiVersion": "provisioning.cattle.io/v1",
+        "id": "fleet-default/iacdevops",
+        "kind": "Cluster",
+        "links": {
+            "patch": "https://kikko.app.inail-svil.almaviva.it/v1/provisioning.cattle.io.clusters/fleet-default/iacdevops",
+            "remove": "https://kikko.app.inail-svil.almaviva.it/v1/provisioning.cattle.io.clusters/fleet-default/iacdevops",
+            "self": "https://kikko.app.inail-svil.almaviva.it/v1/provisioning.cattle.io.clusters/fleet-default/iacdevops",
+            "update": "https://kikko.app.inail-svil.almaviva.it/v1/provisioning.cattle.io.clusters/fleet-default/iacdevops",
+            "view": "https://kikko.app.inail-svil.almaviva.it/apis/provisioning.cattle.io/v1/namespaces/fleet-default/clusters/iacdevops"
+        },
+        "metadata": {
+            "annotations": {
+                "field.cattle.io/creatorId": "user-l7fgm"
+            },
+            "creationTimestamp": "2026-08-10T06:45:37Z",
+            "generation": 1,
+            "managedFields": [
+                {
+                    "apiVersion": "provisioning.cattle.io/v1",
+                    "fieldsType": "FieldsV1",
+                    "fieldsV1": {
+                        "f:spec": {
+                            ".": {},
+                            "f:defaultClusterRoleForProjectMembers": {},
+                            "f:defaultPodSecurityAdmissionConfigurationTemplateName": {},
+                            "f:enableNetworkPolicy": {},
+                            "f:kubernetesVersion": {},
+                            "f:rkeConfig": {
+                                ".": {},
+                                "f:etcd": {
+                                    ".": {},
+                                    "f:disableSnapshots": {},
+                                    "f:snapshotRetention": {},
+                                    "f:snapshotScheduleCron": {}
+                                },
+                                "f:machineGlobalConfig": {
+                                    ".": {},
+                                    "f:cni": {},
+                                    "f:disable-kube-proxy": {},
+                                    "f:etcd-expose-metrics": {}
+                                },
+                                "f:machineSelectorConfig": {},
+                                "f:registries": {},
+                                "f:upgradeStrategy": {
+                                    ".": {},
+                                    "f:controlPlaneConcurrency": {},
+                                    "f:controlPlaneDrainOptions": {
+                                        ".": {},
+                                        "f:enabled": {},
+                                        "f:force": {},
+                                        "f:ignoreDaemonSets": {},
+                                        "f:timeout": {}
+                                    },
+                                    "f:workerConcurrency": {},
+                                    "f:workerDrainOptions": {
+                                        ".": {},
+                                        "f:enabled": {},
+                                        "f:force": {},
+                                        "f:ignoreDaemonSets": {},
+                                        "f:timeout": {}
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "manager": "rancher",
+                    "operation": "Update",
+                    "time": "2026-08-10T06:45:37Z"
+                }
+            ],
+            "name": "iacdevops",
+            "namespace": "fleet-default",
+            "relationships": null,
+            "resourceVersion": "7474",
+            "state": {
+                "error": false,
+                "message": "Resource is current",
+                "name": "active",
+                "transitioning": false
+            },
+            "uid": "ee9e9469-5145-4970-b35d-ecba3f9949db"
+        },
+        "spec": {
+            "defaultClusterRoleForProjectMembers": "",
+            "defaultPodSecurityAdmissionConfigurationTemplateName": "",
+            "enableNetworkPolicy": false,
+            "kubernetesVersion": "v1.33.11+rke2r1",
+            "rkeConfig": {
+                "etcd": {
+                    "disableSnapshots": false,
+                    "snapshotRetention": 5,
+                    "snapshotScheduleCron": "0 */5 * * *"
+                },
+                "machineGlobalConfig": {
+                    "cni": "canal",
+                    "disable-kube-proxy": false,
+                    "etcd-expose-metrics": false
+                },
+                "machineSelectorConfig": [
+                    {
+                        "config": {
+                            "protect-kernel-defaults": false
+                        }
+                    }
+                ],
+                "registries": {},
+                "upgradeStrategy": {
+                    "controlPlaneConcurrency": "1",
+                    "controlPlaneDrainOptions": {
+                        "enabled": false,
+                        "force": false,
+                        "ignoreDaemonSets": true,
+                        "timeout": 120
+                    },
+                    "workerConcurrency": "1",
+                    "workerDrainOptions": {
+                        "enabled": false,
+                        "force": false,
+                        "ignoreDaemonSets": true,
+                        "timeout": 120
+                    }
+                }
+            }
+        },
+        "type": "provisioning.cattle.io.cluster"
+    }
+}
+2026-08-10 08:45:37,172 p=3947 u=root n=ansible INFO| TASK [master1_create_cluster : Wait for cluster to be provisioned] ********************************************************
+2026-08-10 08:45:37,644 p=3947 u=root n=ansible INFO| ok: [rancher01c -> localhost]
+2026-08-10 08:45:37,657 p=3947 u=root n=ansible INFO| TASK [master1_create_cluster : Get cluster ID from legacy API for registration token] *************************************
+2026-08-10 08:45:37,977 p=3947 u=root n=ansible INFO| ok: [rancher01c -> localhost]
+2026-08-10 08:45:37,986 p=3947 u=root n=ansible INFO| TASK [master1_create_cluster : Debug cluster info] ************************************************************************
+2026-08-10 08:45:38,005 p=3947 u=root n=ansible INFO| ok: [rancher01c] => {
+    "legacy_cluster_info.json": {
+        "actions": {
+            "createFromTemplate": "https://kikko.app.inail-svil.almaviva.it/v3/clusters?action=createFromTemplate"
+        },
+        "createTypes": {
+            "cluster": "https://kikko.app.inail-svil.almaviva.it/v3/clusters"
+        },
+        "data": [
+            {
+                "actions": {
+                    "generateKubeconfig": "https://kikko.app.inail-svil.almaviva.it/v3/clusters/c-m-hl9lz59h?action=generateKubeconfig",
+                    "importYaml": "https://kikko.app.inail-svil.almaviva.it/v3/clusters/c-m-hl9lz59h?action=importYaml"
+                },
+                "agentImage": "",
+                "agentImageOverride": "",
+                "aksStatus": {
+                    "privateRequiresTunnel": null,
+                    "rbacEnabled": null,
+                    "type": "/v3/schemas/aksStatus",
+                    "upstreamSpec": null
+                },
+                "aliStatus": {
+                    "privateRequiresTunnel": null,
+                    "type": "/v3/schemas/aliStatus",
+                    "upstreamSpec": null
+                },
+                "allocatable": {
+                    "cpu": "0",
+                    "memory": "0",
+                    "pods": "0"
+                },
+                "annotations": {
+                    "authz.management.cattle.io/creator-role-bindings": "{\"created\":[\"cluster-owner\"],\"required\":[\"cluster-owner\"]}",
+                    "authz.management.cattle.io/initial-sync": "true",
+                    "lifecycle.cattle.io/create.cluster-agent-controller-cleanup": "true",
+                    "lifecycle.cattle.io/create.cluster-provisioner-controller": "true",
+                    "lifecycle.cattle.io/create.cluster-scoped-gc": "true",
+                    "lifecycle.cattle.io/create.mgmt-cluster-rbac-remove": "true",
+                    "objectset.rio.cattle.io/applied": "H4sIAAAAAAAA/4xST2vcTgz9Kj90tp3svyRr+B1K6CEU0kChPcszsq3ueMZoZC9p2O9exutNloQNPZmR33t60tMLYM8/SSIHDyV06LGhjrwWBlUdFRyuxhVksGNvoYR7N0QlgQw6UrSoCOULoPdBUTn4mJ41k7NnAkYINchDEhgiSe5u66aDDEL1m4xG0kI4nBE4Ic2xVT6x6RN02HuSvBl3UEIvYeQ0DPvmfIRF9t839vb/N/+fq3nsCEpgNJbG0Md/IsQeTWLVjkhzSzUOTiG7ZAptx56jCiqlgVUGuox+iyY/bcZy7B0+fzR7yMBhRW5K45LvFmMLJawqxMXKrnF9e7PZ3N3h9Xq1qG1dYbVFu6D1trrdLDdVEp0bmbzLW7d1fzbbNpVjT2Y6g4a8PnTY0PeRRNgmMGSAPu5JkplDdor1BxkhnWuWohHu9XiEMBVYyH55FYQSBL1pSa7mbz51K8dlsVgXyzPOoO17ym6oKMeecxy0LcfrYlncJMZxf48fsyaPlaNH0n2Q3VNwbJ6hrNFFyo7p/gqym+Keye8j564PomTvg6+5SctJHk4vSFtjryQe3auwCwbdfKBpiq/e9oG9JvbRkJ2xhwz27G3YxyehmoTs6a7n/4e/AQAA//8k9RAe2AMAAA",
+                    "objectset.rio.cattle.io/id": "cluster-create",
+                    "objectset.rio.cattle.io/owner-gvk": "provisioning.cattle.io/v1, Kind=Cluster",
+                    "objectset.rio.cattle.io/owner-name": "iacdevops",
+                    "objectset.rio.cattle.io/owner-namespace": "fleet-default",
+                    "provisioning.cattle.io/administrated": "true",
+                    "provisioning.cattle.io/management-cluster-display-name": "iacdevops"
+                },
+                "answers": {
+                    "clusterId": null,
+                    "projectId": null,
+                    "type": "/v3/schemas/answer"
+                },
+                "appliedEnableNetworkPolicy": false,
+                "appliedSpec": {
+                    "agentImageOverride": "",
+                    "answers": {
+                        "clusterId": null,
+                        "projectId": null,
+                        "type": "/v3/schemas/answer"
+                    },
+                    "clusterSecrets": {
+                        "type": "/v3/schemas/clusterSecrets"
+                    },
+                    "clusterTemplateId": null,
+                    "clusterTemplateRevisionId": null,
+                    "defaultClusterRoleForProjectMembers": null,
+                    "description": "",
+                    "desiredAgentImage": "",
+                    "desiredAuthImage": "",
+                    "displayName": "",
+                    "dockerRootDir": "/var/lib/docker",
+                    "enableNetworkPolicy": null,
+                    "internal": false,
+                    "localClusterAuthEndpoint": {
+                        "enabled": false,
+                        "type": "/v3/schemas/localClusterAuthEndpoint"
+                    },
+                    "type": "/v3/schemas/clusterSpec",
+                    "windowsPreferedCluster": false
+                },
+                "authImage": "",
+                "baseType": "cluster",
+                "capabilities": {
+                    "loadBalancerCapabilities": {
+                        "healthCheckSupported": false,
+                        "type": "/v3/schemas/loadBalancerCapabilities"
+                    },
+                    "nodePoolScalingSupported": false,
+                    "type": "/v3/schemas/capabilities"
+                },
+                "capacity": {
+                    "cpu": "0",
+                    "memory": "0",
+                    "pods": "0"
+                },
+                "clusterSecrets": {
+                    "type": "/v3/schemas/clusterSecrets"
+                },
+                "clusterTemplateId": null,
+                "clusterTemplateRevisionId": null,
+                "conditions": [
+                    {
+                        "lastUpdateTime": "2026-08-10T06:45:37Z",
+                        "status": "True",
+                        "type": "BackingNamespaceCreated"
+                    },
+                    {
+                        "lastUpdateTime": "2026-08-10T06:45:37Z",
+                        "status": "True",
+                        "type": "DefaultProjectCreated"
+                    },
+                    {
+                        "lastUpdateTime": "2026-08-10T06:45:37Z",
+                        "status": "True",
+                        "type": "SystemProjectCreated"
+                    },
+                    {
+                        "lastUpdateTime": "2026-08-10T06:45:37Z",
+                        "status": "True",
+                        "type": "InitialRolesPopulated"
+                    },
+                    {
+                        "lastUpdateTime": "2026-08-10T06:45:37Z",
+                        "status": "True",
+                        "type": "CreatorMadeOwner"
+                    },
+                    {
+                        "lastUpdateTime": "2026-08-10T06:45:37Z",
+                        "status": "True",
+                        "type": "NoDiskPressure"
+                    },
+                    {
+                        "lastUpdateTime": "2026-08-10T06:45:37Z",
+                        "status": "True",
+                        "type": "NoMemoryPressure"
+                    },
+                    {
+                        "lastUpdateTime": "2026-08-10T06:45:37Z",
+                        "status": "True",
+                        "type": "ServiceAccountSecretsMigrated"
+                    }
+                ],
+                "created": "2026-08-10T06:45:37Z",
+                "createdTS": 1786344337000,
+                "creatorId": "user-l7fgm",
+                "defaultClusterRoleForProjectMembers": null,
+                "description": "",
+                "desiredAgentImage": "rancher/rancher-agent:v2.14.2",
+                "desiredAuthImage": "rancher/kube-api-auth:v0.2.6",
+                "dockerRootDir": "/var/lib/docker",
+                "driver": "",
+                "eksStatus": {
+                    "generatedNodeRole": "",
+                    "managedLaunchTemplateID": "",
+                    "managedLaunchTemplateVersions": null,
+                    "privateRequiresTunnel": null,
+                    "securityGroups": null,
+                    "subnets": null,
+                    "type": "/v3/schemas/eksStatus",
+                    "upstreamSpec": null,
+                    "virtualNetwork": ""
+                },
+                "enableNetworkPolicy": false,
+                "fleetWorkspaceName": "fleet-default",
+                "gkeStatus": {
+                    "privateRequiresTunnel": null,
+                    "type": "/v3/schemas/gkeStatus",
+                    "upstreamSpec": null
+                },
+                "id": "c-m-hl9lz59h",
+                "importedConfig": {
+                    "type": "/v3/schemas/importedConfig"
+                },
+                "internal": false,
+                "istioEnabled": false,
+                "labels": {
+                    "objectset.rio.cattle.io/hash": "3baa13d4a4765588a0431fdfbab9ad1e49b7525b"
+                },
+                "limits": {
+                    "cpu": "0",
+                    "memory": "0",
+                    "pods": "0"
+                },
+                "links": {
+                    "apiServices": "https://kikko.app.inail-svil.almaviva.it/v3/clusters/c-m-hl9lz59h/apiservices",
+                    "clusterRegistrationTokens": "https://kikko.app.inail-svil.almaviva.it/v3/clusters/c-m-hl9lz59h/clusterregistrationtokens",
+                    "clusterRoleTemplateBindings": "https://kikko.app.inail-svil.almaviva.it/v3/clusters/c-m-hl9lz59h/clusterroletemplatebindings",
+                    "namespaces": "https://kikko.app.inail-svil.almaviva.it/v3/clusters/c-m-hl9lz59h/namespaces",
+                    "nodePools": "https://kikko.app.inail-svil.almaviva.it/v3/clusters/c-m-hl9lz59h/nodepools",
+                    "nodes": "https://kikko.app.inail-svil.almaviva.it/v3/clusters/c-m-hl9lz59h/nodes",
+                    "persistentVolumes": "https://kikko.app.inail-svil.almaviva.it/v3/clusters/c-m-hl9lz59h/persistentvolumes",
+                    "projects": "https://kikko.app.inail-svil.almaviva.it/v3/clusters/c-m-hl9lz59h/projects",
+                    "remove": "https://kikko.app.inail-svil.almaviva.it/v3/clusters/c-m-hl9lz59h",
+                    "self": "https://kikko.app.inail-svil.almaviva.it/v3/clusters/c-m-hl9lz59h",
+                    "shell": "wss://kikko.app.inail-svil.almaviva.it/v3/clusters/c-m-hl9lz59h?shell=true",
+                    "storageClasses": "https://kikko.app.inail-svil.almaviva.it/v3/clusters/c-m-hl9lz59h/storageclasses",
+                    "subscribe": "https://kikko.app.inail-svil.almaviva.it/v3/clusters/c-m-hl9lz59h/subscribe",
+                    "tokens": "https://kikko.app.inail-svil.almaviva.it/v3/clusters/c-m-hl9lz59h/tokens",
+                    "update": "https://kikko.app.inail-svil.almaviva.it/v3/clusters/c-m-hl9lz59h"
+                },
+                "linuxWorkerCount": 0,
+                "localClusterAuthEndpoint": {
+                    "enabled": false,
+                    "type": "/v3/schemas/localClusterAuthEndpoint"
+                },
+                "name": "iacdevops",
+                "nodeCount": 0,
+                "nodeVersion": 0,
+                "provider": "",
+                "requested": {
+                    "cpu": "0",
+                    "memory": "0",
+                    "pods": "0"
+                },
+                "state": "active",
+                "transitioning": "no",
+                "transitioningMessage": "",
+                "type": "cluster",
+                "uuid": "01cb55dc-c455-4d95-9c81-7696bc34fee8",
+                "windowsPreferedCluster": false,
+                "windowsWorkerCount": 0
+            }
+        ],
+        "filters": {
+            "aadClientCertSecret": null,
+            "aadClientSecret": null,
+            "agentImage": null,
+            "agentImageOverride": null,
+            "apiEndpoint": null,
+            "appliedEnableNetworkPolicy": null,
+            "authImage": null,
+            "caCert": null,
+            "clusterTemplateId": null,
+            "clusterTemplateRevisionId": null,
+            "created": null,
+            "creatorId": null,
+            "currentCisRunName": null,
+            "defaultClusterRoleForProjectMembers": null,
+            "defaultPodSecurityAdmissionConfigurationTemplateName": null,
+            "description": null,
+            "desiredAgentImage": null,
+            "desiredAuthImage": null,
+            "dockerRootDir": null,
+            "driver": null,
+            "enableNetworkPolicy": null,
+            "fleetWorkspaceName": null,
+            "id": null,
+            "internal": null,
+            "istioEnabled": null,
+            "linuxWorkerCount": null,
+            "name": [
+                {
+                    "modifier": "eq",
+                    "value": "iacdevops"
+                }
+            ],
+            "nodeCount": null,
+            "nodeVersion": null,
+            "openStackSecret": null,
+            "privateRegistrySecret": null,
+            "provider": null,
+            "removed": null,
+            "s3CredentialSecret": null,
+            "serviceAccountTokenSecret": null,
+            "state": null,
+            "transitioning": null,
+            "transitioningMessage": null,
+            "uuid": null,
+            "virtualCenterSecret": null,
+            "vsphereSecret": null,
+            "weavePasswordSecret": null,
+            "windowsPreferedCluster": null,
+            "windowsWorkerCount": null
+        },
+        "links": {
+            "self": "https://kikko.app.inail-svil.almaviva.it/v3/clusters"
+        },
+        "pagination": {
+            "limit": 1000,
+            "total": 1
+        },
+        "resourceType": "cluster",
+        "sort": {
+            "links": {
+                "aadClientCertSecret": "https://kikko.app.inail-svil.almaviva.it/v3/clusters?name=iacdevops&sort=aadClientCertSecret",
+                "aadClientSecret": "https://kikko.app.inail-svil.almaviva.it/v3/clusters?name=iacdevops&sort=aadClientSecret",
+                "agentImage": "https://kikko.app.inail-svil.almaviva.it/v3/clusters?name=iacdevops&sort=agentImage",
+                "agentImageOverride": "https://kikko.app.inail-svil.almaviva.it/v3/clusters?name=iacdevops&sort=agentImageOverride",
+                "apiEndpoint": "https://kikko.app.inail-svil.almaviva.it/v3/clusters?name=iacdevops&sort=apiEndpoint",
+                "authImage": "https://kikko.app.inail-svil.almaviva.it/v3/clusters?name=iacdevops&sort=authImage",
+                "caCert": "https://kikko.app.inail-svil.almaviva.it/v3/clusters?name=iacdevops&sort=caCert",
+                "currentCisRunName": "https://kikko.app.inail-svil.almaviva.it/v3/clusters?name=iacdevops&sort=currentCisRunName",
+                "defaultPodSecurityAdmissionConfigurationTemplateName": "https://kikko.app.inail-svil.almaviva.it/v3/clusters?name=iacdevops&sort=defaultPodSecurityAdmissionConfigurationTemplateName",
+                "description": "https://kikko.app.inail-svil.almaviva.it/v3/clusters?name=iacdevops&sort=description",
+                "desiredAgentImage": "https://kikko.app.inail-svil.almaviva.it/v3/clusters?name=iacdevops&sort=desiredAgentImage",
+                "desiredAuthImage": "https://kikko.app.inail-svil.almaviva.it/v3/clusters?name=iacdevops&sort=desiredAuthImage",
+                "dockerRootDir": "https://kikko.app.inail-svil.almaviva.it/v3/clusters?name=iacdevops&sort=dockerRootDir",
+                "driver": "https://kikko.app.inail-svil.almaviva.it/v3/clusters?name=iacdevops&sort=driver",
+                "fleetWorkspaceName": "https://kikko.app.inail-svil.almaviva.it/v3/clusters?name=iacdevops&sort=fleetWorkspaceName",
+                "openStackSecret": "https://kikko.app.inail-svil.almaviva.it/v3/clusters?name=iacdevops&sort=openStackSecret",
+                "privateRegistrySecret": "https://kikko.app.inail-svil.almaviva.it/v3/clusters?name=iacdevops&sort=privateRegistrySecret",
+                "provider": "https://kikko.app.inail-svil.almaviva.it/v3/clusters?name=iacdevops&sort=provider",
+                "s3CredentialSecret": "https://kikko.app.inail-svil.almaviva.it/v3/clusters?name=iacdevops&sort=s3CredentialSecret",
+                "serviceAccountTokenSecret": "https://kikko.app.inail-svil.almaviva.it/v3/clusters?name=iacdevops&sort=serviceAccountTokenSecret",
+                "state": "https://kikko.app.inail-svil.almaviva.it/v3/clusters?name=iacdevops&sort=state",
+                "transitioning": "https://kikko.app.inail-svil.almaviva.it/v3/clusters?name=iacdevops&sort=transitioning",
+                "transitioningMessage": "https://kikko.app.inail-svil.almaviva.it/v3/clusters?name=iacdevops&sort=transitioningMessage",
+                "uuid": "https://kikko.app.inail-svil.almaviva.it/v3/clusters?name=iacdevops&sort=uuid",
+                "virtualCenterSecret": "https://kikko.app.inail-svil.almaviva.it/v3/clusters?name=iacdevops&sort=virtualCenterSecret",
+                "vsphereSecret": "https://kikko.app.inail-svil.almaviva.it/v3/clusters?name=iacdevops&sort=vsphereSecret",
+                "weavePasswordSecret": "https://kikko.app.inail-svil.almaviva.it/v3/clusters?name=iacdevops&sort=weavePasswordSecret"
+            },
+            "order": "asc",
+            "reverse": "https://kikko.app.inail-svil.almaviva.it/v3/clusters?name=iacdevops&order=desc"
+        },
+        "type": "collection"
+    }
+}
+2026-08-10 08:45:38,012 p=3947 u=root n=ansible INFO| TASK [master1_create_cluster : Get or create cluster registration token] **************************************************
+2026-08-10 08:45:38,303 p=3947 u=root n=ansible INFO| ok: [rancher01c -> localhost]
+2026-08-10 08:45:38,313 p=3947 u=root n=ansible INFO| TASK [master1_create_cluster : Wait for registration token to be ready] ***************************************************
+2026-08-10 08:45:38,594 p=3947 u=root n=ansible INFO| ok: [rancher01c -> localhost]
+2026-08-10 08:45:38,603 p=3947 u=root n=ansible INFO| TASK [master1_create_cluster : Show cluster status] ***********************************************************************
+2026-08-10 08:45:38,615 p=3947 u=root n=ansible INFO| ok: [rancher01c] => {
+    "msg": "Cluster creato con successo!\nNome: iacdevops\nID: iacdevops\nNamespace: fleet-default\nKubernetes Version: v1.33.11+rke2r1\n"
+}
+2026-08-10 08:45:38,623 p=3947 u=root n=ansible INFO| TASK [master1_create_cluster : Debug registration token] ******************************************************************
+2026-08-10 08:45:38,635 p=3947 u=root n=ansible INFO| ok: [rancher01c] => {
+    "token_list.json.data[0]": {
+        "annotations": {},
+        "baseType": "clusterRegistrationToken",
+        "clusterId": "c-m-hl9lz59h",
+        "command": "kubectl apply -f https://kikko.app.inail-svil.almaviva.it/v3/import/bb9kx8fvw4r75cp7v4tsbsmnrdh2tkqmbt7sk2v5drcsxv2ql8n7b4_c-m-hl9lz59h.yaml",
+        "created": "2026-08-10T06:45:38Z",
+        "createdTS": 1786344338000,
+        "creatorId": "user-l7fgm",
+        "id": "c-m-hl9lz59h:crt-rmnp8",
+        "insecureCommand": "curl --insecure -sfL https://kikko.app.inail-svil.almaviva.it/v3/import/bb9kx8fvw4r75cp7v4tsbsmnrdh2tkqmbt7sk2v5drcsxv2ql8n7b4_c-m-hl9lz59h.yaml | kubectl apply -f -",
+        "insecureNodeCommand": " curl --insecure -fL https://kikko.app.inail-svil.almaviva.it/system-agent-install.sh | sudo  sh -s - --server https://kikko.app.inail-svil.almaviva.it --label 'cattle.io/os=linux' --token bb9kx8fvw4r75cp7v4tsbsmnrdh2tkqmbt7sk2v5drcsxv2ql8n7b4 --ca-checksum 29890154c73ffade72eb40e53cc320ac7e4685c44fadb49ea21e1232b94a7f7f",
+        "insecureWindowsNodeCommand": " curl.exe --insecure -fL https://kikko.app.inail-svil.almaviva.it/wins-agent-install.ps1 -o install.ps1; Set-ExecutionPolicy Bypass -Scope Process -Force; ./install.ps1 -Server https://kikko.app.inail-svil.almaviva.it -Label 'cattle.io/os=windows' -Token bb9kx8fvw4r75cp7v4tsbsmnrdh2tkqmbt7sk2v5drcsxv2ql8n7b4 -Worker -CaChecksum 29890154c73ffade72eb40e53cc320ac7e4685c44fadb49ea21e1232b94a7f7f",
+        "labels": {
+            "cattle.io/creator": "norman"
+        },
+        "links": {
+            "remove": "https://kikko.app.inail-svil.almaviva.it/v3/clusterRegistrationTokens/c-m-hl9lz59h:crt-rmnp8",
+            "self": "https://kikko.app.inail-svil.almaviva.it/v3/clusterRegistrationTokens/c-m-hl9lz59h:crt-rmnp8",
+            "update": "https://kikko.app.inail-svil.almaviva.it/v3/clusterRegistrationTokens/c-m-hl9lz59h:crt-rmnp8"
+        },
+        "manifestUrl": "https://kikko.app.inail-svil.almaviva.it/v3/import/bb9kx8fvw4r75cp7v4tsbsmnrdh2tkqmbt7sk2v5drcsxv2ql8n7b4_c-m-hl9lz59h.yaml",
+        "name": "crt-rmnp8",
+        "namespaceId": null,
+        "nodeCommand": " curl -fL https://kikko.app.inail-svil.almaviva.it/system-agent-install.sh | sudo  sh -s - --server https://kikko.app.inail-svil.almaviva.it --label 'cattle.io/os=linux' --token bb9kx8fvw4r75cp7v4tsbsmnrdh2tkqmbt7sk2v5drcsxv2ql8n7b4 --ca-checksum 29890154c73ffade72eb40e53cc320ac7e4685c44fadb49ea21e1232b94a7f7f",
+        "state": "active",
+        "token": "bb9kx8fvw4r75cp7v4tsbsmnrdh2tkqmbt7sk2v5drcsxv2ql8n7b4",
+        "transitioning": "no",
+        "transitioningMessage": "",
+        "type": "clusterRegistrationToken",
+        "uuid": "b8650098-9620-45c0-946b-dc71f7a70d3d",
+        "windowsNodeCommand": " curl.exe -fL https://kikko.app.inail-svil.almaviva.it/wins-agent-install.ps1 -o install.ps1; Set-ExecutionPolicy Bypass -Scope Process -Force; ./install.ps1 -Server https://kikko.app.inail-svil.almaviva.it -Label 'cattle.io/os=windows' -Token bb9kx8fvw4r75cp7v4tsbsmnrdh2tkqmbt7sk2v5drcsxv2ql8n7b4 -Worker -CaChecksum 29890154c73ffade72eb40e53cc320ac7e4685c44fadb49ea21e1232b94a7f7f"
+    }
+}
+2026-08-10 08:45:38,642 p=3947 u=root n=ansible INFO| TASK [master1_create_cluster : Extract registration details] **************************************************************
+2026-08-10 08:45:38,669 p=3947 u=root n=ansible INFO| ok: [rancher01c]
+2026-08-10 08:45:38,678 p=3947 u=root n=ansible INFO| TASK [master1_create_cluster : Extract token from nodeCommand] ************************************************************
+2026-08-10 08:45:38,704 p=3947 u=root n=ansible INFO| ok: [rancher01c]
+2026-08-10 08:45:38,712 p=3947 u=root n=ansible INFO| TASK [master1_create_cluster : Debug extracted values] ********************************************************************
+2026-08-10 08:45:38,722 p=3947 u=root n=ansible INFO| ok: [rancher01c] => {
+    "msg": "Rancher Host: kikko.app.inail-svil.almaviva.it\nCluster Token: bb9kx8fvw4r75cp7v4tsbsmnrdh2tkqmbt7sk2v5drcsxv2ql8n7b4\nNode Command:  curl -fL https://kikko.app.inail-svil.almaviva.it/system-agent-install.sh | sudo  sh -s - --server https://kikko.app.inail-svil.almaviva.it --label 'cattle.io/os=linux' --token bb9kx8fvw4r75cp7v4tsbsmnrdh2tkqmbt7sk2v5drcsxv2ql8n7b4 --ca-checksum 29890154c73ffade72eb40e53cc320ac7e4685c44fadb49ea21e1232b94a7f7f\n"
+}
+2026-08-10 08:45:38,730 p=3947 u=root n=ansible INFO| TASK [master1_create_cluster : Install system-agent and join nodes as managers] *******************************************
+2026-08-10 08:45:39,673 p=3947 u=root n=ansible INFO| changed: [rancher01c -> k8smanager01c(10.205.166.215)] => (item=k8smanager01c)
+2026-08-10 08:45:39,683 p=3947 u=root n=ansible INFO| TASK [master1_create_cluster : Install system-agent and join nodes as workers] ********************************************
+2026-08-10 08:45:40,554 p=3947 u=root n=ansible INFO| changed: [rancher01c -> k8sworker01c(10.205.166.216)] => (item=k8sworker01c)
+2026-08-10 08:45:40,565 p=3947 u=root n=ansible INFO| TASK [master1_create_cluster : Install system-agent and join nodes as ingress] ********************************************
+2026-08-10 08:45:41,468 p=3947 u=root n=ansible INFO| changed: [rancher01c -> k8sIngres01c(10.205.166.219)] => (item=k8sIngres01c)
+2026-08-10 08:45:41,478 p=3947 u=root n=ansible INFO| TASK [master1_create_cluster : Wait for manager nodes join to complete] ***************************************************
+2026-08-10 08:45:41,783 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher01c -> k8smanager01c]: Wait for manager nodes join to complete (60 retries left).
+2026-08-10 08:45:51,998 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher01c -> k8smanager01c]: Wait for manager nodes join to complete (59 retries left).
+2026-08-10 08:46:02,212 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher01c -> k8smanager01c]: Wait for manager nodes join to complete (58 retries left).
+2026-08-10 08:46:12,426 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher01c -> k8smanager01c]: Wait for manager nodes join to complete (57 retries left).
+2026-08-10 08:46:22,640 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher01c -> k8smanager01c]: Wait for manager nodes join to complete (56 retries left).
+2026-08-10 08:46:32,856 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher01c -> k8smanager01c]: Wait for manager nodes join to complete (55 retries left).
+2026-08-10 08:46:43,083 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher01c -> k8smanager01c]: Wait for manager nodes join to complete (54 retries left).
+2026-08-10 08:46:53,300 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher01c -> k8smanager01c]: Wait for manager nodes join to complete (53 retries left).
+2026-08-10 08:47:03,515 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher01c -> k8smanager01c]: Wait for manager nodes join to complete (52 retries left).
+2026-08-10 08:47:13,732 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher01c -> k8smanager01c]: Wait for manager nodes join to complete (51 retries left).
+2026-08-10 08:47:23,947 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher01c -> k8smanager01c]: Wait for manager nodes join to complete (50 retries left).
+2026-08-10 08:47:34,161 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher01c -> k8smanager01c]: Wait for manager nodes join to complete (49 retries left).
+2026-08-10 08:47:44,376 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher01c -> k8smanager01c]: Wait for manager nodes join to complete (48 retries left).
+2026-08-10 08:47:54,593 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher01c -> k8smanager01c]: Wait for manager nodes join to complete (47 retries left).
+2026-08-10 08:48:04,810 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher01c -> k8smanager01c]: Wait for manager nodes join to complete (46 retries left).
+2026-08-10 08:48:15,026 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher01c -> k8smanager01c]: Wait for manager nodes join to complete (45 retries left).
+2026-08-10 08:48:25,245 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher01c -> k8smanager01c]: Wait for manager nodes join to complete (44 retries left).
+2026-08-10 08:48:35,462 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher01c -> k8smanager01c]: Wait for manager nodes join to complete (43 retries left).
+2026-08-10 08:48:45,677 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher01c -> k8smanager01c]: Wait for manager nodes join to complete (42 retries left).
+2026-08-10 08:48:55,894 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher01c -> k8smanager01c]: Wait for manager nodes join to complete (41 retries left).
+2026-08-10 08:49:06,110 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher01c -> k8smanager01c]: Wait for manager nodes join to complete (40 retries left).
+2026-08-10 08:49:16,325 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher01c -> k8smanager01c]: Wait for manager nodes join to complete (39 retries left).
+2026-08-10 08:49:26,539 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher01c -> k8smanager01c]: Wait for manager nodes join to complete (38 retries left).
+2026-08-10 08:49:36,754 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher01c -> k8smanager01c]: Wait for manager nodes join to complete (37 retries left).
+2026-08-10 08:49:46,969 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher01c -> k8smanager01c]: Wait for manager nodes join to complete (36 retries left).
+2026-08-10 08:49:57,186 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher01c -> k8smanager01c]: Wait for manager nodes join to complete (35 retries left).
+2026-08-10 08:50:07,403 p=3947 u=root n=ansible INFO| FAILED - RETRYING: [rancher01c -> k8smanager01c]: Wait for manager nodes join to complete (34 retries left).
+2026-08-10 08:50:08,975 p=3947 u=root n=ansible ERROR|  [ERROR]: User interrupted execution
+

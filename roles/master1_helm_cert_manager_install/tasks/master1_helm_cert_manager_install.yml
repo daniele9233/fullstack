@@ -11,26 +11,12 @@
 - name: Set kube permission
   command: chmod 600 /root/.kube/config
 
-- name: Copy fullchain.pem to remote host
-  copy:
-    src: "{{ fullchain_pem_file }}"
-    dest: "{{ remote_cert_path }}/fullchain.pem"
-    mode: '0644'
-
-- name: Copy privkey.pem to remote host
-  copy:
-    src: "{{ privkey_pem_file }}"
-    dest: "{{ remote_cert_path }}/privkey.pem"
-    mode: '0600'
 
 - name: Copy cacerts.pem to remote host
   copy:
     src: "{{ cacerts_pem_file }}"
     dest: "{{ remote_cert_path }}/cacerts.pem"
     mode: '0644'
-
-- name: Create TLS secret for Rancher ingress
-  command: kubectl -n cattle-system create secret tls tls-rancher-ingress --cert={{ remote_cert_path }}/fullchain.pem --key={{ remote_cert_path }}/privkey.pem
 
 - name: Create CA secret for Rancher
   command: kubectl -n cattle-system create secret generic tls-ca --from-file={{ remote_cert_path }}/cacerts.pem
@@ -45,7 +31,7 @@
     --set hostname={{ rancher_domain }}
     --set bootstrapPassword={{ rancher_password }}
     --version {{ rancher_version }}
-    --set ingress.tls.source=secret
+    --set tls=external
     --set privateCA=true
 
 - name: Wait for Rancher to be ready

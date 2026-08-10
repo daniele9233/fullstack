@@ -68,7 +68,7 @@ rke2_version: ""
 # in /etc/cni/net.d convivono conflist di CNI diversi e i pod restano bloccati
 # in ContainerCreating. Lista vuota = default RKE2 (canal).
 rke2_cni:
-  - canal
+  - calico
 
 # Componenti packaged da disabilitare. Con rke2_cni: [calico] va valorizzato
 # con [rke2-canal, cilium], come nel cluster di produzione di riferimento.
@@ -169,12 +169,12 @@ local_ssl_key_path: "files/privkey.pem"
 
 # >>> VERIFICA CHE QUESTI DUE INDIRIZZI SIANO LIBERI NELLA TUA VLAN <<<
 vip_rancher_ip: "10.205.166.230"
-vip_rancher_prefix: 24
+vip_rancher_prefix: 28
 vip_patroni_ip: "10.205.166.231"
 
 # Interfaccia su cui keepalived annuncia i VIP. Deve esistere sui bilanciatori:
 # verificala con "ip -br addr" prima di lanciare.
-keepalived_interface: "ens160"
+keepalived_interface: "ens5"
 
 # I VRID devono essere unici nella VLAN: due cluster keepalived con lo stesso
 # VRID sullo stesso dominio di broadcast si disturbano a vicenda.
