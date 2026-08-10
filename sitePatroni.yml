@@ -1,44 +1,4 @@
 ---
-# PLAY ZERO: preparazione dei nodi, prima di qualsiasi installazione.
-# Disattiva ufw e AppArmor ovunque: RKE2, Gluster, NFS, Pacemaker e VRRP usano
-# molte porte e VRRP non e' nemmeno TCP (protocollo IP 112). Con il firewall
-# attivo i cluster sembrano partire e poi non convergono mai.
-# Escluso [local]: e' la macchina di controllo, non un nodo gestito.
-- name: Prepara i nodi
-  hosts: all:!local
-  become: yes
-  gather_facts: no
-  roles:
-    - role: host_prep
-
-
-# PRIMO PLAY: disco dati dedicato.
-# Destinazione per gruppo: /var/lib/rancher sui nodi RKE2,
-# postgres_mount_point sui database (group_vars/db_servers.yml).
-#
-# Esclusi:
-#   [local]           macchina di controllo, non va partizionata
-#   [nginx_servers]   i bilanciatori non hanno un disco dati
-#   [gluster_servers] i brick vengono montati a mano
-#
-# Il ruolo non tocca nulla dove il mount point risulta gia' montato, quindi
-# convive con i dischi predisposti manualmente.
-- hosts: all:!local:!nginx_servers:!gluster_servers
-  become: yes
-  gather_facts: yes
-  roles:
-    - role: create_disk
-
-
-# SECONDO PLAY: Aggiorna /etc/hosts su tutti i server
-- hosts: all,local
-  become: yes
-  gather_facts: no
-  roles:
-    - role: update_hosts_file
-
-
-
 # PLAY DATABASE: cluster PostgreSQL con Patroni ed etcd.
 #
 # Il ruolo e' idempotente: rilanciarlo non cancella dati e non riavvia servizi.
@@ -58,15 +18,20 @@
     # findmnt e non "df -h | grep": il grep passa anche quando a essere montata
     # e' solo una sottodirectory, o quando la stringa compare nel nome di un
     # device. findmnt sul percorso corrisponde al mountpoint esatto e basta.
-    - name: Verifica che il disco dati sia montato su {{ postgres_mount_point }}
-      command: "findmnt -n -o TARGET,SOURCE,FSTYPE {{ postgres_mount_point }}"
-      register: postgres_mount
-      changed_when: false
-      failed_when: postgres_mount.rc != 0
+    #
+  pre_tasks:
+    # Solo per test senza disco dedicato: crea la directory sul filesystem di
+    # sistema invece di verificare un mount. NON usare cosi' in produzione,
+    # dove il disco dati va montato da create_disk o a mano.
+    - name: Crea manualmente /var/lib/postgresql (test senza disco dedicato)
+      file:
+        path: "{{ postgres_mount_point }}"
+        state: directory
+        owner: postgres
+        group: postgres
+        mode: '0700'
+      ignore_errors: yes
 
-    - name: Mostra il filesystem dei dati
-      debug:
-        msg: "{{ inventory_hostname }}: {{ postgres_mount.stdout | trim }}"
   roles:
     - postgresql_cluster
   post_tasks:
