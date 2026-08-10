@@ -65,6 +65,12 @@ postgres_drop_packaged_cluster: true
 patroni_leader_retries: 60
 patroni_leader_delay: 5
 
+# Attesa che etcd risponda su /health dopo l'avvio: 30 tentativi da 5 secondi.
+# Se scade, il ruolo riporta stato del servizio e ultime righe del journal
+# invece del solo "connection refused".
+etcd_health_retries: 30
+etcd_health_delay: 5
+
 patroni_scope: postgres
 patroni_namespace: /pg_cluster/
 patroni_restapi_port: 8008

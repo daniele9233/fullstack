@@ -8,13 +8,15 @@ restapi:
   listen: 0.0.0.0:{{ patroni_restapi_port }}
   connect_address: {{ hostvars[inventory_hostname].ansible_host }}:{{ patroni_restapi_port }}
 
-etcd:
+{{ '#' }} Sezione etcd3, non "etcd" con dentro "etcd3: true": quella chiave non
+{{ '#' }} esiste in Patroni, che leggendo la sezione "etcd" userebbe l'API v2,
+{{ '#' }} deprecata in etcd 3.5 e rimossa in 3.6.
+etcd3:
   hosts:
 {% for host in nodes %}
     - {{ hostvars[host].ansible_host }}:{{ etcd_client_port }}
 {% endfor %}
   protocol: http
-  etcd3: true
 
 bootstrap:
   dcs:

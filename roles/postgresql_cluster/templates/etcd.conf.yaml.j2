@@ -13,5 +13,6 @@ initial-advertise-peer-urls: http://{{ hostvars[inventory_hostname].ansible_host
 listen-peer-urls: http://{{ hostvars[inventory_hostname].ansible_host }}:{{ etcd_peer_port }}
 advertise-client-urls: http://{{ hostvars[inventory_hostname].ansible_host }}:{{ etcd_client_port }}
 listen-client-urls: http://{{ hostvars[inventory_hostname].ansible_host }}:{{ etcd_client_port }},http://localhost:{{ etcd_client_port }}
-# Abilita esplicitamente l'API v2
-enable-v2: true
+{{ '#' }} Nessun enable-v2: l'API v2 e' deprecata in etcd 3.5 e RIMOSSA in 3.6, dove
+{{ '#' }} quell'opzione impedisce l'avvio. Patroni parla con il DCS in v3, vedi la
+{{ '#' }} sezione etcd3 di patroni.yml.

@@ -332,10 +332,98 @@
     backup: yes
   register: etcd_config
 
-- name: Start etcd service
+# La unit del pacchetto avvia etcd SENZA --config-file: legge /etc/default/etcd
+# e ignora /etc/etcd/etcd.conf.yaml. Senza questo override etcd parte con i
+# valori predefiniti, ascolta solo su localhost:2379, e il controllo di salute
+# sull'IP del nodo riceve "connection refused" mentre systemd lo dà per attivo.
+#
+# Quando riceve --config-file, etcd ignora gli altri flag e le variabili
+# d'ambiente: il drop-in rende quel file l'unica fonte di configurazione.
+- name: Trova il binario etcd
+  shell: "command -v etcd"
+  args:
+    executable: /bin/bash
+  register: etcd_bin
+  changed_when: false
+
+- name: Crea la directory del drop-in di etcd
+  file:
+    path: /etc/systemd/system/etcd.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Fai leggere a etcd la configurazione scritta dal ruolo
+  copy:
+    dest: /etc/systemd/system/etcd.service.d/10-config-file.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      {{ '#' }} {{ ansible_managed }} - roles/postgresql_cluster
+      [Service]
+      ExecStart=
+      ExecStart={{ etcd_bin.stdout | trim }} --config-file /etc/etcd/etcd.conf.yaml
+  register: etcd_dropin
+
+# Le porte vanno verificate PRIMA di avviare: se le tiene qualcun altro, etcd
+# esce subito e l'unico segnale sarebbe un "connection refused" dopo due minuti
+# e mezzo di tentativi. Su un nodo che e' anche server RKE2 la 2379 e la 2380
+# sono dell'etcd interno di RKE2.
+#
+# Il controllo prova a fare il bind, invece di leggere i nomi dei processi:
+# l'etcd di RKE2 gira in un pod statico e si chiama "etcd" anche lui, quindi
+# distinguerlo per nome non funzionerebbe. Se il nostro servizio e' gia' attivo
+# le porte sono legittimamente sue e non si controlla niente.
+- name: Verifica che le porte di etcd siano libere
+  shell: |
+    python3 - <<'PY'
+    import socket, subprocess, sys
+
+    servizio = subprocess.run(
+        ["systemctl", "show", "-p", "MainPID", "--value", "etcd"],
+        capture_output=True, text=True).stdout.strip()
+    if servizio not in ("", "0"):
+        sys.exit(0)
+
+    occupate = []
+    for porta in ({{ etcd_client_port }}, {{ etcd_peer_port }}):
+        s = socket.socket()
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("{{ hostvars[inventory_hostname].ansible_host }}", porta))
+        except OSError:
+            occupate.append(str(porta))
+        finally:
+            s.close()
+
+    if occupate:
+        print(",".join(occupate))
+        sys.exit(1)
+    PY
+  args:
+    executable: /bin/bash
+  register: etcd_ports
+  changed_when: false
+  failed_when: false
+
+- name: Fermati se le porte di etcd sono gia' occupate
+  assert:
+    that:
+      - etcd_ports.rc == 0
+    fail_msg: >-
+      Su {{ inventory_hostname }} le porte {{ etcd_ports.stdout | trim }} sono
+      gia' occupate da un altro processo. Se questo nodo e' anche un server
+      RKE2, sono quelle del suo etcd interno: sposta etcd_client_port ed
+      etcd_peer_port su valori liberi, per esempio 2479 e 2480.
+
+- name: Avvia etcd
   systemd:
     name: etcd
-    state: started
+    # Un cambio di configurazione senza riavvio resterebbe senza effetto: etcd
+    # legge il file solo all'avvio.
+    state: "{{ 'restarted' if (etcd_config is changed or etcd_dropin is changed) else 'started' }}"
     enabled: yes
     daemon_reload: yes
 
@@ -345,9 +433,35 @@
     status_code: 200
   register: etcd_health
   until: etcd_health.status | default(0) == 200
-  retries: 30
-  delay: 5
+  retries: "{{ etcd_health_retries }}"
+  delay: "{{ etcd_health_delay }}"
   changed_when: false
+  failed_when: false
+
+# Senza questo, il fallimento del controllo di salute dice solo "connection
+# refused" e il motivo resta nel journal del nodo.
+- name: Leggi lo stato di etcd se non risponde
+  shell: |
+    systemctl is-active etcd || true
+    journalctl -u etcd -n 20 --no-pager || true
+  args:
+    executable: /bin/bash
+  register: etcd_diag
+  changed_when: false
+  failed_when: false
+  when: etcd_health.status | default(0) != 200
+
+- name: Fermati se etcd non risponde
+  assert:
+    that:
+      - etcd_health.status | default(0) == 200
+    fail_msg: >-
+      etcd non risponde su
+      http://{{ hostvars[inventory_hostname].ansible_host }}:{{ etcd_client_port }}/health
+      dopo {{ etcd_health_retries | int * etcd_health_delay | int }} secondi.
+      Stato del servizio e ultime righe del journal:
+      {{ etcd_diag.stdout_lines | default([]) | join(' | ') }}
+  when: etcd_health.status | default(0) != 200
 
 # --- Patroni ----------------------------------------------------------------
 
