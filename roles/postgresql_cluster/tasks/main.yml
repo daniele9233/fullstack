@@ -20,11 +20,22 @@
   run_once: true
 
 # --- Rilevamento dello stato esistente -------------------------------------
-# PG_VERSION esiste solo dentro una PGDATA inizializzata; la directory member
-# solo dentro un datastore etcd gia' formato. Sono i due segnali che
-# distinguono una prima installazione da una riesecuzione.
+# Il marcatore di una PGDATA gestita da Patroni e' patroni.dynamic.json, che
+# scrive Patroni e nessun altro.
+#
+# NON si guarda PG_VERSION: quel file esiste anche nel cluster "main" che
+# percona-postgresql crea da solo durante l'installazione, come fa
+# postgresql-common su Debian e Ubuntu. Usandolo, su una macchina nuova il
+# ruolo concludeva "gia' inizializzato" subito dopo aver installato i pacchetti,
+# saltava l'attesa della leadership e avviava le repliche prima che esistesse un
+# leader.
 
-- name: Verifica se PostgreSQL e' gia' inizializzato
+- name: Verifica se PGDATA e' gestita da Patroni
+  stat:
+    path: "{{ postgres_data_dir }}/patroni.dynamic.json"
+  register: patroni_marker
+
+- name: Verifica se PGDATA contiene un cluster PostgreSQL
   stat:
     path: "{{ postgres_data_dir }}/PG_VERSION"
   register: pg_version_file
@@ -36,15 +47,17 @@
 
 - name: Determina cosa va inizializzato
   set_fact:
-    pg_needs_bootstrap: "{{ postgres_force_reinit | bool or not pg_version_file.stat.exists }}"
+    pg_needs_bootstrap: "{{ postgres_force_reinit | bool or not patroni_marker.stat.exists }}"
     etcd_needs_bootstrap: "{{ postgres_force_reinit | bool or not etcd_member_dir.stat.exists }}"
 
 - name: Mostra lo stato rilevato
   debug:
     msg: >-
       {{ inventory_hostname }}:
-      PostgreSQL {{ 'da inizializzare' if pg_needs_bootstrap else 'gia inizializzato in ' ~ postgres_data_dir }},
+      PostgreSQL {{ 'da inizializzare' if pg_needs_bootstrap else 'gia gestito da Patroni in ' ~ postgres_data_dir }},
       etcd {{ 'da inizializzare' if etcd_needs_bootstrap else 'datastore gia presente' }}
+      {{ '(cluster del pacchetto da rimuovere)'
+         if pg_version_file.stat.exists and not patroni_marker.stat.exists else '' }}
       {{ '(FORZATO: i dati verranno CANCELLATI)' if postgres_force_reinit | bool else '' }}
 
 # --- Preparazione del sistema ----------------------------------------------
@@ -208,6 +221,33 @@
     name: postgresql
     state: stopped
     enabled: no
+
+# --- Cluster creato dal pacchetto -------------------------------------------
+# percona-postgresql crea da solo il cluster "main" in postgres_data_dir mentre
+# si installa. Quella PGDATA non va bene a Patroni, che deve farla lui con i
+# parametri del proprio bootstrap: trovandola gia' piena, sul primo nodo adotta
+# una configurazione che non e' la sua (e' da li' che nasce il
+# "max_wal_senders: 10->5" fra i pending restart, con PostgreSQL in start
+# failed), e sugli altri si rifiuta di clonare il leader dentro una directory
+# non vuota, esce, e la REST API non risponde mai.
+#
+# pg_dropcluster e non "rm -rf": e' lo strumento di postgresql-common, toglie
+# anche /etc/postgresql/<versione>/main dal registro dei cluster e si rifiuta di
+# agire se il cluster e' in esecuzione.
+
+- name: Elenca i cluster PostgreSQL registrati
+  command: pg_lsclusters -h
+  register: pg_clusters
+  changed_when: false
+  failed_when: false
+
+- name: Rimuovi il cluster creato dal pacchetto
+  command: "pg_dropcluster --stop {{ postgres_version }} main"
+  when:
+    - postgres_drop_packaged_cluster | bool
+    # Mai su una PGDATA che Patroni gestisce gia': li' ci sono i dati veri.
+    - not patroni_marker.stat.exists
+    - pg_clusters.stdout_lines | select('match', '^' ~ postgres_version ~ '\s+main\s') | list | length > 0
 
 # --- Directory dati ---------------------------------------------------------
 # Cancellazione solo su richiesta esplicita. Senza postgres_force_reinit le

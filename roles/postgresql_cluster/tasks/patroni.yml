@@ -38,9 +38,19 @@
     daemon_reload: yes
   when: inventory_hostname == patroni_primary_node
 
-- name: Wait 20 seconds for Patroni leader election
-  pause:
-    seconds: "{{ patroni_bootstrap_wait }}"
+# Si aspetta la leadership vera, non un numero di secondi: sul primo bootstrap
+# il nodo deve fare initdb, avviare PostgreSQL e prendersi la chiave nel DCS, e
+# quanto ci mette dipende dalla macchina. /leader risponde 200 solo sul nodo che
+# e' leader in quel momento.
+- name: Attendi che il primo nodo abbia acquisito la leadership
+  uri:
+    url: "http://{{ hostvars[patroni_primary_node].ansible_host }}:{{ patroni_restapi_port }}/leader"
+    status_code: 200
+  register: patroni_leader
+  until: patroni_leader.status | default(0) == 200
+  retries: "{{ patroni_leader_retries }}"
+  delay: "{{ patroni_leader_delay }}"
+  changed_when: false
   when:
     - inventory_hostname == patroni_primary_node
     - pg_needs_bootstrap | bool

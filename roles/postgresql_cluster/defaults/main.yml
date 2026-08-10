@@ -52,8 +52,18 @@ postgres_dist_upgrade: true
 # il cluster e' gia' inizializzato.
 postgres_force_reinit: false
 
-# Attesa fra l'avvio del primo nodo e quello degli altri, solo al bootstrap.
-patroni_bootstrap_wait: 20
+# Rimuove il cluster "main" che percona-postgresql crea da solo installandosi.
+# Patroni deve inizializzare PGDATA per conto suo: una directory gia' piena gli
+# impedisce sia di configurare il primo nodo sia di clonare il leader sugli
+# altri. La rimozione NON avviene mai su una PGDATA con patroni.dynamic.json,
+# cioe' gia' gestita da Patroni: li' ci sono i dati veri.
+postgres_drop_packaged_cluster: true
+
+# Attesa che il primo nodo diventi leader, solo al bootstrap: 60 tentativi da
+# 5 secondi, cioe' 5 minuti. Prima era una pausa fissa di 20 secondi, che su una
+# macchina lenta scadeva prima che initdb avesse finito.
+patroni_leader_retries: 60
+patroni_leader_delay: 5
 
 patroni_scope: postgres
 patroni_namespace: /pg_cluster/
