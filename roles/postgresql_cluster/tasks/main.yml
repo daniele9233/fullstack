@@ -145,19 +145,61 @@
   retries: "{{ apt_lock_retries | default(60) }}"
   delay: "{{ apt_lock_delay | default(5) }}"
 
-# Il nome del file generato da percona-release varia fra le versioni: si cerca
-# per pattern invece di indovinarlo.
-- name: Verifica se il repo {{ percona_repo }} e' gia' abilitato
-  find:
-    paths: /etc/apt/sources.list.d
-    patterns: "*{{ percona_repo }}*"
-  register: percona_repo_files
-
+# "percona-release setup" e' idempotente: riscrive la configurazione del repo e
+# non fa danni se e' gia' a posto, quindi gira SEMPRE.
+#
+# Prima era condizionato all'esistenza di un file *{{ percona_repo }}* in
+# /etc/apt/sources.list.d, e bastava un file rimasto indietro perche' il setup
+# venisse saltato lasciando un repo inutilizzabile: apt poi falliva con
+# "No package matching 'percona-postgresql-{{ postgres_version }}'", che non
+# dice niente su dove sia il problema. Il controllo su un file presume anche il
+# formato .list, mentre le versioni recenti di percona-release scrivono in
+# deb822 (.sources).
 - name: "Setup Percona PostgreSQL {{ postgres_version }} repo"
   command: "percona-release setup {{ percona_repo }}"
-  when: percona_repo_files.matched == 0
+  register: percona_setup
+  changed_when: "'already enabled' not in (percona_setup.stdout | default(''))"
+
+- name: Aggiorna l'indice dei pacchetti dopo il setup del repo
+  apt:
+    update_cache: yes
+  # Riprova SOLO se dpkg e' occupato da un altro processo (vedi apt_lock_retries
+  # in group_vars/all.yml). Qualsiasi altro errore ferma subito il task: senza
+  # questa condizione un pacchetto inesistente verrebbe ritentato 60 volte
+  # nascondendo il messaggio vero per cinque minuti.
+  register: apt_result
+  until: apt_result is succeeded or ('lock' not in apt_result.msg | default('') | lower)
+  retries: "{{ apt_lock_retries | default(60) }}"
+  delay: "{{ apt_lock_delay | default(5) }}"
 
 # --- Pacchetti --------------------------------------------------------------
+
+# Il messaggio di apt quando un pacchetto non c'e' non distingue fra "repo non
+# configurato", "indice non scaricato" e "nome del pacchetto sbagliato". Questa
+# verifica lo dice prima, e indica dove guardare.
+- name: Verifica che il repo esponga i pacchetti PostgreSQL
+  shell: >-
+    set -o pipefail;
+    apt-cache policy {{ postgres_packages[0] }} | awk '/Candidate:/ {print $2}'
+  args:
+    executable: /bin/bash
+  register: pg_candidate
+  changed_when: false
+  failed_when: false
+
+- name: Fermati se il repo Percona non e' utilizzabile
+  assert:
+    that:
+      - (pg_candidate.stdout | trim) not in ['', '(none)']
+    fail_msg: >-
+      {{ postgres_packages[0] }} non risulta disponibile su
+      {{ inventory_hostname }}: il repo {{ percona_repo }} non e' configurato,
+      oppure il suo indice non e' stato scaricato. Sul nodo controlla
+      "percona-release show", "ls /etc/apt/sources.list.d/" e l'esito di
+      "apt-get update", e verifica che raggiunga repo.percona.com.
+    success_msg: >-
+      {{ postgres_packages[0] }} disponibile in versione
+      {{ pg_candidate.stdout | trim }}.
 
 - name: "Install PostgreSQL {{ postgres_version }} and tools"
   apt:
