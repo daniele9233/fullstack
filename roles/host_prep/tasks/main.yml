@@ -92,26 +92,69 @@
 # interromperlo a meta' transazione lascerebbe dpkg da riparare a mano. Si
 # aspetta che esca da solo.
 #
-# Il controllo e' sui processi e non sul file di lock: dpkg lo blocca con
-# fcntl(), che "flock" da riga di comando non vede, quindi un test con flock
-# passerebbe anche a lock occupato. "unattended-upgr" e' il nome troncato a 15
-# caratteri con cui il processo compare in /proc.
-- name: Attendi che dpkg e apt siano liberi
+# Si prova a prendere il lock, non si guardano i processi. Cercare per nome non
+# funziona: unattended-upgrade-shutdown gira SEMPRE dal boot in attesa del
+# segnale di spegnimento, non tiene nessun lock, e in /proc il suo nome e'
+# troncato a "unattended-upgr". Un controllo su quel nome non passerebbe mai.
+#
+# lockf() usa fcntl(), lo stesso meccanismo di dpkg e apt: se il lock si prende,
+# e' libero davvero. Viene rilasciato subito. Nessun O_TRUNC nella open: i file
+# di lock non vanno azzerati.
+- name: Attendi che il lock di dpkg sia libero
   shell: |
-    for i in $(seq 1 {{ apt_lock_retries }}); do
-        if ! pgrep -x 'apt|apt-get|dpkg|unattended-upgr' >/dev/null; then
-            exit 0
-        fi
-        sleep {{ apt_lock_delay }}
-    done
-    echo "ancora attivi dopo $(( {{ apt_lock_retries }} * {{ apt_lock_delay }} )) secondi:"
-    pgrep -a -x 'apt|apt-get|dpkg|unattended-upgr'
-    exit 1
+    python3 - <<'PY'
+    import fcntl, os, sys, time
+
+    LOCKS = [
+        "/var/lib/dpkg/lock-frontend",
+        "/var/lib/dpkg/lock",
+        "/var/cache/apt/archives/lock",
+        "/var/lib/apt/lists/lock",
+    ]
+
+    def occupato():
+        for path in LOCKS:
+            if not os.path.exists(path):
+                continue
+            fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o640)
+            try:
+                fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.lockf(fd, fcntl.LOCK_UN)
+            except OSError:
+                return path
+            finally:
+                os.close(fd)
+        return None
+
+    for _ in range({{ apt_lock_retries }}):
+        preso = occupato()
+        if preso is None:
+            sys.exit(0)
+        time.sleep({{ apt_lock_delay }})
+
+    print(preso)
+    sys.exit(1)
+    PY
   args:
     executable: /bin/bash
   register: host_prep_apt_lock
   changed_when: false
+  # Non blocca il playbook: se il lock resta occupato, i task apt dei ruoli
+  # hanno gia' until/retries e riproveranno per conto loro. Questa attesa serve
+  # solo a non farli partire in salita.
+  failed_when: false
   when: apt_pause_unattended_upgrades | bool
+
+- name: Segnala che il lock di dpkg e' ancora occupato
+  debug:
+    msg: >-
+      {{ inventory_hostname }}: {{ host_prep_apt_lock.stdout | trim }} risulta
+      ancora bloccato dopo {{ apt_lock_retries | int * apt_lock_delay | int }}
+      secondi. Il playbook prosegue e i task apt riproveranno da soli. Per
+      vedere chi lo tiene: fuser -v /var/lib/dpkg/lock-frontend
+  when:
+    - apt_pause_unattended_upgrades | bool
+    - host_prep_apt_lock.rc | default(0) != 0
 
 # --- Hostname ---------------------------------------------------------------
 
