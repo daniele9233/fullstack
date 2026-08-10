@@ -249,7 +249,7 @@ local_ssl_key_path: "files/privkey.pem"
 #   - vip_patroni_ip  -> lo tiene haproxy, espone Patroni/PgBouncer
 
 # >>> VERIFICA CHE QUESTI DUE INDIRIZZI SIANO LIBERI NELLA TUA VLAN <<<
-vip_rancher_ip: "10.205.166.230"
+vip_rancher_ip: "10.205.166.221"
 vip_rancher_prefix: 28
 vip_patroni_ip: "10.205.166.231"
 

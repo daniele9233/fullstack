@@ -1,0 +1,83 @@
+---
+# PLAY ZERO: preparazione dei nodi, prima di qualsiasi installazione.
+# Disattiva ufw e AppArmor ovunque: RKE2, Gluster, NFS, Pacemaker e VRRP usano
+# molte porte e VRRP non e' nemmeno TCP (protocollo IP 112). Con il firewall
+# attivo i cluster sembrano partire e poi non convergono mai.
+# Escluso [local]: e' la macchina di controllo, non un nodo gestito.
+- name: Prepara i nodi
+  hosts: all:!local
+  become: yes
+  gather_facts: no
+  roles:
+    - role: host_prep
+
+
+# PRIMO PLAY: disco dati dedicato.
+# Destinazione per gruppo: /var/lib/rancher sui nodi RKE2,
+# postgres_mount_point sui database (group_vars/db_servers.yml).
+#
+# Esclusi:
+#   [local]           macchina di controllo, non va partizionata
+#   [nginx_servers]   i bilanciatori non hanno un disco dati
+#   [gluster_servers] i brick vengono montati a mano
+#
+# Il ruolo non tocca nulla dove il mount point risulta gia' montato, quindi
+# convive con i dischi predisposti manualmente.
+- hosts: all:!local:!nginx_servers:!gluster_servers
+  become: yes
+  gather_facts: yes
+  roles:
+    - role: create_disk
+
+
+# SECONDO PLAY: Aggiorna /etc/hosts su tutti i server
+- hosts: all,local
+  become: yes
+  gather_facts: no
+  roles:
+    - role: update_hosts_file
+
+
+
+# PLAY DATABASE: cluster PostgreSQL con Patroni ed etcd.
+#
+# Il ruolo e' idempotente: rilanciarlo non cancella dati e non riavvia servizi.
+# Per ripartire da zero serve -e postgres_force_reinit=true, che AZZERA il
+# database e il datastore etcd su tutti i nodi.
+#
+# Deve girare prima del play dei bilanciatori: haproxy indirizza questi nodi.
+- name: Setup PostgreSQL {{ postgres_version }} cluster with Patroni
+  hosts: db_servers
+  become: yes
+  gather_facts: yes
+  pre_tasks:
+    # Il disco dati e' predisposto dal primo play, oppure montato a mano.
+    # In entrambi i casi questo controllo impedisce a Patroni di inizializzare
+    # il database sulla partizione di sistema se il mount non c'e'.
+    #
+    # findmnt e non "df -h | grep": il grep passa anche quando a essere montata
+    # e' solo una sottodirectory, o quando la stringa compare nel nome di un
+    # device. findmnt sul percorso corrisponde al mountpoint esatto e basta.
+    - name: Verifica che il disco dati sia montato su {{ postgres_mount_point }}
+      command: "findmnt -n -o TARGET,SOURCE,FSTYPE {{ postgres_mount_point }}"
+      register: postgres_mount
+      changed_when: false
+      failed_when: postgres_mount.rc != 0
+
+    - name: Mostra il filesystem dei dati
+      debug:
+        msg: "{{ inventory_hostname }}: {{ postgres_mount.stdout | trim }}"
+  roles:
+    - postgresql_cluster
+  post_tasks:
+    - name: Riepilogo cluster database
+      debug:
+        msg:
+          - "Nodi: {{ groups['db_servers'] | join(', ') }}"
+          - "Bootstrap dal nodo: {{ patroni_primary_node }}"
+          - "PostgreSQL {{ postgres_version }} in {{ postgres_data_dir }}"
+          - "Stato cluster: patronictl -c /etc/patroni/patroni.yml list"
+          - "PgBouncer installato ma NON configurato: haproxy punta alla {{ haproxy_backend_port }}, che restera' chiusa"
+      run_once: true
+
+

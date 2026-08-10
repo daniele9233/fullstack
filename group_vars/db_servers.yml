@@ -19,7 +19,7 @@ disk_lv_name: "lv_data"
 # questo file e non a formattazione avvenuta.
 # Se su un host il disco dati non e' sdb, sovrascrivilo nell'inventario:
 #   dbserver02 ansible_host=... disk_device=/dev/sdc
-disk_device: "/dev/sdb"
+disk_device: ""
 
 # 100%FREE: l'LV prende tutta la partizione, come i 150G in esercizio.
 disk_lv_size: "100%FREE"

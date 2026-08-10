@@ -53,6 +53,33 @@
       when: clean_nodes_before_join | bool
 
 
+# keepalived per primo: imposta net.ipv4.ip_nonlocal_bind, senza il quale
+# nginx e haproxy non riescono a fare il bind del VIP sul nodo che in quel
+# momento non lo possiede.
+- name: Install and configure load balancers
+  hosts: nginx_servers
+  become: yes
+  # serial: 1 per riconfigurare un bilanciatore alla volta. Senza, il riavvio
+  # di keepalived e il reload di nginx avverrebbero in parallelo sui due nodi
+  # e il servizio resterebbe scoperto per qualche secondo a ogni esecuzione.
+  serial: 1
+  order: inventory
+  roles:
+    - keepalived_install
+    - haproxy_install
+    - nginx_install
+  post_tasks:
+    - name: Display completion message
+      debug:
+        msg:
+          - "Bilanciatore {{ inventory_hostname }} configurato."
+          - "Ruolo VRRP: {{ 'MASTER' if groups['nginx_servers'].index(inventory_hostname) == 0 else 'BACKUP' }}"
+          - "VIP console Rancher (nginx): {{ vip_rancher_ip }} -> {{ nginx_server_name }}"
+          - "VIP Patroni/PgBouncer (haproxy): {{ vip_patroni_ip }} porte {{ haproxy_primary_port }}/{{ haproxy_standby_port }}"
+          - "Statistiche haproxy: http://{{ hostvars[inventory_hostname].ansible_host }}:{{ haproxy_stats_port }}/"
+          - "Certificati attesi in {{ nginx_cert_dir }}/"
+                                                                              
+
 # TERZO PLAY: cluster RKE2 locale sui master, UN NODO ALLA VOLTA.
 # serial: 1 non e' un'ottimizzazione, e' un requisito: i server etcd vanno
 # aggiunti in sequenza e il primo host del gruppo deve completare il bootstrap
@@ -207,29 +234,3 @@
       run_once: true
 
 
-# SETTIMO PLAY: bilanciatori in HA - keepalived, haproxy, nginx.
-# keepalived per primo: imposta net.ipv4.ip_nonlocal_bind, senza il quale
-# nginx e haproxy non riescono a fare il bind del VIP sul nodo che in quel
-# momento non lo possiede.
-- name: Install and configure load balancers
-  hosts: nginx_servers
-  become: yes
-  # serial: 1 per riconfigurare un bilanciatore alla volta. Senza, il riavvio
-  # di keepalived e il reload di nginx avverrebbero in parallelo sui due nodi
-  # e il servizio resterebbe scoperto per qualche secondo a ogni esecuzione.
-  serial: 1
-  order: inventory
-  roles:
-    - keepalived_install
-    - haproxy_install
-    - nginx_install
-  post_tasks:
-    - name: Display completion message
-      debug:
-        msg:
-          - "Bilanciatore {{ inventory_hostname }} configurato."
-          - "Ruolo VRRP: {{ 'MASTER' if groups['nginx_servers'].index(inventory_hostname) == 0 else 'BACKUP' }}"
-          - "VIP console Rancher (nginx): {{ vip_rancher_ip }} -> {{ nginx_server_name }}"
-          - "VIP Patroni/PgBouncer (haproxy): {{ vip_patroni_ip }} porte {{ haproxy_primary_port }}/{{ haproxy_standby_port }}"
-          - "Statistiche haproxy: http://{{ hostvars[inventory_hostname].ansible_host }}:{{ haproxy_stats_port }}/"
-          - "Certificati attesi in {{ nginx_cert_dir }}/"
