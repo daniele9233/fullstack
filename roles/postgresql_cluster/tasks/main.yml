@@ -63,11 +63,23 @@
     update_cache: yes
     upgrade: dist
   when: postgres_dist_upgrade | bool
+  # Riprova se dpkg e' occupato da un altro processo: vedi apt_lock_retries
+  # in group_vars/all.yml.
+  register: apt_result
+  until: apt_result is succeeded
+  retries: "{{ apt_lock_retries | default(60) }}"
+  delay: "{{ apt_lock_delay | default(5) }}"
 
 - name: Install utility packages
   apt:
     name: "{{ postgres_utility_packages }}"
     state: present
+  # Riprova se dpkg e' occupato da un altro processo: vedi apt_lock_retries
+  # in group_vars/all.yml.
+  register: apt_result
+  until: apt_result is succeeded
+  retries: "{{ apt_lock_retries | default(60) }}"
+  delay: "{{ apt_lock_delay | default(5) }}"
 
 - name: Add /etc/hosts entries
   lineinfile:
@@ -90,6 +102,12 @@
     name: curl
     state: present
   when: not percona_release_bin.stat.exists
+  # Riprova se dpkg e' occupato da un altro processo: vedi apt_lock_retries
+  # in group_vars/all.yml.
+  register: apt_result
+  until: apt_result is succeeded
+  retries: "{{ apt_lock_retries | default(60) }}"
+  delay: "{{ apt_lock_delay | default(5) }}"
 
 - name: Download Percona repo via curl (workaround bug)
   shell: "curl -fsSL -o /tmp/percona-release.deb {{ percona_release_deb_url }}"
@@ -99,6 +117,12 @@
   apt:
     deb: /tmp/percona-release.deb
   when: not percona_release_bin.stat.exists
+  # Riprova se dpkg e' occupato da un altro processo: vedi apt_lock_retries
+  # in group_vars/all.yml.
+  register: apt_result
+  until: apt_result is succeeded
+  retries: "{{ apt_lock_retries | default(60) }}"
+  delay: "{{ apt_lock_delay | default(5) }}"
 
 # Il nome del file generato da percona-release varia fra le versioni: si cerca
 # per pattern invece di indovinarlo.
@@ -119,11 +143,23 @@
     name: "{{ postgres_packages }}"
     state: present
     update_cache: yes
+  # Riprova se dpkg e' occupato da un altro processo: vedi apt_lock_retries
+  # in group_vars/all.yml.
+  register: apt_result
+  until: apt_result is succeeded
+  retries: "{{ apt_lock_retries | default(60) }}"
+  delay: "{{ apt_lock_delay | default(5) }}"
 
 - name: Install etcd specific version
   apt:
     name: "etcd={{ etcd_version }}"
     state: present
+  # Riprova se dpkg e' occupato da un altro processo: vedi apt_lock_retries
+  # in group_vars/all.yml.
+  register: apt_result
+  until: apt_result is succeeded
+  retries: "{{ apt_lock_retries | default(60) }}"
+  delay: "{{ apt_lock_delay | default(5) }}"
 
 # Il servizio postgresql del pacchetto va disattivato: e' Patroni ad avviare e
 # fermare PostgreSQL. Idempotente, non cambia nulla se e' gia' cosi'.

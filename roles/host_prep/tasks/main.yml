@@ -63,6 +63,56 @@
     - disable_apparmor | bool
     - host_prep_has_apparmor | bool
 
+# --- Aggiornamenti automatici -----------------------------------------------
+# Va fatto qui, nel primo play: i task apt dei ruoli successivi girano anche
+# mezz'ora dopo, e senza questo si trovano il lock di dpkg occupato.
+
+# Su una macchina appena creata cloud-init sta ancora installando pacchetti.
+# Fermare i timer mentre lui lavora non servirebbe a niente: prima si aspetta
+# che abbia finito. Se cloud-init non c'e', il comando non esiste e si tira
+# dritto.
+- name: Attendi la fine di cloud-init
+  command: cloud-init status --wait
+  register: host_prep_cloud_init
+  changed_when: false
+  failed_when: false
+  when: apt_pause_unattended_upgrades | bool
+
+- name: Ferma i timer degli aggiornamenti automatici
+  systemd:
+    name: "{{ item }}"
+    state: stopped
+  loop:
+    - apt-daily.timer
+    - apt-daily-upgrade.timer
+  failed_when: false
+  when: apt_pause_unattended_upgrades | bool
+
+# Fermare i timer non tocca un aggiornamento GIA' in corso, ed e' giusto cosi':
+# interromperlo a meta' transazione lascerebbe dpkg da riparare a mano. Si
+# aspetta che esca da solo.
+#
+# Il controllo e' sui processi e non sul file di lock: dpkg lo blocca con
+# fcntl(), che "flock" da riga di comando non vede, quindi un test con flock
+# passerebbe anche a lock occupato. "unattended-upgr" e' il nome troncato a 15
+# caratteri con cui il processo compare in /proc.
+- name: Attendi che dpkg e apt siano liberi
+  shell: |
+    for i in $(seq 1 {{ apt_lock_retries }}); do
+        if ! pgrep -x 'apt|apt-get|dpkg|unattended-upgr' >/dev/null; then
+            exit 0
+        fi
+        sleep {{ apt_lock_delay }}
+    done
+    echo "ancora attivi dopo $(( {{ apt_lock_retries }} * {{ apt_lock_delay }} )) secondi:"
+    pgrep -a -x 'apt|apt-get|dpkg|unattended-upgr'
+    exit 1
+  args:
+    executable: /bin/bash
+  register: host_prep_apt_lock
+  changed_when: false
+  when: apt_pause_unattended_upgrades | bool
+
 # --- Hostname ---------------------------------------------------------------
 
 - name: Verifica l'hostname corrente
@@ -86,4 +136,5 @@
       {{ inventory_hostname }}:
       ufw {{ 'disattivato' if (host_prep_has_ufw | bool and disable_ufw | bool) else 'non presente o non gestito' }},
       apparmor {{ 'disattivato' if (host_prep_has_apparmor | bool and disable_apparmor | bool) else 'non presente o non gestito' }},
-      hostname {{ 'allineato a ' ~ inventory_hostname if set_hostname_from_inventory | bool else 'lasciato invariato' }}
+      hostname {{ 'allineato a ' ~ inventory_hostname if set_hostname_from_inventory | bool else 'lasciato invariato' }},
+      aggiornamenti automatici {{ 'in pausa fino al riavvio' if apt_pause_unattended_upgrades | bool else 'lasciati attivi' }}

@@ -9,6 +9,28 @@ rancher_password: "DanielE9233???"
 helm_version: "v3.11.0"
 rancher_version: "2.14.2"
 
+# ---------------------------------------------------------------------------
+# LOCK DI APT
+# ---------------------------------------------------------------------------
+# Su una macchina appena provisionata unattended-upgrades parte da solo e tiene
+# il lock di dpkg. I task apt dei ruoli girano anche mezz'ora dopo l'inizio del
+# playbook e ci finiscono contro:
+#   E: Could not get lock /var/lib/dpkg/lock-frontend.
+#      It is held by process NNNN (unattended-upgr)
+#
+# Due difese. host_prep, nel primo play, attende cloud-init, ferma i timer degli
+# aggiornamenti automatici e aspetta che dpkg si liberi. In piu' ogni task apt
+# riprova invece di far fallire il playbook, per coprire un lock preso da
+# qualcos'altro (una sessione aperta a mano, un postinst).
+#
+# I timer vengono fermati, NON disabilitati: tornano attivi al riavvio, quindi
+# il nodo non resta senza aggiornamenti di sicurezza. Con
+# apt_pause_unattended_upgrades a false non viene toccato niente e restano solo
+# i tentativi ripetuti.
+apt_pause_unattended_upgrades: true
+apt_lock_retries: 60
+apt_lock_delay: 5
+
 # Configurazione del disco dati dedicato.
 # Questi valori valgono per i nodi RKE2; [db_servers] li sovrascrive in
 # group_vars/db_servers.yml puntando a /var/lib/postgresql.

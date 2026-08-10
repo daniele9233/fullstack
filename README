@@ -140,6 +140,30 @@ e haproxy non riescono a fare il bind del VIP sul nodo che non lo possiede e
 non partono affatto. Per questo keepalived_install gira prima degli altri due.
 
 
+IL LOCK DI APT
+
+Su una macchina appena provisionata unattended-upgrades parte da solo e tiene il
+lock di dpkg. I task apt dei ruoli girano anche mezz'ora dopo l'inizio del
+playbook e ci finiscono contro:
+
+  E: Could not get lock /var/lib/dpkg/lock-frontend.
+     It is held by process NNNN (unattended-upgr)
+
+Due difese. host_prep, nel PRIMO play, attende la fine di cloud-init, ferma i
+timer apt-daily e apt-daily-upgrade e aspetta che nessun processo apt o dpkg sia
+piu' attivo. In piu' ogni task apt del repository ha until/retries, per coprire
+un lock preso da qualcos'altro dopo il primo play.
+
+Un aggiornamento gia' in corso non viene interrotto ma atteso: ucciderlo a meta'
+transazione lascerebbe dpkg da riparare a mano. L'attesa massima e'
+apt_lock_retries per apt_lock_delay, di default 5 minuti.
+
+I timer vengono fermati, NON disabilitati: tornano attivi al riavvio, quindi il
+nodo non resta senza aggiornamenti di sicurezza. Con
+apt_pause_unattended_upgrades a false non viene toccato niente e restano solo i
+tentativi ripetuti sui task apt.
+
+
 DISCO DATI (ruolo create_disk)
 
 Un disco dedicato per i dati, partizionato con LVM e messo in fstab: partizione

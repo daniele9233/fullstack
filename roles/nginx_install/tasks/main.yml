@@ -3,11 +3,23 @@
   apt:
     update_cache: yes
     cache_valid_time: 3600
+  # Riprova se dpkg e' occupato da un altro processo: vedi apt_lock_retries
+  # in group_vars/all.yml.
+  register: apt_result
+  until: apt_result is succeeded
+  retries: "{{ apt_lock_retries | default(60) }}"
+  delay: "{{ apt_lock_delay | default(5) }}"
 
 - name: Install Nginx
   apt:
     name: nginx
     state: present
+  # Riprova se dpkg e' occupato da un altro processo: vedi apt_lock_retries
+  # in group_vars/all.yml.
+  register: apt_result
+  until: apt_result is succeeded
+  retries: "{{ apt_lock_retries | default(60) }}"
+  delay: "{{ apt_lock_delay | default(5) }}"
 
 # Nessuno stop preventivo: scrivere certificati e configurazione non richiede
 # che nginx sia fermo, e fermarlo aprirebbe una finestra di disservizio a ogni

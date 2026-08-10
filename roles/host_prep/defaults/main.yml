@@ -17,3 +17,21 @@ disable_apparmor: true
 # Corosync identifica i nodi per nome e li confronta con "uname -n". Se il nome
 # di inventario e l'hostname reale divergono, le risorse Pacemaker non partono.
 set_hostname_from_inventory: false
+
+# Mette in pausa gli aggiornamenti automatici per la durata del playbook.
+#
+# unattended-upgrades tiene il lock di dpkg e fa fallire i task apt dei ruoli
+# successivi con "Could not get lock /var/lib/dpkg/lock-frontend. It is held by
+# process NNNN (unattended-upgr)". Su una macchina appena provisionata parte
+# quasi sempre, e il playbook la incrocia a meta' esecuzione.
+#
+# I timer vengono FERMATI, non disabilitati: tornano attivi al prossimo riavvio,
+# quindi il nodo non resta senza aggiornamenti di sicurezza per sempre.
+apt_pause_unattended_upgrades: true
+
+# Attesa massima perche' un aggiornamento gia' in corso finisca da solo:
+# 60 tentativi da 5 secondi, cioe' 5 minuti. Un unattended-upgrade appena
+# avviato su una macchina nuova ci mette di piu' del previsto, ma va aspettato:
+# ucciderlo a meta' lascerebbe dpkg in stato incoerente.
+apt_lock_retries: 60
+apt_lock_delay: 5

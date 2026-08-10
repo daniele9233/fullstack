@@ -22,6 +22,12 @@
     state: present
     update_cache: yes
     cache_valid_time: 3600
+  # Riprova se dpkg e' occupato da un altro processo: vedi apt_lock_retries
+  # in group_vars/all.yml.
+  register: apt_result
+  until: apt_result is succeeded
+  retries: "{{ apt_lock_retries | default(60) }}"
+  delay: "{{ apt_lock_delay | default(5) }}"
 
 - name: Abilita e avvia glusterd
   systemd:
