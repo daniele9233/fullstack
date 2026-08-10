@@ -63,10 +63,12 @@
     update_cache: yes
     upgrade: dist
   when: postgres_dist_upgrade | bool
-  # Riprova se dpkg e' occupato da un altro processo: vedi apt_lock_retries
-  # in group_vars/all.yml.
+  # Riprova SOLO se dpkg e' occupato da un altro processo (vedi apt_lock_retries
+  # in group_vars/all.yml). Qualsiasi altro errore ferma subito il task: senza
+  # questa condizione un pacchetto inesistente verrebbe ritentato 60 volte
+  # nascondendo il messaggio vero per cinque minuti.
   register: apt_result
-  until: apt_result is succeeded
+  until: apt_result is succeeded or ('lock' not in apt_result.msg | default('') | lower)
   retries: "{{ apt_lock_retries | default(60) }}"
   delay: "{{ apt_lock_delay | default(5) }}"
 
@@ -74,10 +76,12 @@
   apt:
     name: "{{ postgres_utility_packages }}"
     state: present
-  # Riprova se dpkg e' occupato da un altro processo: vedi apt_lock_retries
-  # in group_vars/all.yml.
+  # Riprova SOLO se dpkg e' occupato da un altro processo (vedi apt_lock_retries
+  # in group_vars/all.yml). Qualsiasi altro errore ferma subito il task: senza
+  # questa condizione un pacchetto inesistente verrebbe ritentato 60 volte
+  # nascondendo il messaggio vero per cinque minuti.
   register: apt_result
-  until: apt_result is succeeded
+  until: apt_result is succeeded or ('lock' not in apt_result.msg | default('') | lower)
   retries: "{{ apt_lock_retries | default(60) }}"
   delay: "{{ apt_lock_delay | default(5) }}"
 
@@ -102,10 +106,12 @@
     name: curl
     state: present
   when: not percona_release_bin.stat.exists
-  # Riprova se dpkg e' occupato da un altro processo: vedi apt_lock_retries
-  # in group_vars/all.yml.
+  # Riprova SOLO se dpkg e' occupato da un altro processo (vedi apt_lock_retries
+  # in group_vars/all.yml). Qualsiasi altro errore ferma subito il task: senza
+  # questa condizione un pacchetto inesistente verrebbe ritentato 60 volte
+  # nascondendo il messaggio vero per cinque minuti.
   register: apt_result
-  until: apt_result is succeeded
+  until: apt_result is succeeded or ('lock' not in apt_result.msg | default('') | lower)
   retries: "{{ apt_lock_retries | default(60) }}"
   delay: "{{ apt_lock_delay | default(5) }}"
 
@@ -117,10 +123,12 @@
   apt:
     deb: /tmp/percona-release.deb
   when: not percona_release_bin.stat.exists
-  # Riprova se dpkg e' occupato da un altro processo: vedi apt_lock_retries
-  # in group_vars/all.yml.
+  # Riprova SOLO se dpkg e' occupato da un altro processo (vedi apt_lock_retries
+  # in group_vars/all.yml). Qualsiasi altro errore ferma subito il task: senza
+  # questa condizione un pacchetto inesistente verrebbe ritentato 60 volte
+  # nascondendo il messaggio vero per cinque minuti.
   register: apt_result
-  until: apt_result is succeeded
+  until: apt_result is succeeded or ('lock' not in apt_result.msg | default('') | lower)
   retries: "{{ apt_lock_retries | default(60) }}"
   delay: "{{ apt_lock_delay | default(5) }}"
 
@@ -143,21 +151,53 @@
     name: "{{ postgres_packages }}"
     state: present
     update_cache: yes
-  # Riprova se dpkg e' occupato da un altro processo: vedi apt_lock_retries
-  # in group_vars/all.yml.
+  # Riprova SOLO se dpkg e' occupato da un altro processo (vedi apt_lock_retries
+  # in group_vars/all.yml). Qualsiasi altro errore ferma subito il task: senza
+  # questa condizione un pacchetto inesistente verrebbe ritentato 60 volte
+  # nascondendo il messaggio vero per cinque minuti.
   register: apt_result
-  until: apt_result is succeeded
+  until: apt_result is succeeded or ('lock' not in apt_result.msg | default('') | lower)
   retries: "{{ apt_lock_retries | default(60) }}"
   delay: "{{ apt_lock_delay | default(5) }}"
 
-- name: Install etcd specific version
+# etcd arriva dal repo Percona appena configurato, che pero' RIMUOVE le
+# versioni vecchie dall'indice quando pubblica le nuove: un pin che ieri
+# esisteva oggi puo' non esserci piu', e apt fallirebbe con un generico
+# "version not found". La verifica sta PRIMA dell'install per dire subito
+# quali versioni ci sono davvero.
+- name: Leggi le versioni etcd disponibili
+  shell: >-
+    set -o pipefail;
+    apt-cache madison etcd | awk -F'|' '{gsub(/ /, "", $2); print $2}'
+  args:
+    executable: /bin/bash
+  register: etcd_available
+  changed_when: false
+  failed_when: false
+  when: etcd_version | length > 0
+
+- name: Verifica che la versione etcd richiesta esista nel repo
+  assert:
+    that:
+      - etcd_version in (etcd_available.stdout_lines | default([]))
+    fail_msg: >-
+      etcd {{ etcd_version }} non e' nel repo. Versioni disponibili:
+      {{ etcd_available.stdout_lines | default([]) | join(', ')
+         | default('nessuna: il repo Percona non espone etcd', true) }}.
+      Aggiorna etcd_version in group_vars/all.yml con una di queste, oppure
+      lasciala vuota per installare l'ultima disponibile.
+  when: etcd_version | length > 0
+
+- name: Install etcd
   apt:
-    name: "etcd={{ etcd_version }}"
+    name: "etcd{{ '=' ~ etcd_version if etcd_version | length > 0 else '' }}"
     state: present
-  # Riprova se dpkg e' occupato da un altro processo: vedi apt_lock_retries
-  # in group_vars/all.yml.
+  # Riprova SOLO se dpkg e' occupato da un altro processo (vedi apt_lock_retries
+  # in group_vars/all.yml). Qualsiasi altro errore ferma subito il task: senza
+  # questa condizione un pacchetto inesistente verrebbe ritentato 60 volte
+  # nascondendo il messaggio vero per cinque minuti.
   register: apt_result
-  until: apt_result is succeeded
+  until: apt_result is succeeded or ('lock' not in apt_result.msg | default('') | lower)
   retries: "{{ apt_lock_retries | default(60) }}"
   delay: "{{ apt_lock_delay | default(5) }}"
 

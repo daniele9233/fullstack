@@ -66,10 +66,12 @@
     state: present
     update_cache: yes
     cache_valid_time: 3600
-  # Riprova se dpkg e' occupato da un altro processo: vedi apt_lock_retries
-  # in group_vars/all.yml.
+  # Riprova SOLO se dpkg e' occupato da un altro processo (vedi apt_lock_retries
+  # in group_vars/all.yml). Qualsiasi altro errore ferma subito il task: senza
+  # questa condizione un pacchetto inesistente verrebbe ritentato 60 volte
+  # nascondendo il messaggio vero per cinque minuti.
   register: apt_result
-  until: apt_result is succeeded
+  until: apt_result is succeeded or ('lock' not in apt_result.msg | default('') | lower)
   retries: "{{ apt_lock_retries | default(60) }}"
   delay: "{{ apt_lock_delay | default(5) }}"
 

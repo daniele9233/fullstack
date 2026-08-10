@@ -29,9 +29,9 @@ postgres_packages:
 
 # Pacchetto etcd fornito dal repo Percona: nell'archivio Ubuntu Noble non
 # esiste un pacchetto "etcd" (ci sono etcd-server ed etcd-client, fermi alla
-# 3.4.30). La versione qui sotto va verificata dopo aver abilitato il repo,
-# con "apt-cache madison etcd".
-etcd_version: "1:3.5.18-1.noble"
+# 3.4.30). Vuota = ultima versione del repo; per fissarla, il valore va scelto
+# fra quelli di "apt-cache madison etcd" e il ruolo verifica che esista.
+etcd_version: ""
 etcd_data_dir: "/var/lib/etcd/postgresql"
 
 timezone: "Europe/Rome"

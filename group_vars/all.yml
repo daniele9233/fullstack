@@ -338,8 +338,14 @@ postgres_mount_point: "/var/lib/postgresql"
 
 # Versione etcd dal repo Percona: nell'archivio Ubuntu Noble il pacchetto
 # "etcd" non esiste (ci sono etcd-server ed etcd-client, fermi alla 3.4.30).
-# Verifica con "apt-cache madison etcd" dopo aver abilitato il repo.
-etcd_version: "1:3.5.18-1.noble"
+#
+# VUOTA (default) = l'ultima disponibile nel repo Percona. Il repo rimuove le
+# versioni vecchie dall'indice quando pubblica le nuove, quindi un pin fisso
+# prima o poi smette di esistere: e' successo con 1:3.5.18-1.noble. Per fissare
+# comunque una versione, leggi quelle reali con "apt-cache madison etcd" sui
+# nodi (a repo abilitato) e mettila qui: il ruolo verifica che esista prima di
+# installare e, se non c'e' piu', elenca quelle disponibili.
+etcd_version: ""
 
 # Con false il ruolo non cancella nulla: e' idempotente e rilanciabile.
 # Con true AZZERA la directory dati di PostgreSQL e il datastore etcd su tutti
