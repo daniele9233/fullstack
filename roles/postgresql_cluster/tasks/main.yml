@@ -360,8 +360,10 @@
     owner: root
     group: root
     mode: '0644'
+    # ansible_managed qui non si puo' usare: lo fornisce il modulo template,
+    # non copy.
     content: |
-      {{ '#' }} {{ ansible_managed }} - roles/postgresql_cluster
+      # Ansible managed - roles/postgresql_cluster
       [Service]
       ExecStart=
       ExecStart={{ etcd_bin.stdout | trim }} --config-file /etc/etcd/etcd.conf.yaml
