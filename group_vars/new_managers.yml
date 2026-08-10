@@ -1,0 +1,17 @@
+---
+# Variabili valide solo per il gruppo [new_managers], i nodi control plane del
+# cluster DOWNSTREAM creato via API Rancher.
+
+# Traefik sul cluster downstream gira sui nodi del gruppo [ingress], non
+# ovunque: master1_create_cluster li registra con label app=ingress e taint
+# app=ingress:NoSchedule, quindi servono sia il selettore sia la tolleranza.
+# Senza la tolleranza i pod resterebbero Pending, senza il selettore
+# finirebbero anche su manager e worker.
+traefik_node_selector:
+  app: ingress
+
+traefik_tolerations:
+  - key: "app"
+    operator: "Equal"
+    value: "ingress"
+    effect: "NoSchedule"

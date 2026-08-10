@@ -1,0 +1,27 @@
+---
+# Valori di ripiego: group_vars/all.yml ha precedenza maggiore.
+traefik_enabled: true
+
+traefik_namespace: "traefik"
+traefik_chart: "traefik"
+traefik_repo: "https://traefik.github.io/charts"
+traefik_chart_version: ""
+
+traefik_kind: "DaemonSet"
+traefik_host_http_port: 80
+traefik_host_https_port: 443
+traefik_default_ingress_class: true
+
+traefik_node_selector: {}
+traefik_tolerations: []
+
+# Directory sorvegliata da rke2-server: quello che ci finisce dentro viene
+# applicato al cluster senza bisogno di kubectl o helm sul nodo.
+traefik_manifest_dir: "/var/lib/rancher/rke2/server/manifests"
+traefik_manifest_file: "traefik.yaml"
+
+# Attesa che i pod siano pronti dopo l'installazione. Il chart va scaricato
+# dalla rete e il DaemonSet deve partire su ogni nodo: 5 minuti bastano, ma la
+# verifica non e' bloccante.
+traefik_wait_retries: 30
+traefik_wait_delay: 10

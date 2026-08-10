@@ -46,6 +46,7 @@
     --set bootstrapPassword={{ rancher_password }}
     --version {{ rancher_version }}
     --set ingress.tls.source=secret
+    --set ingress.ingressClassName={{ rancher_ingress_class }}
     --set privateCA=true
 
 - name: Wait for Rancher to be ready

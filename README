@@ -140,6 +140,52 @@ e haproxy non riescono a fare il bind del VIP sul nodo che non lo possiede e
 non partono affatto. Per questo keepalived_install gira prima degli altri due.
 
 
+STANDARD DEI CLUSTER: CALICO E TRAEFIK
+
+Vale per entrambi i cluster, quello LOCALE che ospita Rancher e quello
+DOWNSTREAM creato via API Rancher.
+
+  CNI              Calico            rke2_cni sul locale, cluster_cni sul
+                                     downstream
+  Ingress          Traefik           ruolo traefik_install
+  Disabilitati     rke2-canal        solo sul locale, dove Calico lo sostituisce
+                   rke2-ingress-nginx  su entrambi
+
+Traefik non si installa con helm dal nodo: il ruolo scrive una risorsa HelmChart
+in /var/lib/rancher/rke2/server/manifests/ dei nodi control plane, e il
+helm-controller integrato in RKE2 fa il resto. Per questo traefik_install gira
+sui [masters] e sui [new_managers], non sui nodi [ingress].
+
+Gira come DaemonSet con hostPort 80 e 443, esattamente dove prima rispondeva
+rke2-ingress-nginx: i bilanciatori continuano a puntare a ingress_https_port e
+non vanno toccati. Dentro al container Traefik resta sulle porte alte
+(8000/8443) e sono le hostPort a fare la mappatura, quindi non serve
+NET_BIND_SERVICE per legare la 80.
+
+Nessun Service: un LoadBalancer resterebbe Pending, perche' nel cluster non c'e'
+un provider che lo soddisfi.
+
+Sul cluster downstream i pod girano SOLO sui nodi [ingress], che
+master1_create_cluster registra con label e taint app=ingress: servono sia
+traefik_node_selector sia traefik_tolerations, dichiarati in
+group_vars/new_managers.yml. Senza la tolleranza i pod resterebbero Pending,
+senza il selettore finirebbero anche su manager e worker.
+
+Traefik e' la IngressClass di default (traefik_default_ingress_class), e la
+console Rancher viene installata con ingress.ingressClassName uguale a
+rancher_ingress_class.
+
+L'ordine dei play conta: Traefik va su DOPO che i tre master sono tutti in
+piedi e PRIMA di Rancher. Se la IngressClass non esiste ancora quando il chart
+Rancher crea il suo Ingress, quell'Ingress resta senza nessuno che lo serva.
+
+ATTENZIONE su un cluster gia' in esercizio: aggiungere rke2-ingress-nginx a
+rke2_disable ne provoca la rimozione, e la console resta irraggiungibile finche'
+Traefik non ha preso le porte. Con traefik_enabled a false il ruolo rimuove il
+proprio manifest, ma non reinstalla nginx: per tornare indietro va tolto anche
+rke2-ingress-nginx da rke2_disable.
+
+
 IL LOCK DI APT
 
 Su una macchina appena provisionata unattended-upgrades parte da solo e tiene il

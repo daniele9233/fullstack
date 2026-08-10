@@ -59,7 +59,13 @@ remote_cert_path: "/root"
 # Cluster configuration (cluster DOWNSTREAM creato via API Rancher)
 cluster_name: "iacdevops"
 cluster_k8s_version: "v1.33.11+rke2r1"
-cluster_cni: "canal"
+cluster_cni: "calico"
+
+# Componenti packaged da non installare sul cluster downstream, stesso standard
+# del cluster locale (vedi rke2_disable). L'ingress e' Traefik.
+cluster_disable:
+  - rke2-ingress-nginx
+
 ansibleSshHost: "localhost"
 
 # ---------------------------------------------------------------------------
@@ -92,9 +98,18 @@ rke2_version: ""
 rke2_cni:
   - calico
 
-# Componenti packaged da disabilitare. Con rke2_cni: [calico] va valorizzato
-# con [rke2-canal, cilium], come nel cluster di produzione di riferimento.
-rke2_disable: []
+# Componenti packaged da disabilitare.
+#
+# rke2-canal: con rke2_cni: [calico] il canal packaged non va installato,
+# altrimenti in /etc/cni/net.d convivono due conflist e i pod restano in
+# ContainerCreating.
+#
+# rke2-ingress-nginx: l'ingress standard e' Traefik, installato dal ruolo
+# traefik_install. Due ingress controller che pretendono entrambi le porte 80 e
+# 443 dei nodi non possono coesistere: il secondo resta in CrashLoopBackOff.
+rke2_disable:
+  - rke2-canal
+  - rke2-ingress-nginx
 
 # SAN aggiuntivi nel certificato dell'API server. Il dominio Rancher e gli IP
 # di tutti i master sono gia' inclusi automaticamente dal template: qui vanno
@@ -122,6 +137,50 @@ master_node_user: "root"
 # Di default il primo master. Con 3 master in HA conviene puntarlo all'IP del
 # bilanciatore nginx, altrimenti la caduta del primo master isola tutti gli altri.
 # rancher_endpoint_ip: "10.205.166.221"
+
+# ---------------------------------------------------------------------------
+# TRAEFIK: ingress controller standard su ENTRAMBI i cluster
+# ---------------------------------------------------------------------------
+# Sostituisce rke2-ingress-nginx, disabilitato in rke2_disable sul cluster
+# locale e in machineGlobalConfig su quello downstream.
+#
+# Il manifest viene scritto in /var/lib/rancher/rke2/server/manifests/ dei nodi
+# control plane: e' la directory che rke2-server sorveglia e da cui il
+# helm-controller integrato installa il chart. Non serve helm sui nodi.
+traefik_enabled: true
+
+traefik_namespace: "traefik"
+traefik_chart: "traefik"
+traefik_repo: "https://traefik.github.io/charts"
+
+# Vuoto = ultima versione disponibile nel repo, come rke2_version. Valorizzare
+# (es. "34.4.1") per fissarla e rendere le installazioni ripetibili.
+traefik_chart_version: ""
+
+# DaemonSet con hostPort, come faceva rke2-ingress-nginx: Traefik risponde
+# direttamente sulle porte 80 e 443 dei nodi, quindi i bilanciatori nginx
+# continuano a puntare a ingress_https_port senza modifiche.
+#
+# Dentro al container Traefik resta sulle porte alte (8000/8443) e le hostPort
+# fanno la mappatura: cosi' non serve NET_BIND_SERVICE per legare la 80.
+traefik_kind: "DaemonSet"
+traefik_host_http_port: 80
+traefik_host_https_port: 443
+
+# Traefik diventa la IngressClass di default: gli Ingress senza classe esplicita
+# finiscono a lui. Serve anche alla console Rancher, il cui Ingress viene creato
+# dal chart.
+traefik_default_ingress_class: true
+
+# Dove far girare i pod. Vuoti = su tutti i nodi schedulabili, che e' quello che
+# serve sul cluster locale, dove ci sono solo i master.
+# I nodi [ingress] del cluster downstream si dichiarano in
+# group_vars/new_managers.yml: hanno label e taint app=ingress.
+traefik_node_selector: {}
+traefik_tolerations: []
+
+# IngressClass con cui viene creato l'Ingress della console Rancher.
+rancher_ingress_class: "traefik"
 
 # Variabili blocco Rancher
 nginx_server_name: "kikko.app.inail-svil.almaviva.it"

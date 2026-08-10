@@ -67,6 +67,10 @@
             cni: "{{ cluster_cni }}"
             disable-kube-proxy: false
             etcd-expose-metrics: false
+            # Stesso standard del cluster locale: Calico come CNI e Traefik
+            # come ingress, quindi il nginx packaged non va installato. Traefik
+            # lo mette il ruolo traefik_install sui nodi [new_managers].
+            disable: "{{ cluster_disable }}"
           machineSelectorConfig:
             - config:
                 protect-kernel-defaults: false

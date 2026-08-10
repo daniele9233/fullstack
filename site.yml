@@ -72,6 +72,24 @@
     - role: master1_kubectl
 
 
+# PLAY INGRESS: Traefik sul cluster locale.
+#
+# Deve stare fra il play dei master e quello di Rancher, non dentro al primo:
+# il play dei master gira con serial: 1, e installare l'ingress mentre il
+# cluster ha ancora un nodo solo significa farlo ripartire a ogni master che si
+# aggiunge. Qui i tre master ci sono tutti.
+#
+# E prima di Rancher perche' il chart Rancher crea il proprio Ingress: se la
+# IngressClass traefik non esiste ancora, quell'Ingress resta senza nessuno che
+# lo serva e la console non risponde.
+- name: Ingress Traefik sul cluster locale
+  hosts: masters
+  become: yes
+  gather_facts: no
+  roles:
+    - role: traefik_install
+
+
 # QUARTO PLAY: Rancher via Helm, SOLO sul primo master.
 # Helm agisce sul cluster, non sul nodo: ripetere "helm install rancher" e
 # "kubectl create namespace cattle-system" sugli altri due master fallirebbe
@@ -111,6 +129,11 @@
   gather_facts: no
   roles:
     - kubectl_setup
+    # Ingress del cluster downstream. Gira qui e non sui nodi [ingress] perche'
+    # il manifest va nella directory dei server RKE2: sono questi i nodi
+    # control plane. Dove girano i pod lo decide traefik_node_selector, in
+    # group_vars/new_managers.yml.
+    - traefik_install
 
 
 # PLAY DATABASE: cluster PostgreSQL con Patroni ed etcd.

@@ -1,0 +1,92 @@
+---
+# Traefik come ingress controller, al posto di rke2-ingress-nginx.
+#
+# Gira sui nodi CONTROL PLANE, non su quelli ingress: il manifest descrive dove
+# far girare i pod, ci pensa poi Kubernetes a schedularli. Sul cluster locale
+# sono i [masters], su quello downstream i [new_managers].
+#
+# Non serve ne' helm ne' kubectl sul nodo: il file finisce nella directory che
+# rke2-server sorveglia, e il helm-controller integrato fa il resto.
+
+- name: Verifica che rke2-ingress-nginx sia disabilitato
+  assert:
+    that:
+      - "'rke2-ingress-nginx' in rke2_disable"
+    fail_msg: >-
+      Traefik e rke2-ingress-nginx pretendono entrambi le porte
+      {{ traefik_host_http_port }} e {{ traefik_host_https_port }} dei nodi: il
+      secondo che parte resta in CrashLoopBackOff. Aggiungi rke2-ingress-nginx
+      a rke2_disable in group_vars/all.yml.
+  when:
+    - traefik_enabled | bool
+    - rke2_disable is defined
+  run_once: true
+
+# La directory esiste gia' se rke2-server e' partito almeno una volta. Su un
+# nodo appena installato puo' non esserci ancora: creandola, il manifest resta
+# li' pronto e viene applicato al primo avvio.
+- name: Crea la directory dei manifest RKE2
+  file:
+    path: "{{ traefik_manifest_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: traefik_enabled | bool
+
+- name: Deploy del manifest Traefik
+  template:
+    src: traefik.yaml.j2
+    dest: "{{ traefik_manifest_dir }}/{{ traefik_manifest_file }}"
+    owner: root
+    group: root
+    mode: '0600'
+  when: traefik_enabled | bool
+
+# Rimosso quando traefik_enabled passa a false: senza, il manifest resterebbe
+# nella directory e il helm-controller continuerebbe a tenere su il chart.
+- name: Rimuovi il manifest Traefik quando disabilitato
+  file:
+    path: "{{ traefik_manifest_dir }}/{{ traefik_manifest_file }}"
+    state: absent
+  when: not (traefik_enabled | bool)
+
+# --- Verifica, solo dal primo nodo del gruppo --------------------------------
+
+- name: Attendi che Traefik sia pronto
+  shell: >-
+    set -o pipefail;
+    /var/lib/rancher/rke2/bin/kubectl
+    --kubeconfig /etc/rancher/rke2/rke2.yaml
+    -n {{ traefik_namespace }} get daemonset traefik
+    -o jsonpath='{.status.numberReady}/{.status.desiredNumberScheduled}'
+  args:
+    executable: /bin/bash
+  register: traefik_ready
+  until: >-
+    traefik_ready.rc == 0
+    and traefik_ready.stdout | length > 0
+    and traefik_ready.stdout.split('/')[0] | int > 0
+    and traefik_ready.stdout.split('/')[0] == traefik_ready.stdout.split('/')[1]
+  retries: "{{ traefik_wait_retries }}"
+  delay: "{{ traefik_wait_delay }}"
+  changed_when: false
+  # Non blocca il playbook: il chart puo' metterci piu' del previsto a scaricare
+  # e i pod a partire. Il task successivo dice com'e' andata.
+  failed_when: false
+  when:
+    - traefik_enabled | bool
+    - inventory_hostname == ansible_play_hosts_all[0]
+
+- name: Stato di Traefik
+  debug:
+    msg: >-
+      {{ 'Traefik pronto: ' ~ traefik_ready.stdout ~ ' pod'
+         if traefik_ready.rc | default(1) == 0 and traefik_ready.stdout | default('') | length > 0
+         else 'Traefik non ancora pronto dopo '
+              ~ (traefik_wait_retries | int * traefik_wait_delay | int) ~ ' secondi.
+              Controlla con: kubectl -n ' ~ traefik_namespace ~ ' get pods,daemonset
+              e kubectl -n kube-system get helmchart traefik' }}
+  when:
+    - traefik_enabled | bool
+    - inventory_hostname == ansible_play_hosts_all[0]
