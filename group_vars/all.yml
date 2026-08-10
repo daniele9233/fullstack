@@ -243,7 +243,17 @@ haproxy_backend_port: 6432
 haproxy_patroni_api_port: 8008
 haproxy_maxconn_global: 4000
 haproxy_maxconn_default: 3000
-haproxy_maxconn_server: 1000
+# Connessioni per singolo backend, come sui bilanciatori in esercizio. E' un
+# tetto per server, non globale: alzarlo oltre max_client_conn di PgBouncer non
+# serve a niente, perche' a quel punto e' PgBouncer a mettere in coda.
+haproxy_maxconn_server: 300
+
+# Timeout di client e server. 10m, non il minuto scarso di prima: sotto ci sono
+# query analitiche e dump che durano piu' di un minuto, e con un timeout basso
+# haproxy chiude la connessione a meta' lavoro.
+haproxy_timeout_client: "10m"
+haproxy_timeout_server: "10m"
+
 haproxy_chroot: "/var/lib/haproxy"
 haproxy_user: "haproxy"
 haproxy_group: "haproxy"

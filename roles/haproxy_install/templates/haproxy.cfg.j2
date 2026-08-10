@@ -1,56 +1,60 @@
 {% set backends = groups[haproxy_backend_group] | default([]) %}
 # {{ ansible_managed }} - roles/haproxy_install
 global
-    log 127.0.0.1 local2
-    log /dev/log local0
-    log /dev/log local1 notice
-    chroot {{ haproxy_chroot }}
-    stats socket /run/haproxy/admin.sock mode 660 level admin expose-fd listeners
-    stats timeout 30s
-    user {{ haproxy_user }}
-    group {{ haproxy_group }}
-    maxconn {{ haproxy_maxconn_global }}
-    daemon
+        log 127.0.0.1 local2
+        log /dev/log local0
+        log /dev/log local1 notice
+        chroot {{ haproxy_chroot }}
+        stats socket /run/haproxy/admin.sock mode 660 level admin expose-fd listeners
+        stats timeout 30s
+        user {{ haproxy_user }}
+        group {{ haproxy_group }}
+        maxconn {{ haproxy_maxconn_global }}
+        daemon
+
 
 defaults
-    mode tcp
-    log global
-    option tcplog
-    retries 3
-    timeout queue 1m
-    timeout connect 10s
-    timeout client 1m
-    timeout server 1m
-    timeout check 10s
-    maxconn {{ haproxy_maxconn_default }}
+        log     global
+        mode    tcp
+        option  tcplog
+        retries 3
+        timeout queue 1m
+        timeout connect 10s
+        timeout client  {{ haproxy_timeout_client }}
+        timeout server  {{ haproxy_timeout_server }}
+        timeout check   10s
+        maxconn         {{ haproxy_maxconn_default }}
 
-# Dashboard delle statistiche HAProxy (http://<IP-HAPROXY>:{{ haproxy_stats_port }})
 listen stats
-    mode http
     bind *:{{ haproxy_stats_port }}
+    mode http
     stats enable
     stats uri /
 {% if backends | length > 0 %}
 
-# Frontend/Backend per il nodo LEADER (Scrittura/Lettura via PgBouncer {{ haproxy_backend_port }})
 listen primary
-    bind *:{{ haproxy_primary_port }}
-    option httpchk OPTIONS /primary
-    http-check expect status 200
-    default-server inter 3s fall 3 rise 2 on-marked-down shutdown-sessions
+{% if vip_patroni_ip is defined and vip_patroni_ip | length > 0 %}
+        bind {{ vip_patroni_ip }}:{{ haproxy_primary_port }}
+{% endif %}
+        bind *:{{ haproxy_primary_port }}
+        option httpchk OPTIONS /primary
+        http-check expect status 200
+        default-server inter 3s fall 3 rise 2 on-marked-down shutdown-sessions
 {% for host in backends %}
-    server {{ host }} {{ hostvars[host].ansible_host }}:{{ haproxy_backend_port }} maxconn {{ haproxy_maxconn_server }} check port {{ haproxy_patroni_api_port }}
+        server {{ host }} {{ hostvars[host].ansible_host }}:{{ haproxy_backend_port }} maxconn {{ haproxy_maxconn_server }} check port {{ haproxy_patroni_api_port }}
 {% endfor %}
 
-# Frontend/Backend per i nodi REPLICA (Sola Lettura in Round-Robin via PgBouncer {{ haproxy_backend_port }})
 listen standby
-    bind *:{{ haproxy_standby_port }}
-    balance roundrobin
-    option httpchk OPTIONS /replica
-    http-check expect status 200
-    default-server inter 3s fall 3 rise 2 on-marked-down shutdown-sessions
+{% if vip_patroni_ip is defined and vip_patroni_ip | length > 0 %}
+        bind {{ vip_patroni_ip }}:{{ haproxy_standby_port }}
+{% endif %}
+        bind *:{{ haproxy_standby_port }}
+        balance roundrobin
+        option httpchk OPTIONS /replica
+        http-check expect status 200
+        default-server inter 3s fall 3 rise 2 on-marked-down shutdown-sessions
 {% for host in backends %}
-    server {{ host }} {{ hostvars[host].ansible_host }}:{{ haproxy_backend_port }} maxconn {{ haproxy_maxconn_server }} check port {{ haproxy_patroni_api_port }}
+        server {{ host }} {{ hostvars[host].ansible_host }}:{{ haproxy_backend_port }} maxconn {{ haproxy_maxconn_server }} check port {{ haproxy_patroni_api_port }}
 {% endfor %}
 {% else %}
 

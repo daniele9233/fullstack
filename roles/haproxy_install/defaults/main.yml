@@ -10,7 +10,9 @@ haproxy_patroni_api_port: 8008
 
 haproxy_maxconn_global: 4000
 haproxy_maxconn_default: 3000
-haproxy_maxconn_server: 1000
+haproxy_maxconn_server: 300
+haproxy_timeout_client: "10m"
+haproxy_timeout_server: "10m"
 
 haproxy_chroot: "/var/lib/haproxy"
 haproxy_user: "haproxy"
