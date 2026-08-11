@@ -66,6 +66,23 @@ cluster_cni: "calico"
 cluster_disable:
   - rke2-ingress-nginx
 
+# Marcatura dei nodi [ingress] del cluster downstream. Da queste due variabili
+# derivano TRE cose che devono restare d'accordo, e per questo stanno scritte
+# una volta sola:
+#
+#   - la label passata a system-agent-install.sh al momento del join
+#   - il taint <chiave>=<valore>:NoSchedule, che tiene lontani gli altri carichi
+#   - il nodeSelector e la tolleranza di Traefik, in group_vars/new_managers.yml
+#
+# Se divergessero, il selettore non troverebbe nessun nodo oppure il taint
+# respingerebbe i pod, e Traefik resterebbe Pending senza dire perche'.
+#
+# ATTENZIONE cambiandole su un cluster gia' in piedi: label e taint vengono
+# applicati al JOIN, quindi i nodi gia' registrati mantengono i vecchi. Vanno
+# aggiornati a mano, oppure i nodi vanno ricreati.
+ingress_node_key: "node"
+ingress_node_value: "ingress"
+
 ansibleSshHost: "localhost"
 
 # ---------------------------------------------------------------------------
@@ -175,7 +192,8 @@ traefik_default_ingress_class: true
 # Dove far girare i pod. Vuoti = su tutti i nodi schedulabili, che e' quello che
 # serve sul cluster locale, dove ci sono solo i master.
 # I nodi [ingress] del cluster downstream si dichiarano in
-# group_vars/new_managers.yml: hanno label e taint app=ingress.
+# group_vars/new_managers.yml, derivati da ingress_node_key e
+# ingress_node_value.
 traefik_node_selector: {}
 traefik_tolerations: []
 

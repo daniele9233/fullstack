@@ -3,15 +3,17 @@
 # cluster DOWNSTREAM creato via API Rancher.
 
 # Traefik sul cluster downstream gira sui nodi del gruppo [ingress], non
-# ovunque: master1_create_cluster li registra con label app=ingress e taint
-# app=ingress:NoSchedule, quindi servono sia il selettore sia la tolleranza.
-# Senza la tolleranza i pod resterebbero Pending, senza il selettore
-# finirebbero anche su manager e worker.
-traefik_node_selector:
-  app: ingress
+# ovunque. master1_create_cluster li registra con label e taint costruiti da
+# ingress_node_key e ingress_node_value (group_vars/all.yml), quindi qui si
+# derivano dalle stesse due variabili: se divergessero, il selettore non
+# troverebbe nessun nodo e i pod resterebbero Pending.
+#
+# Servono entrambi. Senza la tolleranza il taint respinge i pod; senza il
+# selettore finirebbero anche su manager e worker.
+traefik_node_selector: "{{ {ingress_node_key: ingress_node_value} }}"
 
 traefik_tolerations:
-  - key: "app"
+  - key: "{{ ingress_node_key }}"
     operator: "Equal"
-    value: "ingress"
+    value: "{{ ingress_node_value }}"
     effect: "NoSchedule"

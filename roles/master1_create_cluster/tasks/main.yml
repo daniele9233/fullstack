@@ -238,10 +238,10 @@
     curl --insecure -fL https://{{ rancher_host }}/system-agent-install.sh | sh -s - \
       --server https://{{ rancher_host }} \
       --label 'cattle.io/os=linux' \
-      --label 'app=ingress' \
+      --label '{{ ingress_node_key }}={{ ingress_node_value }}' \
       --token {{ cluster_token }} \
       --worker \
-      --taints 'app=ingress:NoSchedule'
+      --taints '{{ ingress_node_key }}={{ ingress_node_value }}:NoSchedule'
   args:
     executable: /bin/bash
   async: 600

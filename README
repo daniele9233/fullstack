@@ -211,9 +211,17 @@ Nessun Service: un LoadBalancer resterebbe Pending, perche' nel cluster non c'e'
 un provider che lo soddisfi.
 
 Sul cluster downstream i pod girano SOLO sui nodi [ingress], che
-master1_create_cluster registra con label e taint app=ingress: servono sia
-traefik_node_selector sia traefik_tolerations, dichiarati in
-group_vars/new_managers.yml. Senza la tolleranza i pod resterebbero Pending,
+master1_create_cluster registra con label e taint node=ingress. Chiave e valore
+stanno in ingress_node_key e ingress_node_value (group_vars/all.yml) e da li'
+derivano tutt'e tre le cose che devono restare d'accordo: la label del join, il
+taint, e il traefik_node_selector con la traefik_tolerations di
+group_vars/new_managers.yml.
+
+Cambiandole su un cluster gia' in piedi, label e taint restano quelli vecchi sui
+nodi gia' registrati: vengono applicati al join. Vanno aggiornati a mano con
+kubectl label / kubectl taint, oppure i nodi vanno ricreati.
+
+Senza la tolleranza i pod resterebbero Pending,
 senza il selettore finirebbero anche su manager e worker.
 
 Traefik e' la IngressClass di default (traefik_default_ingress_class), e la
