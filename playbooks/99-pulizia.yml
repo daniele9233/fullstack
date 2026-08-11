@@ -1,0 +1,89 @@
+---
+# PULIZIA: riporta i nodi allo stato precedente all'installazione.
+#
+# NON e' incluso in site.yml e non lo sara' mai: si lancia a mano, di proposito.
+#
+#   ansible-playbook playbooks/99-pulizia.yml --limit db_servers -e conferma_pulizia=SI
+#
+# Servono ENTRAMBI:
+#   --limit                per dire quali nodi
+#   -e conferma_pulizia=SI per dire che sai cosa stai facendo
+#
+# Senza --limit il playbook pulirebbe tutto l'ambiente in un colpo solo: e' il
+# motivo per cui il primo task si ferma se non ne trova uno.
+#
+# Ogni gruppo esegue il proprio script da scripts/. Gli stessi script si possono
+# lanciare a mano sul nodo, sono indipendenti da Ansible.
+
+- name: Conferma
+  hosts: all:!local
+  gather_facts: no
+  tasks:
+    - name: Pretendi la conferma esplicita
+      assert:
+        that:
+          - conferma_pulizia | default('') == 'SI'
+        fail_msg: >-
+          Questo playbook CANCELLA cluster e dati sui nodi selezionati.
+          Per eseguirlo davvero aggiungi -e conferma_pulizia=SI
+        success_msg: >-
+          Pulizia confermata su: {{ ansible_play_hosts_all | join(', ') }}
+      run_once: true
+
+    - name: Pretendi un --limit
+      assert:
+        that:
+          - ansible_play_hosts_all | length < (groups['all'] | difference(groups['local'] | default([])) | length)
+        fail_msg: >-
+          Nessun --limit: il playbook pulirebbe tutti i
+          {{ ansible_play_hosts_all | length }} nodi dell'inventario. Restringi
+          con --limit db_servers, --limit nginx_servers, --limit masters, ...
+      run_once: true
+
+
+- name: Pulizia dei nodi Kubernetes
+  hosts: masters,new_managers,workers,ingress
+  become: yes
+  gather_facts: no
+  tasks:
+    - name: Esegui lo script di pulizia RKE2 e Rancher
+      script: ../scripts/pulizia-kubernetes.sh
+      environment:
+        RIAVVIA: "{{ '1' if pulizia_riavvia | default(false) | bool else '0' }}"
+      register: pulizia_k8s
+
+    - name: Mostra l'esito
+      debug:
+        msg: "{{ pulizia_k8s.stdout_lines }}"
+
+
+- name: Pulizia dei nodi database
+  hosts: db_servers
+  become: yes
+  gather_facts: no
+  tasks:
+    - name: Esegui lo script di pulizia PostgreSQL, Patroni ed etcd
+      script: ../scripts/pulizia-database.sh
+      register: pulizia_db
+
+    - name: Mostra l'esito
+      debug:
+        msg: "{{ pulizia_db.stdout_lines }}"
+
+
+- name: Pulizia dei bilanciatori
+  hosts: nginx_servers
+  become: yes
+  # serial: 1 come nel play di installazione: su una coppia in HA si pulisce un
+  # nodo alla volta, cosi' il VIP passa all'altro invece di sparire.
+  serial: 1
+  order: inventory
+  gather_facts: no
+  tasks:
+    - name: Esegui lo script di pulizia nginx, haproxy e keepalived
+      script: ../scripts/pulizia-bilanciatori.sh
+      register: pulizia_lb
+
+    - name: Mostra l'esito
+      debug:
+        msg: "{{ pulizia_lb.stdout_lines }}"
