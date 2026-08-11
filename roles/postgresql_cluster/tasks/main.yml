@@ -19,6 +19,30 @@
       Patroni con etcd richiede un numero dispari di nodi per il quorum: tre.
   run_once: true
 
+# Il controllo sopra conta gli host dell'inventario; questo verifica che siano
+# davvero RAGGIUNGIBILI, che e' un'altra cosa.
+#
+# Serve perche' etcd viene configurato con initial-cluster a tre membri e, con
+# initial-cluster-state: new, all'avvio ASPETTA gli altri due prima di
+# dichiararsi pronto. Se un nodo e' irraggiungibile, sugli altri "systemctl
+# start etcd" resta appeso fino al timeout e fallisce con "Job for etcd.service
+# failed because a timeout was exceeded", che non fa capire che il problema e'
+# altrove. Meglio fermarsi qui, dicendo quale nodo manca.
+- name: Verifica che tutti i nodi del cluster siano raggiungibili
+  assert:
+    that:
+      - ansible_play_hosts | length == ansible_play_hosts_all | length
+    fail_msg: >-
+      Nodi non raggiungibili:
+      {{ ansible_play_hosts_all | difference(ansible_play_hosts) | join(', ') }}.
+      Un cluster etcd a tre membri non si forma se ne manca uno: gli altri
+      resterebbero in attesa fino al timeout di systemd. Sistema prima la
+      connessione, poi rilancia.
+      Se l'errore era "Host key verification failed", quelle macchine non sono
+      ancora in known_hosts: la ssh_args di ansible.cfg lo risolve, oppure
+      popolalo con ssh-keyscan.
+  run_once: true
+
 # --- Rilevamento dello stato esistente -------------------------------------
 # Il marcatore di una PGDATA gestita da Patroni e' patroni.dynamic.json, che
 # scrive Patroni e nessun altro.
