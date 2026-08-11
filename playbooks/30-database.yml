@@ -1,0 +1,67 @@
+---
+# DATABASE: cluster PostgreSQL con Patroni ed etcd sul gruppo [db_servers].
+#
+# Eseguibile da solo:
+#   ansible-playbook playbooks/30-database.yml
+#
+# Niente update_hosts_file: postgresql_cluster si scrive da solo le voci di
+# /etc/hosts per i propri nodi, e il dominio Rancher qui non serve a nessuno.
+# E' anche il motivo per cui questo playbook non ha bisogno che [masters] sia
+# popolato.
+
+- name: Prepara i nodi database
+  hosts: db_servers
+  become: yes
+  gather_facts: no
+  roles:
+    - role: host_prep
+
+
+# Disco dati dedicato, montato su postgres_mount_point
+# (vedi group_vars/db_servers.yml).
+# Il ruolo non tocca nulla dove il mount point risulta gia' montato, quindi
+# convive con i dischi predisposti manualmente.
+- name: Disco dati dei database
+  hosts: db_servers
+  become: yes
+  gather_facts: yes
+  roles:
+    - role: create_disk
+
+
+# Il ruolo e' idempotente: rilanciarlo non cancella dati e non riavvia servizi.
+# Per ripartire da zero serve -e postgres_force_reinit=true, che AZZERA il
+# database e il datastore etcd su tutti i nodi.
+- name: Setup PostgreSQL {{ postgres_version }} cluster with Patroni
+  hosts: db_servers
+  become: yes
+  gather_facts: yes
+  pre_tasks:
+    # Il disco dati e' predisposto dal play precedente, oppure montato a mano.
+    # In entrambi i casi questo controllo impedisce a Patroni di inizializzare
+    # il database sulla partizione di sistema se il mount non c'e'.
+    #
+    # findmnt e non "df -h | grep": il grep passa anche quando a essere montata
+    # e' solo una sottodirectory, o quando la stringa compare nel nome di un
+    # device. findmnt sul percorso corrisponde al mountpoint esatto e basta.
+    - name: Verifica che il disco dati sia montato su {{ postgres_mount_point }}
+      command: "findmnt -n -o TARGET,SOURCE,FSTYPE {{ postgres_mount_point }}"
+      register: postgres_mount
+      changed_when: false
+      failed_when: postgres_mount.rc != 0
+
+    - name: Mostra il filesystem dei dati
+      debug:
+        msg: "{{ inventory_hostname }}: {{ postgres_mount.stdout | trim }}"
+  roles:
+    - postgresql_cluster
+  post_tasks:
+    - name: Riepilogo cluster database
+      debug:
+        msg:
+          - "Nodi: {{ groups['db_servers'] | join(', ') }}"
+          - "Bootstrap dal nodo: {{ patroni_primary_node }}"
+          - "PostgreSQL {{ postgres_version }} in {{ postgres_data_dir }}"
+          - "Stato cluster: patronictl -c /etc/patroni/patroni.yml list"
+          - "PgBouncer installato ma NON configurato: haproxy punta alla {{ haproxy_backend_port }}, che restera' chiusa"
+      run_once: true

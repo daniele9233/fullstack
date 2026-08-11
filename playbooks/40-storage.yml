@@ -1,0 +1,49 @@
+---
+# STORAGE: GlusterFS replicato, Ganesha NFS e Pacemaker sul gruppo
+# [gluster_servers].
+#
+# Eseguibile da solo:
+#   ansible-playbook playbooks/40-storage.yml
+#
+# Niente create_disk: i brick vengono montati a mano.
+# Niente update_hosts_file: glusterfs_install si scrive da solo le voci di
+# /etc/hosts per i peer, e il dominio Rancher qui non serve.
+#
+# L'INVENTARIO DEVE RESTARE COMPLETO: ganesha_install costruisce l'elenco dei
+# client autorizzati dai gruppi Kubernetes elencati in ganesha_client_groups.
+# Con quei gruppi commentati l'export nasce senza nessun client in scrittura.
+
+- name: Prepara i nodi Gluster
+  hosts: gluster_servers
+  become: yes
+  gather_facts: no
+  roles:
+    - role: host_prep
+
+
+# Ordine obbligato: i volumi Gluster devono esistere prima che Ganesha li
+# esporti, e gli export devono esistere prima che Pacemaker avvii il servizio.
+# Niente serial: peering e creazione dei volumi sono operazioni di cluster e
+# girano gia' solo dal primo nodo del gruppo.
+- name: Install and configure GlusterFS with Ganesha NFS in HA
+  hosts: gluster_servers
+  become: yes
+  gather_facts: yes
+  roles:
+    - glusterfs_install
+    - ganesha_install
+    - pacemaker_nfs_ha
+  post_tasks:
+    - name: Riepilogo storage
+      debug:
+        msg:
+          - "Nodi Gluster: {{ groups['gluster_servers'] | join(', ') }}"
+          - "Arbitro (solo metadati): {{ groups['gluster_servers'][-1] if gluster_arbiter_count | int > 0 else 'nessuno' }}"
+          - "Volumi: {{ gluster_volumes | map(attribute='name') | join(', ') }}"
+          - "Esportati via NFS: {{ ganesha_volumes | map(attribute='name') | join(', ') }}"
+          - "Solo volume Gluster, nessun export: {{ (gluster_volumes | map(attribute='name') | list) | difference(ganesha_volumes | map(attribute='name') | list) | join(', ') | default('nessuno', true) }}"
+          - "Cluster Pacemaker: {{ pcs_cluster_nodes | join(', ') }}"
+          - "Fuori dal cluster Pacemaker: {{ groups['gluster_servers'] | difference(pcs_cluster_nodes) | join(', ') | default('nessuno', true) }}"
+          - "VIP NFS gestito da Pacemaker: {{ nfs_vip_ip }}"
+          - "Mount dal client: mount -t nfs4 {{ nfs_vip_ip }}:{{ ganesha_volumes[0].pseudo }} /mnt"
+      run_once: true

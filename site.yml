@@ -1,236 +1,27 @@
 ---
-# PLAY ZERO: preparazione dei nodi, prima di qualsiasi installazione.
-# Disattiva ufw e AppArmor ovunque: RKE2, Gluster, NFS, Pacemaker e VRRP usano
-# molte porte e VRRP non e' nemmeno TCP (protocollo IP 112). Con il firewall
-# attivo i cluster sembrano partire e poi non convergono mai.
-# Escluso [local]: e' la macchina di controllo, non un nodo gestito.
-- name: Prepara i nodi
-  hosts: all:!local
-  become: yes
-  gather_facts: no
-  roles:
-    - role: host_prep
-
-
-# PRIMO PLAY: disco dati dedicato.
-# Destinazione per gruppo: /var/lib/rancher sui nodi RKE2,
-# postgres_mount_point sui database (group_vars/db_servers.yml).
+# Installazione completa, nell'ordine corretto.
 #
-# Esclusi:
-#   [local]           macchina di controllo, non va partizionata
-#   [nginx_servers]   i bilanciatori non hanno un disco dati
-#   [gluster_servers] i brick vengono montati a mano
+# I play non stanno piu' qui dentro: sono in playbooks/, uno per area, e questo
+# file li mette in fila. Cosi' non c'e' duplicazione — ogni play e' scritto una
+# volta sola — e ciascun pezzo resta lanciabile da solo quando serve piu'
+# controllo:
 #
-# Il ruolo non tocca nulla dove il mount point risulta gia' montato, quindi
-# convive con i dischi predisposti manualmente.
-- hosts: all:!local:!nginx_servers:!gluster_servers
-  become: yes
-  gather_facts: yes
-  roles:
-    - role: create_disk
-
-
-# SECONDO PLAY: Aggiorna /etc/hosts su tutti i server
-- hosts: all,local
-  become: yes
-  gather_facts: no
-  roles:
-    - role: update_hosts_file
-
-
-# PULIZIA OPZIONALE: azzera lo stato di una precedente installazione.
-# Deve girare PRIMA del terzo play, perche' anche il master va ripulito: su
-# rancher01c "helm install rancher" e "kubectl create namespace cattle-system"
-# falliscono se Rancher e' gia' installato.
-# Disattivata di default perche' distruttiva: su un nodo sano smonta RKE2.
-# Abilitare solo quando si riparte da capo su macchine gia' usate:
-#   ansible-playbook -i inventory.ini site.yml -e clean_nodes_before_join=true
-- hosts: masters,new_managers,workers
-  become: yes
-  gather_facts: no
-  roles:
-    - role: clean_node_state
-      when: clean_nodes_before_join | bool
-
-
-# keepalived per primo: imposta net.ipv4.ip_nonlocal_bind, senza il quale
-# nginx e haproxy non riescono a fare il bind del VIP sul nodo che in quel
-# momento non lo possiede.
-- name: Install and configure load balancers
-  hosts: nginx_servers
-  become: yes
-  # serial: 1 per riconfigurare un bilanciatore alla volta. Senza, il riavvio
-  # di keepalived e il reload di nginx avverrebbero in parallelo sui due nodi
-  # e il servizio resterebbe scoperto per qualche secondo a ogni esecuzione.
-  serial: 1
-  order: inventory
-  roles:
-    - keepalived_install
-    - haproxy_install
-    - nginx_install
-  post_tasks:
-    - name: Display completion message
-      debug:
-        msg:
-          - "Bilanciatore {{ inventory_hostname }} configurato."
-          - "Ruolo VRRP: {{ 'MASTER' if groups['nginx_servers'].index(inventory_hostname) == 0 else 'BACKUP' }}"
-          - "VIP console Rancher (nginx): {{ vip_rancher_ip }} -> {{ nginx_server_name }}"
-          - "VIP Patroni/PgBouncer (haproxy): {{ vip_patroni_ip }} porte {{ haproxy_primary_port }}/{{ haproxy_standby_port }}"
-          - "Statistiche haproxy: http://{{ hostvars[inventory_hostname].ansible_host }}:{{ haproxy_stats_port }}/"
-          - "Certificati attesi in {{ nginx_cert_dir }}/"
-                                                                              
-
-# TERZO PLAY: cluster RKE2 locale sui master, UN NODO ALLA VOLTA.
-# serial: 1 non e' un'ottimizzazione, e' un requisito: i server etcd vanno
-# aggiunti in sequenza e il primo host del gruppo deve completare il bootstrap
-# prima che il secondo provi a unirsi. master1_config contiene la barriera che
-# attende /readyz prima di liberare il nodo successivo.
-- hosts: masters
-  become: yes
-  gather_facts: no
-  serial: 1
-  # Default di Ansible, reso esplicito perche' qui la correttezza ci dipende:
-  # il primo host dell'inventario deve bootstrappare prima che gli altri
-  # provino a registrarsi sul suo supervisor.
-  order: inventory
-  roles:
-    - role: master1_install
-    - role: master1_config
-    - role: master1_kubectl
-
-
-# PLAY INGRESS: Traefik sul cluster locale.
+#   ansible-playbook playbooks/10-bilanciatori.yml
+#   ansible-playbook playbooks/20-rancher.yml
+#   ansible-playbook playbooks/30-database.yml
+#   ansible-playbook playbooks/40-storage.yml
 #
-# Deve stare fra il play dei master e quello di Rancher, non dentro al primo:
-# il play dei master gira con serial: 1, e installare l'ingress mentre il
-# cluster ha ancora un nodo solo significa farlo ripartire a ogni master che si
-# aggiunge. Qui i tre master ci sono tutti.
+# La preparazione dei nodi (host_prep) e il disco dati (create_disk) non sono
+# piu' due play su "all": ogni playbook prepara i propri host. Il risultato per
+# host e' identico, ma lanciandone uno solo non si toccano gli altri gruppi.
 #
-# E prima di Rancher perche' il chart Rancher crea il proprio Ingress: se la
-# IngressClass traefik non esiste ancora, quell'Ingress resta senza nessuno che
-# lo serva e la console non risponde.
-- name: Ingress Traefik sul cluster locale
-  hosts: masters
-  become: yes
-  gather_facts: no
-  roles:
-    - role: traefik_install
+# L'INVENTARIO VA TENUTO COMPLETO anche quando si lancia un playbook solo:
+# diversi template leggono gruppi che non stanno installando (haproxy legge
+# [db_servers], nginx legge [masters] e [ingress], Ganesha i gruppi Kubernetes).
+# Commentare un gruppo per "isolare" un test produce configurazioni monche
+# senza che niente fallisca: per isolare si usa il playbook, non l'inventario.
 
-
-# QUARTO PLAY: Rancher via Helm, SOLO sul primo master.
-# Helm agisce sul cluster, non sul nodo: ripetere "helm install rancher" e
-# "kubectl create namespace cattle-system" sugli altri due master fallirebbe
-# con "already exists". I 3 replica di Rancher li distribuisce Kubernetes.
-- hosts: masters[0]
-  become: yes
-  gather_facts: no
-  roles:
-    - role: master1_helm_cert_manager_install
-
-
-# QUINTO PLAY: creazione del cluster downstream, SOLO dal primo master.
-# Sono chiamate all'API di Rancher delegate al control node: eseguirle da tutti
-# e tre i master creerebbe tre volte lo stesso cluster.
-- hosts: masters[0]
-  become: yes
-  gather_facts: no
-  roles:
-    - role: master1_create_cluster
-
-# PAUSA tra quarto e quinto play
-- name: "Pausa dopo creazione cluster"
-  hosts: localhost
-  gather_facts: no
-  tasks:
-    - name: Attendi 180 secondi prima setup kubectl
-      pause:
-        seconds: 180
-        prompt: "Attendendo 60 secondi dopo creazione cluster..."
-
-# SESTO PLAY: Setup kubectl e fix DNS Cattle-System sui nuovi manager
-# Il ruolo kubectl_setup esegue gia' sia il setup di kubectl sia il patch
-# hostAliases su cattle-cluster-agent: eseguirlo due volte riapplicava lo
-# stesso patch e faceva scadere una seconda volta il rollout (~10 min persi).
-- hosts: new_managers
-  become: yes
-  gather_facts: no
-  roles:
-    - kubectl_setup
-    # Ingress del cluster downstream. Gira qui e non sui nodi [ingress] perche'
-    # il manifest va nella directory dei server RKE2: sono questi i nodi
-    # control plane. Dove girano i pod lo decide traefik_node_selector, in
-    # group_vars/new_managers.yml.
-    - traefik_install
-
-
-# PLAY DATABASE: cluster PostgreSQL con Patroni ed etcd.
-#
-# Il ruolo e' idempotente: rilanciarlo non cancella dati e non riavvia servizi.
-# Per ripartire da zero serve -e postgres_force_reinit=true, che AZZERA il
-# database e il datastore etcd su tutti i nodi.
-#
-# Deve girare prima del play dei bilanciatori: haproxy indirizza questi nodi.
-- name: Setup PostgreSQL {{ postgres_version }} cluster with Patroni
-  hosts: db_servers
-  become: yes
-  gather_facts: yes
-  pre_tasks:
-    # Il disco dati e' predisposto dal primo play, oppure montato a mano.
-    # In entrambi i casi questo controllo impedisce a Patroni di inizializzare
-    # il database sulla partizione di sistema se il mount non c'e'.
-    #
-    # findmnt e non "df -h | grep": il grep passa anche quando a essere montata
-    # e' solo una sottodirectory, o quando la stringa compare nel nome di un
-    # device. findmnt sul percorso corrisponde al mountpoint esatto e basta.
-    - name: Verifica che il disco dati sia montato su {{ postgres_mount_point }}
-      command: "findmnt -n -o TARGET,SOURCE,FSTYPE {{ postgres_mount_point }}"
-      register: postgres_mount
-      changed_when: false
-      failed_when: postgres_mount.rc != 0
-
-    - name: Mostra il filesystem dei dati
-      debug:
-        msg: "{{ inventory_hostname }}: {{ postgres_mount.stdout | trim }}"
-  roles:
-    - postgresql_cluster
-  post_tasks:
-    - name: Riepilogo cluster database
-      debug:
-        msg:
-          - "Nodi: {{ groups['db_servers'] | join(', ') }}"
-          - "Bootstrap dal nodo: {{ patroni_primary_node }}"
-          - "PostgreSQL {{ postgres_version }} in {{ postgres_data_dir }}"
-          - "Stato cluster: patronictl -c /etc/patroni/patroni.yml list"
-          - "PgBouncer installato ma NON configurato: haproxy punta alla {{ haproxy_backend_port }}, che restera' chiusa"
-      run_once: true
-
-
-# PLAY STORAGE: GlusterFS replicato, Ganesha NFS e Pacemaker.
-# Ordine obbligato: i volumi Gluster devono esistere prima che Ganesha li
-# esporti, e gli export devono esistere prima che Pacemaker avvii il servizio.
-# Niente serial: peering e creazione dei volumi sono operazioni di cluster e
-# girano gia' solo dal primo nodo del gruppo.
-- name: Install and configure GlusterFS with Ganesha NFS in HA
-  hosts: gluster_servers
-  become: yes
-  gather_facts: yes
-  roles:
-    - glusterfs_install
-    - ganesha_install
-    - pacemaker_nfs_ha
-  post_tasks:
-    - name: Riepilogo storage
-      debug:
-        msg:
-          - "Nodi Gluster: {{ groups['gluster_servers'] | join(', ') }}"
-          - "Arbitro (solo metadati): {{ groups['gluster_servers'][-1] if gluster_arbiter_count | int > 0 else 'nessuno' }}"
-          - "Volumi: {{ gluster_volumes | map(attribute='name') | join(', ') }}"
-          - "Esportati via NFS: {{ ganesha_volumes | map(attribute='name') | join(', ') }}"
-          - "Solo volume Gluster, nessun export: {{ (gluster_volumes | map(attribute='name') | list) | difference(ganesha_volumes | map(attribute='name') | list) | join(', ') | default('nessuno', true) }}"
-          - "Cluster Pacemaker: {{ pcs_cluster_nodes | join(', ') }}"
-          - "Fuori dal cluster Pacemaker: {{ groups['gluster_servers'] | difference(pcs_cluster_nodes) | join(', ') | default('nessuno', true) }}"
-          - "VIP NFS gestito da Pacemaker: {{ nfs_vip_ip }}"
-          - "Mount dal client: mount -t nfs4 {{ nfs_vip_ip }}:{{ ganesha_volumes[0].pseudo }} /mnt"
-      run_once: true
-
-
+- import_playbook: playbooks/10-bilanciatori.yml
+- import_playbook: playbooks/20-rancher.yml
+- import_playbook: playbooks/30-database.yml
+- import_playbook: playbooks/40-storage.yml

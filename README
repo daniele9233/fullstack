@@ -31,7 +31,38 @@ privkey.pem
 
 PRODECURA DI INSTALLAZIONE
 
-ansible-playbook -i inventory.ini site.yml
+Tutto in una volta, nell'ordine corretto:
+
+  ansible-playbook -i inventory.ini site.yml
+
+Oppure un'area alla volta, quando serve piu' controllo:
+
+  ansible-playbook -i inventory.ini playbooks/10-bilanciatori.yml
+  ansible-playbook -i inventory.ini playbooks/20-rancher.yml
+  ansible-playbook -i inventory.ini playbooks/30-database.yml
+  ansible-playbook -i inventory.ini playbooks/40-storage.yml
+
+site.yml non contiene piu' i play: li importa da playbooks/ con
+import_playbook. Ogni play e' scritto una volta sola, quindi le due modalita'
+non possono divergere.
+
+Ogni playbook prepara i propri host: host_prep e create_disk non sono piu' due
+play su "all" ma stanno dentro all'area che li usa. Per host il risultato e'
+identico, ma lanciandone uno solo non si toccano gli altri gruppi.
+
+update_hosts_file sta SOLO in 20-rancher.yml, perche' serve a chi parla con
+Rancher. I nodi database e Gluster si scrivono /etc/hosts da soli dentro ai
+propri ruoli (postgresql_cluster e glusterfs_install), e i bilanciatori non ne
+hanno bisogno: nginx genera gli upstream per IP e il dominio lo usa solo come
+server_name. E' anche il motivo per cui 30-database.yml non richiede che
+[masters] sia popolato.
+
+L'INVENTARIO VA TENUTO COMPLETO anche lanciando un playbook solo. Diversi
+template leggono gruppi che non stanno installando: haproxy.cfg.j2 genera i
+backend da [db_servers], nginx.conf.j2 gli upstream da [masters] e [ingress],
+ganesha_install i client autorizzati dai gruppi Kubernetes. Commentare un
+gruppo per isolare un test produce configurazioni monche senza che niente
+fallisca: per isolare si usa il playbook, non l'inventario.
 
 
 CLUSTER RANCHER A 3 NODI

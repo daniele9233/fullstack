@@ -1,0 +1,44 @@
+---
+# BILANCIATORI: keepalived, haproxy, nginx sul gruppo [nginx_servers].
+#
+# Eseguibile da solo:
+#   ansible-playbook playbooks/10-bilanciatori.yml
+#
+# L'INVENTARIO DEVE RESTARE COMPLETO anche lanciando solo questo playbook:
+# haproxy.cfg.j2 genera i backend da [db_servers] e nginx.conf.j2 gli upstream
+# da [masters] e [ingress]. Con quei gruppi commentati la configurazione nasce
+# monca senza che niente fallisca.
+
+- name: Prepara i bilanciatori
+  hosts: nginx_servers
+  become: yes
+  gather_facts: no
+  roles:
+    - role: host_prep
+
+
+# keepalived per primo: imposta net.ipv4.ip_nonlocal_bind, senza il quale
+# nginx e haproxy non riescono a fare il bind del VIP sul nodo che in quel
+# momento non lo possiede.
+- name: Install and configure load balancers
+  hosts: nginx_servers
+  become: yes
+  # serial: 1 per riconfigurare un bilanciatore alla volta. Senza, il riavvio
+  # di keepalived e il reload di nginx avverrebbero in parallelo sui due nodi
+  # e il servizio resterebbe scoperto per qualche secondo a ogni esecuzione.
+  serial: 1
+  order: inventory
+  roles:
+    - keepalived_install
+    - haproxy_install
+    - nginx_install
+  post_tasks:
+    - name: Display completion message
+      debug:
+        msg:
+          - "Bilanciatore {{ inventory_hostname }} configurato."
+          - "Ruolo VRRP: {{ 'MASTER' if groups['nginx_servers'].index(inventory_hostname) == 0 else 'BACKUP' }}"
+          - "VIP console Rancher (nginx): {{ vip_rancher_ip }} -> {{ nginx_server_name }}"
+          - "VIP Patroni/PgBouncer (haproxy): {{ vip_patroni_ip }} porte {{ haproxy_primary_port }}/{{ haproxy_standby_port }}"
+          - "Statistiche haproxy: http://{{ hostvars[inventory_hostname].ansible_host }}:{{ haproxy_stats_port }}/"
+          - "Certificati attesi in {{ nginx_cert_dir }}/"

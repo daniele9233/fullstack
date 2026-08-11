@@ -1,0 +1,143 @@
+---
+# CLUSTER RANCHER E CLUSTER DOWNSTREAM.
+#
+# Copre i gruppi [masters], [new_managers], [workers] e [ingress]: installa
+# RKE2 sui master, Traefik, Rancher via Helm, e crea il cluster downstream
+# agganciandoci manager, worker e nodi ingress.
+#
+# Eseguibile da solo:
+#   ansible-playbook playbooks/20-rancher.yml
+#
+# E' l'unico dei quattro playbook che usa update_hosts_file: il dominio Rancher
+# serve a chi parla con Rancher. I nodi database e Gluster si scrivono
+# /etc/hosts da soli, dentro ai rispettivi ruoli.
+
+- name: Prepara i nodi del cluster Rancher
+  hosts: masters,new_managers,workers,ingress
+  become: yes
+  gather_facts: no
+  roles:
+    - role: host_prep
+
+
+# Disco dati dedicato: /var/lib/rancher sui nodi RKE2.
+# Il ruolo non tocca nulla dove il mount point risulta gia' montato, quindi
+# convive con i dischi predisposti manualmente.
+- name: Disco dati dei nodi RKE2
+  hosts: masters,new_managers,workers,ingress
+  become: yes
+  gather_facts: yes
+  roles:
+    - role: create_disk
+
+
+# Risoluzione del dominio Rancher in /etc/hosts.
+#
+# [local] c'e' perche' master1_create_cluster delega al control node le
+# chiamate all'API di Rancher, e deve risolvere il dominio anche lui.
+# I bilanciatori non ci sono: nginx genera gli upstream per IP, il dominio lo
+# usa solo come server_name e non ha bisogno di risolverlo.
+- name: Risoluzione del dominio Rancher
+  hosts: masters,new_managers,workers,ingress,local
+  become: yes
+  gather_facts: no
+  roles:
+    - role: update_hosts_file
+
+
+# PULIZIA OPZIONALE: azzera lo stato di una precedente installazione.
+# Deve girare PRIMA del play dei master, perche' anche il master va ripulito: su
+# rancher01c "helm install rancher" e "kubectl create namespace cattle-system"
+# falliscono se Rancher e' gia' installato.
+# Disattivata di default perche' distruttiva: su un nodo sano smonta RKE2.
+# Abilitare solo quando si riparte da capo su macchine gia' usate:
+#   ansible-playbook playbooks/20-rancher.yml -e clean_nodes_before_join=true
+- hosts: masters,new_managers,workers
+  become: yes
+  gather_facts: no
+  roles:
+    - role: clean_node_state
+      when: clean_nodes_before_join | bool
+
+
+# Cluster RKE2 locale sui master, UN NODO ALLA VOLTA.
+# serial: 1 non e' un'ottimizzazione, e' un requisito: i server etcd vanno
+# aggiunti in sequenza e il primo host del gruppo deve completare il bootstrap
+# prima che il secondo provi a unirsi. master1_config contiene la barriera che
+# attende /readyz prima di liberare il nodo successivo.
+- hosts: masters
+  become: yes
+  gather_facts: no
+  serial: 1
+  # Default di Ansible, reso esplicito perche' qui la correttezza ci dipende:
+  # il primo host dell'inventario deve bootstrappare prima che gli altri
+  # provino a registrarsi sul suo supervisor.
+  order: inventory
+  roles:
+    - role: master1_install
+    - role: master1_config
+    - role: master1_kubectl
+
+
+# PLAY INGRESS: Traefik sul cluster locale.
+#
+# Deve stare fra il play dei master e quello di Rancher, non dentro al primo:
+# il play dei master gira con serial: 1, e installare l'ingress mentre il
+# cluster ha ancora un nodo solo significa farlo ripartire a ogni master che si
+# aggiunge. Qui i tre master ci sono tutti.
+#
+# E prima di Rancher perche' il chart Rancher crea il proprio Ingress: se la
+# IngressClass traefik non esiste ancora, quell'Ingress resta senza nessuno che
+# lo serva e la console non risponde.
+- name: Ingress Traefik sul cluster locale
+  hosts: masters
+  become: yes
+  gather_facts: no
+  roles:
+    - role: traefik_install
+
+
+# Rancher via Helm, SOLO sul primo master.
+# Helm agisce sul cluster, non sul nodo: ripetere "helm install rancher" e
+# "kubectl create namespace cattle-system" sugli altri due master fallirebbe
+# con "already exists". I 3 replica di Rancher li distribuisce Kubernetes.
+- hosts: masters[0]
+  become: yes
+  gather_facts: no
+  roles:
+    - role: master1_helm_cert_manager_install
+
+
+# Creazione del cluster downstream, SOLO dal primo master.
+# Sono chiamate all'API di Rancher delegate al control node: eseguirle da tutti
+# e tre i master creerebbe tre volte lo stesso cluster.
+- hosts: masters[0]
+  become: yes
+  gather_facts: no
+  roles:
+    - role: master1_create_cluster
+
+# PAUSA dopo la creazione del cluster
+- name: "Pausa dopo creazione cluster"
+  hosts: localhost
+  gather_facts: no
+  tasks:
+    - name: Attendi 180 secondi prima setup kubectl
+      pause:
+        seconds: 180
+        prompt: "Attendendo 60 secondi dopo creazione cluster..."
+
+# Setup kubectl e fix DNS Cattle-System sui nuovi manager.
+# Il ruolo kubectl_setup esegue gia' sia il setup di kubectl sia il patch
+# hostAliases su cattle-cluster-agent: eseguirlo due volte riapplicava lo
+# stesso patch e faceva scadere una seconda volta il rollout (~10 min persi).
+- hosts: new_managers
+  become: yes
+  gather_facts: no
+  roles:
+    - kubectl_setup
+    # Ingress del cluster downstream. Gira qui e non sui nodi [ingress] perche'
+    # il manifest va nella directory dei server RKE2: sono questi i nodi
+    # control plane. Dove girano i pod lo decide traefik_node_selector, in
+    # group_vars/new_managers.yml.
+    - traefik_install
