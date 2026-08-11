@@ -30,6 +30,9 @@
 # idempotente e non tocca un Patroni gia' in esecuzione, quindi i due gruppi di
 # task si riducono a una verifica.
 
+# I due avvii non falliscono da soli: "Unable to start service patroni" non dice
+# niente, e il motivo resta nel journal del nodo. Il task di diagnostica che
+# segue ciascuno lo va a prendere e lo mette nel messaggio d'errore.
 - name: Start Patroni on primary node only
   systemd:
     name: patroni
@@ -37,6 +40,17 @@
     enabled: yes
     daemon_reload: yes
   when: inventory_hostname == patroni_primary_node
+  register: patroni_start
+  # ignore_errors e NON failed_when: false. Il secondo azzera il flag "failed"
+  # nel risultato registrato, e la diagnostica che lo verifica non partirebbe
+  # mai; ignore_errors lascia il flag e si limita a non fermare il play.
+  ignore_errors: true
+
+- name: Fermati se Patroni non parte sul primo nodo
+  include_tasks: patroni_diagnostica.yml
+  when:
+    - inventory_hostname == patroni_primary_node
+    - patroni_start is failed
 
 # Si aspetta la leadership vera, non un numero di secondi: sul primo bootstrap
 # il nodo deve fare initdb, avviare PostgreSQL e prendersi la chiave nel DCS, e
@@ -62,6 +76,17 @@
     enabled: yes
     daemon_reload: yes
   when: inventory_hostname != patroni_primary_node
+  register: patroni_start
+  # ignore_errors e NON failed_when: false. Il secondo azzera il flag "failed"
+  # nel risultato registrato, e la diagnostica che lo verifica non partirebbe
+  # mai; ignore_errors lascia il flag e si limita a non fermare il play.
+  ignore_errors: true
+
+- name: Fermati se Patroni non parte sugli altri nodi
+  include_tasks: patroni_diagnostica.yml
+  when:
+    - inventory_hostname != patroni_primary_node
+    - patroni_start is failed
 
 - name: Attendi che la REST API di Patroni risponda
   uri:

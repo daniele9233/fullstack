@@ -1,0 +1,40 @@
+---
+# Incluso solo quando "systemctl start patroni" fallisce. Raccoglie il motivo
+# vero e lo mette nel messaggio d'errore, invece di lasciare il generico
+# "Unable to start service patroni: see systemctl status ... for details".
+
+- name: Raccogli lo stato di Patroni
+  shell: |
+    echo "--- systemctl is-active"
+    systemctl is-active patroni || true
+    echo "--- journalctl -u patroni, ultime 40 righe"
+    journalctl -u patroni -n 40 --no-pager || true
+    echo "--- proprietario di {{ postgres_mount_point }} e della PGDATA"
+    ls -ld {{ postgres_mount_point }} {{ postgres_data_dir }} 2>&1 || true
+  args:
+    executable: /bin/bash
+  register: patroni_diag
+  changed_when: false
+  failed_when: false
+
+- name: Fermati riportando il motivo
+  fail:
+    msg: |
+      Patroni non parte su {{ inventory_hostname }}.
+
+      {{ patroni_diag.stdout }}
+
+      Cose da guardare per prime, in ordine di frequenza:
+
+        - proprietario di {{ postgres_mount_point }}: deve essere postgres.
+          Se e' di root, PostgreSQL non riesce a scrivere nella propria HOME.
+          Succede quando la directory esisteva gia' all'installazione del
+          pacchetto, perche' il postinst non corregge cio' che trova;
+
+        - PGDATA gia' popolata da un'installazione precedente: Patroni si
+          rifiuta di adottarla. Si riparte con
+          -e postgres_force_reinit=true, che AZZERA i dati;
+
+        - etcd irraggiungibile dal nodo: senza DCS Patroni esce all'avvio.
+          Verifica con
+          curl http://{{ hostvars[inventory_hostname].ansible_host | default(inventory_hostname) }}:{{ etcd_client_port }}/health

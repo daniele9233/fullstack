@@ -304,6 +304,21 @@
     - "{{ etcd_data_dir }}"
   when: postgres_force_reinit | bool
 
+# postgres_mount_point e' la HOME dell'utente postgres e su Debian e Ubuntu deve
+# appartenergli. Se la directory esiste GIA' quando il pacchetto si installa —
+# perche' e' un mount fatto a mano, o perche' l'ha creata il playbook — il
+# postinst non ne corregge il proprietario, e resta di root: PostgreSQL non
+# parte e Patroni fallisce con "Unable to start service patroni".
+#
+# Qui l'utente postgres esiste di sicuro, i pacchetti sono gia' installati.
+- name: Assicura che {{ postgres_mount_point }} appartenga a postgres
+  file:
+    path: "{{ postgres_mount_point }}"
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: '0755'
+
 - name: Assicura la directory dati di PostgreSQL
   file:
     path: "{{ postgres_data_dir }}"

@@ -39,13 +39,17 @@
     # I dischi si predispongono a mano: qui ci si limita a garantire che la
     # directory esista, creandola se manca. Se sopra c'e' un mount, il modulo
     # file non lo tocca: vede una directory gia' presente e non cambia niente.
+    #
+    # NESSUN owner qui, di proposito: questa e' la HOME dell'utente postgres, e
+    # a questo punto del play quell'utente non esiste ancora, perche' lo crea il
+    # pacchetto. Forzando root:root la directory resterebbe di root anche dopo
+    # l'installazione: il postinst non corregge il proprietario di una directory
+    # che trova gia' presente, e Patroni non parte. Ci pensa il ruolo, dopo
+    # l'installazione dei pacchetti.
     - name: Assicura che {{ postgres_mount_point }} esista
       file:
         path: "{{ postgres_mount_point }}"
         state: directory
-        owner: root
-        group: root
-        mode: '0755'
 
     # Che cosa c'e' sotto: un disco dedicato o il filesystem di sistema.
     # findmnt esce diverso da zero quando il percorso non e' un mountpoint, ed
