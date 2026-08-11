@@ -38,24 +38,53 @@ niente.
 
 Nessuna password e nessuna passphrase viene mai scritta su disco.
 
-## Installazione
+## Installazione su Windows
 
-Serve Python 3.10 o piu' recente, da [python.org](https://www.python.org/downloads/)
-— in fase di installazione spunta **Add Python to PATH**.
+### 1. Python
 
-Poi, doppio clic su `run.bat`. Al primo avvio crea l'ambiente e installa le
-dipendenze da solo; dalle volte successive parte e basta.
+Scarica Python 3.10 o piu' recente da
+[python.org/downloads](https://www.python.org/downloads/) e durante
+l'installazione **spunta "Add Python to PATH"** nella prima schermata. E' la
+casella che quasi tutti saltano ed e' quella che serve.
 
-### Eseguibile singolo
+Verifica aprendo il Prompt dei comandi:
 
-Per avere un `.exe` da copiare dove serve, senza Python installato sulla
+```
+py --version
+```
+
+### 2. Portare il codice sul PC
+
+Se hai Git per Windows:
+
+```
+cd %USERPROFILE%\Desktop
+git clone https://github.com/daniele9233/fullstack.git
+cd fullstack\windows-launcher
+```
+
+Altrimenti scarica lo zip del repository da
+`https://github.com/daniele9233/fullstack/archive/refs/heads/main.zip`,
+estrailo, e apri la cartella `windows-launcher`.
+
+### 3. Avvio
+
+Doppio clic su **`run.bat`**.
+
+Al primo avvio crea l'ambiente Python e installa le dipendenze da solo: ci
+mette un minuto e lo dice. Dalle volte successive parte subito.
+
+### 4. Eseguibile singolo (facoltativo)
+
+Per avere un `.exe` da copiare dove serve, che non richiede Python sulla
 macchina di destinazione:
 
 ```
 build.bat
 ```
 
-Produce `dist\AnsibleLauncher.exe`.
+Produce `dist\AnsibleLauncher.exe`. Da li' in poi si lancia quello, anche senza
+la cartella del progetto.
 
 ## Uso
 
