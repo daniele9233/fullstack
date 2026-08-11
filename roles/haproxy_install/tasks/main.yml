@@ -34,6 +34,42 @@
     state: started
     daemon_reload: yes
 
+# --- Tuning di rete ----------------------------------------------------------
+# Applicato DOPO la configurazione, come nella procedura seguita a mano sui
+# bilanciatori.
+#
+# ip_nonlocal_bind: permette di fare il bind di un indirizzo che il nodo non
+# possiede. Serve a nginx, che ascolta esplicitamente su vip_rancher_ip:443
+# anche sul bilanciatore che in quel momento non ha il VIP; senza, il bind
+# fallisce con "Cannot assign requested address" e nginx non parte affatto.
+# Lo imposta gia' keepalived_install, che gira prima: qui e' ripetuto perche' fa
+# parte del tuning documentato di HAProxy, ed essendo idempotente la seconda
+# scrittura non cambia niente.
+#
+# ip_forward: instradamento fra interfacce. Non serve a un HAProxy in modalita'
+# proxy, che termina e riapre le connessioni, ma e' nella configurazione dei
+# bilanciatori in esercizio ed e' richiesto dagli schemi in cui il traffico di
+# ritorno passa dal bilanciatore.
+#
+# reload: yes equivale al "sysctl -p" della procedura manuale.
+- name: Tuning dei parametri di rete
+  sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_set: yes
+    state: present
+    reload: yes
+  loop: "{{ haproxy_sysctl | dict2items }}"
+  loop_control:
+    label: "{{ item.key }} = {{ item.value }}"
+
+- name: Mostra i parametri di rete applicati
+  debug:
+    msg: >-
+      {{ inventory_hostname }}:
+      {{ haproxy_sysctl | dict2items | map(attribute='key') | zip(haproxy_sysctl.values())
+         | map('join', ' = ') | join(', ') }}
+
 - name: Segnala che non ci sono backend configurati
   debug:
     msg: >-

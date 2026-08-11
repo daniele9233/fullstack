@@ -21,3 +21,10 @@ haproxy_config_path: "/etc/haproxy/haproxy.cfg"
 
 # Gruppo dell'inventario da cui prendere i nodi Patroni/PgBouncer.
 haproxy_backend_group: "db_servers"
+
+# Tuning di rete applicato ai bilanciatori dopo la configurazione di haproxy,
+# come nella procedura seguita a mano. Finiscono in /etc/sysctl.conf e vengono
+# ricaricati subito, l'equivalente di "sysctl -p".
+haproxy_sysctl:
+  net.ipv4.ip_nonlocal_bind: 1
+  net.ipv4.ip_forward: 1

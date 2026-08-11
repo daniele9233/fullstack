@@ -69,43 +69,6 @@ gruppo per isolare un test produce configurazioni monche senza che niente
 fallisca: per isolare si usa il playbook, non l'inventario.
 
 
-PULIZIA DEI NODI
-
-Tre script in scripts/, uno per area, che riportano un nodo allo stato
-precedente all'installazione:
-
-  scripts/pulizia-kubernetes.sh     RKE2, K3s, rancher-system-agent
-  scripts/pulizia-database.sh       PostgreSQL, Patroni, etcd, PgBouncer
-  scripts/pulizia-bilanciatori.sh   nginx, haproxy, keepalived
-
-Si lanciano a mano sul nodo:
-
-  sudo scripts/pulizia-database.sh
-
-oppure da Ansible, con playbooks/99-pulizia.yml, che esegue lo script giusto per
-ogni gruppo. Quel playbook NON e' incluso in site.yml e pretende due cose:
-
-  ansible-playbook playbooks/99-pulizia.yml --limit db_servers -e conferma_pulizia=SI
-
---limit dice quali nodi, -e conferma_pulizia=SI dice che sai cosa stai facendo.
-Senza uno dei due il playbook si ferma prima di toccare qualsiasi cosa: senza
---limit pulirebbe tutto l'ambiente in un colpo solo.
-
-Sui bilanciatori il play gira con serial: 1, come quello di installazione: su
-una coppia in HA si pulisce un nodo alla volta, cosi' il VIP passa all'altro
-invece di sparire.
-
-pulizia-kubernetes.sh non riavvia. Per riavviare a fine pulizia:
-
-  sudo RIAVVIA=1 scripts/pulizia-kubernetes.sh
-  ansible-playbook playbooks/99-pulizia.yml --limit workers -e conferma_pulizia=SI -e pulizia_riavvia=true
-
-Quello che gli script NON toccano, di proposito: il disco dati montato su
-/var/lib/rancher o /var/lib/postgresql (si rimuovono le sottodirectory, mai il
-mount point), l'etcd interno di RKE2 quando si pulisce un database, e
-netcat-openbsd sui bilanciatori.
-
-
 CLUSTER RANCHER A 3 NODI
 
 Il cluster RKE2 locale che ospita Rancher e' definito dal gruppo [masters]
@@ -187,6 +150,16 @@ Failover coperti:
 
 Il play gira con serial: 1, un bilanciatore alla volta, e nginx non viene mai
 fermato durante la riconfigurazione: le modifiche si applicano con un reload.
+
+Dopo la configurazione di haproxy il ruolo applica il tuning di rete, l'elenco
+haproxy_sysctl, con l'equivalente di "sysctl -p":
+
+  net.ipv4.ip_nonlocal_bind = 1
+  net.ipv4.ip_forward = 1
+
+Il primo lo imposta gia' keepalived_install, che gira prima: qui e' ripetuto
+perche' fa parte del tuning documentato di HAProxy, ed essendo idempotente la
+seconda scrittura non cambia niente.
 
 Gli upstream nginx derivano dai gruppi [masters] e [ingress] dell'inventario,
 i backend haproxy dal gruppo [db_servers]: con [db_servers] vuoto le sezioni
