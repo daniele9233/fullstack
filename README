@@ -46,9 +46,13 @@ site.yml non contiene piu' i play: li importa da playbooks/ con
 import_playbook. Ogni play e' scritto una volta sola, quindi le due modalita'
 non possono divergere.
 
-Ogni playbook prepara i propri host: host_prep e create_disk non sono piu' due
-play su "all" ma stanno dentro all'area che li usa. Per host il risultato e'
-identico, ma lanciandone uno solo non si toccano gli altri gruppi.
+Ogni playbook prepara i propri host: host_prep non e' piu' un play su "all" ma
+sta dentro all'area che lo usa. Per host il risultato e' identico, ma
+lanciandone uno solo non si toccano gli altri gruppi.
+
+IL DISCO DATI SI PREDISPONE A MANO: create_disk non e' invocato da nessun
+playbook. Il ruolo resta in roles/ e ogni playbook riporta in un commento il
+play da rimettere per riattivarlo.
 
 update_hosts_file sta SOLO in 20-rancher.yml, perche' serve a chi parla con
 Rancher. I nodi database e Gluster si scrivono /etc/hosts da soli dentro ai
@@ -241,7 +245,19 @@ apt_pause_unattended_upgrades a false non viene toccato niente e restano solo i
 tentativi ripetuti sui task apt.
 
 
-DISCO DATI (ruolo create_disk)
+DISCO DATI (ruolo create_disk) - AL MOMENTO NON INVOCATO
+
+I dischi si predispongono a mano: nessun playbook chiama piu' create_disk. Il
+ruolo resta qui, funzionante, e in 20-rancher.yml e 30-database.yml c'e' il
+commento con il play da rimettere per riattivarlo. Quello che segue descrive
+come funziona quando lo si riattiva.
+
+Con create_disk fuori gioco, l'unico controllo che impedisce a Patroni di
+scrivere il database sulla partizione di sistema e' il findmnt in
+30-database.yml, retto da postgres_require_dedicated_disk. Su una macchina di
+prova senza disco dedicato si salta con
+-e postgres_require_dedicated_disk=false, e allora il playbook si limita a
+creare la directory e avvisa: da non fare in produzione.
 
 Un disco dedicato per i dati, partizionato con LVM e messo in fstab: partizione
 unica sul device, volume group, logical volume su tutto lo spazio, filesystem,

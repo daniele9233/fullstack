@@ -20,15 +20,16 @@
     - role: host_prep
 
 
-# Disco dati dedicato: /var/lib/rancher sui nodi RKE2.
-# Il ruolo non tocca nulla dove il mount point risulta gia' montato, quindi
-# convive con i dischi predisposti manualmente.
-- name: Disco dati dei nodi RKE2
-  hosts: masters,new_managers,workers,ingress
-  become: yes
-  gather_facts: yes
-  roles:
-    - role: create_disk
+# Il disco dati (/var/lib/rancher) si predispone A MANO: il ruolo create_disk
+# esiste ancora in roles/ ma non viene invocato. Per riattivarlo, rimettere qui
+# questo play prima della risoluzione del dominio:
+#
+#   - name: Disco dati dei nodi RKE2
+#     hosts: masters,new_managers,workers,ingress
+#     become: yes
+#     gather_facts: yes
+#     roles:
+#       - role: create_disk
 
 
 # Risoluzione del dominio Rancher in /etc/hosts.

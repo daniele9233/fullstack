@@ -356,6 +356,16 @@ postgres_force_reinit: false
 # "upgrade: dist" a ogni esecuzione, come nel playbook di partenza.
 postgres_dist_upgrade: true
 
+# Pretende che postgres_mount_point sia un mountpoint prima di inizializzare il
+# cluster. Da quando il disco dati si predispone a mano (create_disk non e' piu'
+# invocato dai playbook) questo e' l'unico controllo che impedisce a Patroni di
+# scrivere il database sulla partizione di sistema.
+#
+# Con false il playbook crea solo la directory e prosegue: comodo per una prova
+# su macchine senza disco dedicato, da non usare in produzione.
+#   ansible-playbook ... -e postgres_require_dedicated_disk=false
+postgres_require_dedicated_disk: true
+
 # CAMBIA QUESTE PASSWORD prima di andare in produzione: con
 # "host all all 0.0.0.0/0 md5" nel pg_hba, chiunque raggiunga la 5432 puo'
 # provarle.

@@ -17,16 +17,15 @@
     - role: host_prep
 
 
-# Disco dati dedicato, montato su postgres_mount_point
-# (vedi group_vars/db_servers.yml).
-# Il ruolo non tocca nulla dove il mount point risulta gia' montato, quindi
-# convive con i dischi predisposti manualmente.
-- name: Disco dati dei database
-  hosts: db_servers
-  become: yes
-  gather_facts: yes
-  roles:
-    - role: create_disk
+# Il disco dati si predispone A MANO: il ruolo create_disk esiste ancora in
+# roles/ ma non viene invocato. Per riattivarlo, rimettere qui questo play:
+#
+#   - name: Disco dati dei database
+#     hosts: db_servers
+#     become: yes
+#     gather_facts: yes
+#     roles:
+#       - role: create_disk
 
 
 # Il ruolo e' idempotente: rilanciarlo non cancella dati e non riavvia servizi.
@@ -37,22 +36,48 @@
   become: yes
   gather_facts: yes
   pre_tasks:
-    # Il disco dati e' predisposto dal play precedente, oppure montato a mano.
-    # In entrambi i casi questo controllo impedisce a Patroni di inizializzare
-    # il database sulla partizione di sistema se il mount non c'e'.
+    # Ora che il disco si predispone a mano, questo e' l'unico controllo che
+    # impedisce a Patroni di inizializzare il database sulla partizione di
+    # sistema. Se il mount non c'e', il play si ferma qui.
     #
     # findmnt e non "df -h | grep": il grep passa anche quando a essere montata
     # e' solo una sottodirectory, o quando la stringa compare nel nome di un
     # device. findmnt sul percorso corrisponde al mountpoint esatto e basta.
+    #
+    # Su una macchina di prova senza disco dedicato si salta con
+    #   -e postgres_require_dedicated_disk=false
+    # ma allora il database finisce sul filesystem di sistema: mai in
+    # produzione.
     - name: Verifica che il disco dati sia montato su {{ postgres_mount_point }}
       command: "findmnt -n -o TARGET,SOURCE,FSTYPE {{ postgres_mount_point }}"
       register: postgres_mount
       changed_when: false
       failed_when: postgres_mount.rc != 0
+      when: postgres_require_dedicated_disk | bool
 
     - name: Mostra il filesystem dei dati
       debug:
         msg: "{{ inventory_hostname }}: {{ postgres_mount.stdout | trim }}"
+      when: postgres_require_dedicated_disk | bool
+
+    # Senza disco dedicato la directory non la crea nessuno: la crea questo
+    # task, altrimenti il ruolo fallirebbe piu' avanti.
+    - name: Assicura che {{ postgres_mount_point }} esista
+      file:
+        path: "{{ postgres_mount_point }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      when: not (postgres_require_dedicated_disk | bool)
+
+    - name: Avvisa che il database va sul filesystem di sistema
+      debug:
+        msg: >-
+          {{ inventory_hostname }}: nessun disco dedicato richiesto.
+          {{ postgres_mount_point }} sta sul filesystem di sistema: va bene per
+          una prova, non per la produzione.
+      when: not (postgres_require_dedicated_disk | bool)
   roles:
     - postgresql_cluster
   post_tasks:
