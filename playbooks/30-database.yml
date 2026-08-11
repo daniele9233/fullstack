@@ -36,32 +36,9 @@
   become: yes
   gather_facts: yes
   pre_tasks:
-    # Ora che il disco si predispone a mano, questo e' l'unico controllo che
-    # impedisce a Patroni di inizializzare il database sulla partizione di
-    # sistema. Se il mount non c'e', il play si ferma qui.
-    #
-    # findmnt e non "df -h | grep": il grep passa anche quando a essere montata
-    # e' solo una sottodirectory, o quando la stringa compare nel nome di un
-    # device. findmnt sul percorso corrisponde al mountpoint esatto e basta.
-    #
-    # Su una macchina di prova senza disco dedicato si salta con
-    #   -e postgres_require_dedicated_disk=false
-    # ma allora il database finisce sul filesystem di sistema: mai in
-    # produzione.
-    - name: Verifica che il disco dati sia montato su {{ postgres_mount_point }}
-      command: "findmnt -n -o TARGET,SOURCE,FSTYPE {{ postgres_mount_point }}"
-      register: postgres_mount
-      changed_when: false
-      failed_when: postgres_mount.rc != 0
-      when: postgres_require_dedicated_disk | bool
-
-    - name: Mostra il filesystem dei dati
-      debug:
-        msg: "{{ inventory_hostname }}: {{ postgres_mount.stdout | trim }}"
-      when: postgres_require_dedicated_disk | bool
-
-    # Senza disco dedicato la directory non la crea nessuno: la crea questo
-    # task, altrimenti il ruolo fallirebbe piu' avanti.
+    # I dischi si predispongono a mano: qui ci si limita a garantire che la
+    # directory esista, creandola se manca. Se sopra c'e' un mount, il modulo
+    # file non lo tocca: vede una directory gia' presente e non cambia niente.
     - name: Assicura che {{ postgres_mount_point }} esista
       file:
         path: "{{ postgres_mount_point }}"
@@ -69,15 +46,41 @@
         owner: root
         group: root
         mode: '0755'
-      when: not (postgres_require_dedicated_disk | bool)
 
-    - name: Avvisa che il database va sul filesystem di sistema
+    # Che cosa c'e' sotto: un disco dedicato o il filesystem di sistema.
+    # findmnt esce diverso da zero quando il percorso non e' un mountpoint, ed
+    # e' proprio l'informazione che serve, quindi non e' un errore.
+    - name: Rileva su quale filesystem sta {{ postgres_mount_point }}
+      command: "findmnt -n -o TARGET,SOURCE,FSTYPE {{ postgres_mount_point }}"
+      register: postgres_mount
+      changed_when: false
+      failed_when: false
+
+    - name: Mostra dove finiranno i dati
       debug:
         msg: >-
-          {{ inventory_hostname }}: nessun disco dedicato richiesto.
-          {{ postgres_mount_point }} sta sul filesystem di sistema: va bene per
-          una prova, non per la produzione.
-      when: not (postgres_require_dedicated_disk | bool)
+          {{ inventory_hostname }}:
+          {{ 'disco dedicato -> ' ~ postgres_mount.stdout | trim
+             if postgres_mount.rc == 0
+             else postgres_mount_point ~ ' sta sul filesystem di sistema, nessun disco dedicato' }}
+
+    # Controllo facoltativo, spento di default. In produzione, dove il disco
+    # dedicato c'e', metterlo a true evita che un database finisca per sbaglio
+    # sulla partizione di root.
+    #
+    # findmnt e non "df -h | grep": il grep passa anche quando a essere montata
+    # e' solo una sottodirectory, o quando la stringa compare nel nome di un
+    # device. findmnt sul percorso corrisponde al mountpoint esatto e basta.
+    - name: Pretendi un disco dedicato, se richiesto
+      assert:
+        that:
+          - postgres_mount.rc == 0
+        fail_msg: >-
+          {{ postgres_mount_point }} non e' un mountpoint su
+          {{ inventory_hostname }}, e postgres_require_dedicated_disk e' true:
+          il database finirebbe sulla partizione di sistema. Monta il disco,
+          oppure rilancia senza quel parametro.
+      when: postgres_require_dedicated_disk | bool
   roles:
     - postgresql_cluster
   post_tasks:

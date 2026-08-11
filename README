@@ -289,12 +289,19 @@ ruolo resta qui, funzionante, e in 20-rancher.yml e 30-database.yml c'e' il
 commento con il play da rimettere per riattivarlo. Quello che segue descrive
 come funziona quando lo si riattiva.
 
-Con create_disk fuori gioco, l'unico controllo che impedisce a Patroni di
-scrivere il database sulla partizione di sistema e' il findmnt in
-30-database.yml, retto da postgres_require_dedicated_disk. Su una macchina di
-prova senza disco dedicato si salta con
--e postgres_require_dedicated_disk=false, e allora il playbook si limita a
-creare la directory e avvisa: da non fare in produzione.
+30-database.yml non pretende piu' un disco montato: garantisce solo che
+postgres_mount_point esista, creando la directory se manca, e poi dice a video
+se sotto c'e' un disco dedicato o il filesystem di sistema. Se il mount c'e'
+gia', la directory risulta presente e non viene toccata.
+
+Per fare del disco dedicato un requisito, e fermare il play dove manca:
+
+  ansible-playbook ... -e postgres_require_dedicated_disk=true
+
+Vale la pena in produzione, dove il disco c'e' e un database finito per sbaglio
+sulla partizione di root e' un guaio. Di default e' false, altrimenti ogni
+esecuzione su una macchina senza disco dedicato si fermerebbe pretendendo un
+mount che nessun playbook crea piu'.
 
 Un disco dedicato per i dati, partizionato con LVM e messo in fstab: partizione
 unica sul device, volume group, logical volume su tutto lo spazio, filesystem,
