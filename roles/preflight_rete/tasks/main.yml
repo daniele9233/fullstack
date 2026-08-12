@@ -81,16 +81,32 @@
   loop: "{{ group_names }}"
   when: item in pf_vip_attesi
 
-# Due domande in una: l'indirizzo risponde? e, se risponde, e' su questo nodo?
-# La differenza e' tutta: un VIP che risponde da qui e' keepalived o Pacemaker
-# gia' installato, un VIP che risponde da altrove e' un indirizzo occupato.
-- name: Verifica se i VIP rispondono gia'
+# Tre domande. L'indirizzo e' sulla RETE di questo nodo? risponde gia' qualcuno?
+# e, se risponde, e' questo nodo stesso?
+#
+# La prima e' quella che si sbaglia piu' spesso e la piu' silenziosa. Con un
+# /28 la rete e' di sedici indirizzi, non di duecentocinquantasei: nodi in
+# 10.205.166.208/28 (da .209 a .222) e VIP a .253 sembrano vicini guardando il
+# terzo ottetto, ma sono due reti diverse. keepalived assegna comunque
+# l'indirizzo e non protesta, mentre IPaddr2 di Pacemaker rifiuta di partire con
+# "[findif] failed", che non spiega niente.
+#
+# "ip route get" risponde senza fare aritmetica: se l'indirizzo e' sulla rete
+# locale la strada e' diretta, altrimenti nella risposta compare " via " e passa
+# dal gateway.
+#
+# Le altre due distinguono un VIP gia' in uso da uno legittimamente presente:
+# un VIP che risponde da qui e' keepalived o Pacemaker gia' installato, un VIP
+# che risponde da altrove e' un indirizzo di qualcun altro.
+- name: "Verifica dei VIP: rete, risposta, presenza locale"
   shell: |
     set +e
     {% for v in (pf_vip_host | default([])) | rejectattr('indirizzo', 'equalto', '') %}
     if ping -c 1 -W 1 {{ v.indirizzo | quote }} >/dev/null 2>&1; then risponde=si; else risponde=no; fi
     if ip -o addr show 2>/dev/null | grep -qw {{ v.indirizzo | quote }}; then locale=si; else locale=no; fi
-    echo "{{ v.indirizzo }}|$risponde|$locale|{{ v.a_cosa_serve }}"
+    rotta=$(ip route get {{ v.indirizzo | quote }} 2>/dev/null | head -1)
+    if [ -z "$rotta" ]; then stessarete=no; elif echo "$rotta" | grep -q " via "; then stessarete=no; else stessarete=si; fi
+    echo "{{ v.indirizzo }}|$risponde|$locale|$stessarete|{{ v.a_cosa_serve }}"
     {% endfor %}
   args:
     executable: /bin/bash
@@ -109,21 +125,33 @@
     campi: "{{ item.split('|') }}"
     risponde: "{{ campi[1] == 'si' }}"
     locale: "{{ campi[2] == 'si' }}"
+    stessa_rete: "{{ campi[3] == 'si' }}"
     riga:
       sezione: RETE
       voce: "VIP {{ campi[0] }}"
       valore: >-
-        {{ campi[3] }} -
-        {{ 'libero, non risponde nessuno' if not risponde | bool
-           else ("risponde, ed e' gia' su questo nodo" if locale | bool
-                 else 'RISPONDE da un altro nodo') }}
+        {{ campi[4] }} -
+        {{ "NON e' sulla rete di questo nodo" if not stessa_rete | bool
+           else ('libero, non risponde nessuno' if not risponde | bool
+                 else ("risponde, ed e' gia' su questo nodo" if locale | bool
+                       else 'RISPONDE da un altro nodo')) }}
       esito: >-
-        {{ 'OK' if not risponde | bool else ('INFO' if locale | bool else 'ATTENZIONE') }}
+        {{ 'PROBLEMA' if not stessa_rete | bool
+           else ('OK' if not risponde | bool
+                 else ('INFO' if locale | bool else 'ATTENZIONE')) }}
       nota: >-
-        l'indirizzo risponde ma non e' su questo nodo. Se l'infrastruttura e'
-        gia' installata e' normale (lo tiene l'altro bilanciatore); altrimenti
-        l'indirizzo e' di qualcun altro e va cambiato, perche' due macchine con
-        lo stesso IP sulla stessa VLAN si tolgono il traffico a vicenda.
+        {{ "il VIP non appartiene a nessuna rete configurata sulle interfacce del
+            nodo: per raggiungerlo si passa dal gateway. keepalived se lo prende
+            lo stesso e nessuno se ne accorge, Pacemaker invece non avvia la
+            risorsa e lascia solo [findif] failed. Con un /28 la rete e' di
+            sedici indirizzi: controlla con ip -br addr e scegli un indirizzo
+            libero dentro a quella dei nodi."
+           if not stessa_rete | bool
+           else "l'indirizzo risponde ma non e' su questo nodo. Se
+                 l'infrastruttura e' gia' installata e' normale, lo tiene
+                 l'altro nodo; altrimenti l'indirizzo e' di qualcun altro e va
+                 cambiato, perche' due macchine con lo stesso IP sulla stessa
+                 VLAN si tolgono il traffico a vicenda." }}
 
 # --- Raggiungibilita' fra i nodi -------------------------------------------
 

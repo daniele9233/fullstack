@@ -267,6 +267,15 @@ local_ssl_key_path: "files/privkey.pem"
 #   - vip_patroni_ip  -> lo tiene haproxy, espone Patroni/PgBouncer
 
 # >>> VERIFICA CHE QUESTI DUE INDIRIZZI SIANO LIBERI NELLA TUA VLAN <<<
+#
+# E che stiano DENTRO alla rete dei nodi, non solo vicini guardando il terzo
+# ottetto. Con prefisso 28 la rete e' di sedici indirizzi: nodi in
+# 10.205.166.208/28 vuol dire da .209 a .222, e un VIP a .231 o a .253 e' su
+# un'altra rete. keepalived se lo prende comunque e nessuno protesta, ma il VIP
+# non e' raggiungibile da fuori; IPaddr2 di Pacemaker invece rifiuta di partire
+# e lascia "[findif] failed", che non spiega niente.
+#
+# Il controllo lo fa da solo playbooks/00-verifica.yml, sezione RETE.
 vip_rancher_ip: "10.205.166.221"
 vip_rancher_prefix: 28
 vip_patroni_ip: "10.205.166.231"
@@ -484,7 +493,14 @@ ganesha_client_groups:
 ganesha_extra_clients: []
 
 # VIP NFS, gestito da Pacemaker e spostato sul nodo che serve Ganesha.
-# >>> VERIFICA CHE SIA LIBERO NELLA TUA VLAN <<<
+#
+# >>> VERIFICA CHE SIA LIBERO E DENTRO ALLA RETE DEI NODI GLUSTER <<<
+#
+# Deve stare nella stessa rete degli indirizzi dei nodi, non solo nella stessa
+# VLAN a occhio: IPaddr2 ricava l'interfaccia dalla tabella di instradamento e,
+# se per arrivare al VIP si passa dal gateway, non ne trova nessuna e la risorsa
+# resta Stopped con "[findif] failed". Il ruolo pacemaker_nfs_ha se ne accorge
+# prima e si ferma dicendo perche'.
 nfs_vip_ip: "10.205.166.253"
 nfs_vip_prefix: 24
 

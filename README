@@ -477,6 +477,27 @@ in quel caso conviene tenere le risorse lontane dall'arbitro:
 
   pcs constraint location nfs_group avoids <arbitro>=INFINITY
 
+I VIP DEVONO STARE DENTRO ALLA RETE DEI NODI, non solo nella stessa VLAN a
+occhio. Con prefisso 28 la rete e' di SEDICI indirizzi: nodi in
+10.205.166.208/28 vuol dire da .209 a .222, e un VIP a .253 e' su un'altra rete
+anche se il terzo ottetto e' lo stesso.
+
+Le due cose non falliscono allo stesso modo, ed e' il motivo per cui l'errore
+sopravvive a lungo. keepalived assegna l'indirizzo comunque e non protesta: il
+VIP c'e', semplicemente non lo raggiunge nessuno da fuori. Pacemaker no:
+ocf:heartbeat:IPaddr2 ricava l'interfaccia dalla tabella di instradamento, e se
+per arrivare al VIP si passa dal gateway non ne trova nessuna e lascia
+
+  nfs_ip start on <nodo> returned 'error' ([findif] failed)
+
+che non dice quale sia il problema. Il ruolo pacemaker_nfs_ha adesso se ne
+accorge prima e si ferma spiegando cosa non torna; playbooks/00-verifica.yml lo
+segnala in sezione RETE prima ancora di installare, per tutti e tre i VIP.
+
+Si legge con "ip -br addr" su un nodo: l'indirizzo con il suo prefisso dice
+qual e' la rete, e il VIP va scelto libero dentro a quella.
+
+
 PACCHETTI DEL CLUSTER PACEMAKER: da Ubuntu 24.04 il pacchetto resource-agents
 non esiste piu' come tale, e' stato diviso in resource-agents-common, -base e
 -extra. Chiedendo il vecchio nome apt risponde "No package matching

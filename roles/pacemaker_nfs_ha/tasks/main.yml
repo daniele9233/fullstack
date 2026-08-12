@@ -68,36 +68,78 @@
 # realmente configurati sul nodo e si pretende che nfs_vip_prefix sia uno di
 # quelli. E' un controllo per eccesso, non fa aritmetica di reti, ma prende
 # esattamente il caso che si verifica.
-- name: Leggi i prefissi di rete configurati sul nodo
+- name: Leggi la rete del nodo e la strada verso il VIP
   shell: |
-    set -o pipefail
-    ip -o -4 addr show scope global | awk '{ print $4 }' | awk -F/ '{ print $2 }' | sort -u | tr '\n' ' '
+    set +e
+    echo "PREFISSI=$(ip -o -4 addr show scope global | awk '{ print $4 }' | awk -F/ '{ print $2 }' | sort -u | tr '\n' ' ')"
+    echo "INDIRIZZI=$(ip -o -4 addr show scope global | awk '{ print $4 }' | tr '\n' ' ')"
+    echo "ROTTA=$(ip route get {{ nfs_vip_ip }} 2>/dev/null | head -1)"
   args:
     executable: /bin/bash
-  register: pcs_prefissi
+  register: pcs_rete
   changed_when: false
   when: inventory_hostname in pcs_cluster_nodes
 
+# Il controllo che conta davvero, ed e' esattamente quello che fa findif: il VIP
+# deve stare SULLA STESSA RETE di un indirizzo del nodo.
+#
+# "ip route get" lo dice senza fare aritmetica: se l'indirizzo e' sulla rete
+# locale la risposta e' diretta (dev ens5 src ...), se sta altrove passa dal
+# gateway e nella risposta compare " via ". Con " via " findif non trova
+# nessuna interfaccia che serva quella rete, e la risorsa non parte.
+#
+# E' l'errore che si fa con le reti piccole: /28 vuol dire 16 indirizzi, non
+# 256. Nodi in 10.205.166.208/28 (da .209 a .222) e VIP a .253 sembrano vicini
+# guardando il terzo ottetto, ma sono due reti diverse.
+- name: Verifica che il VIP sia sulla stessa rete dei nodi
+  assert:
+    that:
+      - "' via ' not in rotta"
+      - rotta | length > 0
+    fail_msg: >-
+      nfs_vip_ip ({{ nfs_vip_ip }}) non e' sulla rete di {{ inventory_hostname }},
+      che ha {{ indirizzi }}. Per arrivarci il nodo passa dal gateway
+      ({{ rotta | default('nessuna rotta', true) }}), quindi IPaddr2 non trova
+      nessuna interfaccia da cui pubblicarlo e nfs_ip resta Stopped con
+      "[findif] failed". Scegli un indirizzo libero DENTRO alla rete dei nodi:
+      con un /28 sono sedici indirizzi in tutto, non l'intero terzo ottetto.
+    success_msg: >-
+      {{ nfs_vip_ip }} e' sulla rete di {{ inventory_hostname }} ({{ indirizzi }}).
+  vars:
+    rotta: >-
+      {{ pcs_rete.stdout_lines | default([]) | select('match', '^ROTTA=')
+         | map('regex_replace', '^ROTTA=', '') | first | default('') }}
+    indirizzi: >-
+      {{ pcs_rete.stdout_lines | default([]) | select('match', '^INDIRIZZI=')
+         | map('regex_replace', '^INDIRIZZI=', '') | first | default('?') | trim }}
+  when: inventory_hostname in pcs_cluster_nodes
+
+# Secondo controllo, sul prefisso. Non basta la rete giusta: IPaddr2 pubblica
+# l'indirizzo con la netmask che gli si passa, e dichiararne una diversa da
+# quella dell'interfaccia produce un indirizzo che il resto della VLAN non
+# instrada come ci si aspetta.
 - name: Verifica che nfs_vip_prefix sia il prefisso della rete dei nodi
   assert:
     that:
-      - (nfs_vip_prefix | string) in (pcs_prefissi.stdout | default('') | split)
+      - (nfs_vip_prefix | string) in (prefissi | split)
     fail_msg: >-
       nfs_vip_prefix e' {{ nfs_vip_prefix }}, ma su {{ inventory_hostname }} le
-      interfacce usano /{{ pcs_prefissi.stdout | default('') | trim | replace(' ', ', /') }}.
-      IPaddr2 cerca l'interfaccia che serve la rete del VIP con quella netmask,
-      non la trova, e la risorsa nfs_ip resta Stopped con "[findif] failed".
+      interfacce usano /{{ prefissi | trim | replace(' ', ', /') }}.
       Il valore giusto si legge con "ip -br addr" sui nodi, ed e' lo stesso che
       sta in vip_rancher_prefix per i bilanciatori se stanno nella stessa VLAN.
     success_msg: >-
       nfs_vip_prefix {{ nfs_vip_prefix }} coerente con le interfacce di
       {{ inventory_hostname }}.
+  vars:
+    prefissi: >-
+      {{ pcs_rete.stdout_lines | default([]) | select('match', '^PREFISSI=')
+         | map('regex_replace', '^PREFISSI=', '') | first | default('') }}
   # Se la lettura non ha prodotto niente il controllo non si puo' fare, e non
   # deve inventarsi un errore: meglio lasciar proseguire e vedere che cosa dice
   # IPaddr2, piuttosto che fermare il playbook su un dato che non c'e'.
   when:
     - inventory_hostname in pcs_cluster_nodes
-    - (pcs_prefissi.stdout | default('') | trim | length) > 0
+    - (prefissi | trim | length) > 0
 
 - name: Installa Pacemaker e pcs
   apt:
