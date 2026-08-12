@@ -26,16 +26,24 @@ pf_vincoli_gruppo:
 
 # File che devono esistere sul control node prima di lanciare. Sono quelli che
 # i ruoli copiano sui nodi: se mancano, il playbook si ferma a meta'.
+#
+# I percorsi sono ASSOLUTI, ancorati a repo_dir. Un percorso relativo qui non
+# funzionerebbe: il modulo stat gira come un modulo qualsiasi, con una
+# directory di lavoro sua che non e' la radice del repository, e riporterebbe
+# "manca" per file che invece ci sono. E' lo stesso motivo per cui local_ssl_*
+# in group_vars/all.yml sono ancorati anche loro.
+pf_radice: "{{ repo_dir | default(inventory_dir) }}"
+
 pf_file_richiesti:
-  - percorso: "roles/master1_helm_cert_manager_install/files/{{ fullchain_pem_file | default('fullchain.pem') }}"
+  - percorso: "{{ pf_radice }}/roles/master1_helm_cert_manager_install/files/{{ fullchain_pem_file | default('fullchain.pem') }}"
     a_cosa_serve: "certificato della console Rancher"
-  - percorso: "roles/master1_helm_cert_manager_install/files/{{ privkey_pem_file | default('privkey.pem') }}"
+  - percorso: "{{ pf_radice }}/roles/master1_helm_cert_manager_install/files/{{ privkey_pem_file | default('privkey.pem') }}"
     a_cosa_serve: "chiave privata del certificato Rancher"
-  - percorso: "roles/master1_helm_cert_manager_install/files/{{ cacerts_pem_file | default('cacerts.pem') }}"
+  - percorso: "{{ pf_radice }}/roles/master1_helm_cert_manager_install/files/{{ cacerts_pem_file | default('cacerts.pem') }}"
     a_cosa_serve: "catena della CA, usata da cert-manager"
-  - percorso: "{{ local_ssl_cert_path | default('files/fullchain.pem') }}"
+  - percorso: "{{ local_ssl_cert_path | default(pf_radice ~ '/files/fullchain.pem') }}"
     a_cosa_serve: "certificato che nginx pubblica sui bilanciatori"
-  - percorso: "{{ local_ssl_key_path | default('files/privkey.pem') }}"
+  - percorso: "{{ local_ssl_key_path | default(pf_radice ~ '/files/privkey.pem') }}"
     a_cosa_serve: "chiave privata usata da nginx"
 
 # Versione di ansible-core con cui il repository e' stato provato. Piu' bassa

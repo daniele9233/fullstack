@@ -19,14 +19,39 @@ Ultime versioni di kubernetes
 curl -s https://api.github.com/repos/rancher/rke2/releases | jq -r '.[].tag_name' | grep -v rc | head -10
 
 
-Inserire i certificati all'interno della dir
+I certificati vanno messi in DUE posti, e vanno tenuti allineati:
 
-/roles/master1_helm_cert_manager_install/files
+  roles/master1_helm_cert_manager_install/files/    per Rancher e cert-manager
+    cacerts.pem
+    fullchain.pem
+    privkey.pem
 
+  files/                                            per nginx sui bilanciatori
+    fullchain.pem
+    privkey.pem
 
-cacerts.pem
-fullchain.pem
-privkey.pem
+E' una duplicazione, e va saputa: rinnovando il certificato in un posto solo,
+meta' infrastruttura resta con quello vecchio. La verifica li controlla tutti e
+cinque, quindi un rinnovo fatto a meta' si vede subito.
+
+I due percorsi si dichiarano in modo diverso perche' Ansible li cerca in modo
+diverso. Quelli del ruolo Rancher sono nomi nudi (fullchain_pem_file e
+compagni) e il modulo copy li trova da solo nella cartella files/ del ruolo.
+Quelli dei bilanciatori sono percorsi completi, ancorati a repo_dir:
+
+  local_ssl_cert_path: "{{ repo_dir }}/files/fullchain.pem"
+
+Un percorso relativo li' NON funziona. copy risolve un src relativo nella
+cartella files/ del ruolo e in quella del playbook, e da quando i play stanno
+in playbooks/ quella cartella e' playbooks/, non la radice:
+
+  Could not find or access 'files/fullchain.pem'
+    Searched in: .../roles/nginx_install/files/fullchain.pem
+                 .../playbooks/files/fullchain.pem
+
+con il file che intanto sta tranquillo in files/ nella radice. repo_dir vale
+inventory_dir e non playbook_dir, perche' playbook_dir cambia a seconda di come
+si lancia: la radice con site.yml, playbooks/ con un playbook singolo.
 
 
 PRIMA DI INSTALLARE: LA VERIFICA

@@ -254,9 +254,32 @@ nginx_stream_module_path: "/usr/lib/nginx/modules/ngx_stream_module.so"
 # Path directory certificati
 nginx_cert_dir: "/etc/nginx/cert"
 
-# Path locali certificati
-local_ssl_cert_path: "files/fullchain.pem"
-local_ssl_key_path: "files/privkey.pem"
+# ---------------------------------------------------------------------------
+# RADICE DEL REPOSITORY
+# ---------------------------------------------------------------------------
+# Serve a dare un punto fisso ai file che stanno nel repository e che i ruoli
+# copiano sui nodi.
+#
+# Un percorso relativo NON funziona. Il modulo copy risolve un src relativo
+# nella cartella files/ del RUOLO e in quella del PLAYBOOK, e da quando i play
+# stanno in playbooks/ quella cartella e' playbooks/, non la radice. Il
+# risultato e' l'errore
+#
+#   Could not find or access 'files/fullchain.pem'
+#     Searched in: .../roles/nginx_install/files/fullchain.pem
+#                  .../playbooks/files/fullchain.pem
+#
+# con il file che intanto sta tranquillo in files/ nella radice.
+#
+# inventory_dir e non playbook_dir: playbook_dir cambia a seconda di come si
+# lancia (la radice con site.yml, playbooks/ con un playbook singolo), mentre
+# l'inventario sta sempre nella radice, ed e' anche quello che ansible.cfg
+# dichiara come "inventory = ./inventory.ini".
+repo_dir: "{{ inventory_dir }}"
+
+# Path locali dei certificati, sul CONTROLLER.
+local_ssl_cert_path: "{{ repo_dir }}/files/fullchain.pem"
+local_ssl_key_path: "{{ repo_dir }}/files/privkey.pem"
 
 # ---------------------------------------------------------------------------
 # BILANCIATORI (gruppo [nginx_servers]): nginx + haproxy + keepalived
