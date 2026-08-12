@@ -477,6 +477,23 @@ in quel caso conviene tenere le risorse lontane dall'arbitro:
 
   pcs constraint location nfs_group avoids <arbitro>=INFINITY
 
+PACCHETTI DEL CLUSTER PACEMAKER: da Ubuntu 24.04 il pacchetto resource-agents
+non esiste piu' come tale, e' stato diviso in resource-agents-common, -base e
+-extra. Chiedendo il vecchio nome apt risponde "No package matching
+'resource-agents' is available" e il ruolo si ferma prima di creare il cluster,
+lasciando nfs-ganesha disabilitato in systemd (lo disattiva ganesha_install,
+perche' ad avviarlo deve essere Pacemaker) e quindi NFS spento.
+
+L'elenco sta in pcs_pacchetti: corosync, pacemaker, pcs, resource-agents-base.
+-base basta perche' l'unico agent OCF usato e' ocf:heartbeat:IPaddr2 per il VIP,
+mentre Ganesha e' una risorsa systemd:nfs-ganesha. Su Ubuntu 22.04 e precedenti
+il nome giusto e' ancora "resource-agents".
+
+pcs viene installato SUI NODI DEL CLUSTER, non sul controller Ansible: "pcs
+status" lanciato da li' risponde "Command 'pcs' not found" ed e' corretto cosi'.
+Lo stato si guarda da uno dei due nodi in pcs_cluster_nodes.
+
+
 Variabili principali:
 
   gluster_brick_root        radice dei brick

@@ -57,10 +57,7 @@
 
 - name: Installa Pacemaker e pcs
   apt:
-    name:
-      - pacemaker
-      - pcs
-      - resource-agents
+    name: "{{ pcs_pacchetti }}"
     state: present
     update_cache: yes
     cache_valid_time: 3600

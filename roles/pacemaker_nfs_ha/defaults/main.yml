@@ -12,5 +12,33 @@ pcs_resource_ganesha: "nfs_server"
 pcs_resource_vip: "nfs_ip"
 pcs_resource_group: "nfs_group"
 
+# Pacchetti del cluster.
+#
+# resource-agents-base e NON resource-agents: da Ubuntu 24.04, come da Debian
+# bookworm, il pacchetto unico non esiste piu' ed e' stato diviso in
+# resource-agents-common, -base e -extra. Chiedendo il vecchio nome apt risponde
+#
+#   No package matching 'resource-agents' is available
+#
+# e il ruolo si ferma prima ancora di creare il cluster, lasciando Ganesha
+# disabilitato in systemd (lo disattiva ganesha_install, perche' ad avviarlo
+# dovrebbe essere Pacemaker) e quindi NFS spento.
+#
+# -base basta: l'unico agent OCF che questo ruolo usa e' ocf:heartbeat:IPaddr2,
+# per il VIP. Ganesha non passa da un agent, e' una risorsa systemd:nfs-ganesha.
+# -extra servirebbe solo aggiungendo risorse tipo ocf:heartbeat:Filesystem o
+# ocf:heartbeat:nfsserver.
+#
+# corosync e' elencato anche se pacemaker se lo tira dietro: e' lui che tiene il
+# quorum, ed e' il file che "pcs cluster setup" va a scrivere.
+#
+# SU UBUNTU 22.04 E PRECEDENTI il nome giusto e' ancora "resource-agents", senza
+# suffisso: la' questa lista va corretta in group_vars.
+pcs_pacchetti:
+  - corosync
+  - pacemaker
+  - pcs
+  - resource-agents-base
+
 nfs_vip_ip: ""
 nfs_vip_prefix: 24
