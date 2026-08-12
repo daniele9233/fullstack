@@ -20,9 +20,10 @@ pcs_resource_group: "nfs_group"
 #
 #   No package matching 'resource-agents' is available
 #
-# e il ruolo si ferma prima ancora di creare il cluster, lasciando Ganesha
-# disabilitato in systemd (lo disattiva ganesha_install, perche' ad avviarlo
-# dovrebbe essere Pacemaker) e quindi NFS spento.
+# e il ruolo si ferma prima ancora di creare il cluster. Ganesha resta a
+# enabled: false, come lo lascia ganesha_install perche' ad avviarlo deve essere
+# Pacemaker: il servizio continua a rispondere finche' la macchina non si
+# riavvia, ma al riavvio non torna su, e intanto non c'e' ne' VIP ne' failover.
 #
 # -base basta: l'unico agent OCF che questo ruolo usa e' ocf:heartbeat:IPaddr2,
 # per il VIP. Ganesha non passa da un agent, e' una risorsa systemd:nfs-ganesha.

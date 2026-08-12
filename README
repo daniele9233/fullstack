@@ -480,9 +480,14 @@ in quel caso conviene tenere le risorse lontane dall'arbitro:
 PACCHETTI DEL CLUSTER PACEMAKER: da Ubuntu 24.04 il pacchetto resource-agents
 non esiste piu' come tale, e' stato diviso in resource-agents-common, -base e
 -extra. Chiedendo il vecchio nome apt risponde "No package matching
-'resource-agents' is available" e il ruolo si ferma prima di creare il cluster,
-lasciando nfs-ganesha disabilitato in systemd (lo disattiva ganesha_install,
-perche' ad avviarlo deve essere Pacemaker) e quindi NFS spento.
+'resource-agents' is available" e il ruolo si ferma prima di creare il cluster.
+
+Quel che resta e' uno stato scomodo da leggere: ganesha_install gira prima e
+mette nfs-ganesha a enabled: false, perche' ad avviarlo deve essere Pacemaker.
+Il servizio pero' NON viene fermato, quindi continua a rispondere finche' la
+macchina non si riavvia; e' al riavvio che non torna su, perche' Pacemaker, che
+avrebbe dovuto avviarlo, non e' mai stato installato. Nel frattempo manca il
+VIP, quindi nessuno risponde su nfs_vip_ip, e non c'e' failover.
 
 L'elenco sta in pcs_pacchetti: corosync, pacemaker, pcs, resource-agents-base.
 -base basta perche' l'unico agent OCF usato e' ocf:heartbeat:IPaddr2 per il VIP,
