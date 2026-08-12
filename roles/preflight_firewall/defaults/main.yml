@@ -1,0 +1,33 @@
+---
+# Parametri di kernel che i ruoli danno per scontati o impostano loro stessi.
+# Qui vengono solo LETTI, per sapere da dove si parte: nessun sysctl viene
+# scritto da questo ruolo.
+#
+#   ip_nonlocal_bind   lo imposta keepalived_install. Senza, nginx e haproxy
+#                      non riescono a fare il bind del VIP sul nodo che in quel
+#                      momento non lo possiede, e non partono affatto.
+#   ip_forward         serve al routing dei pod e al tuning di haproxy.
+#   bridge-nf-call-*   il traffico dei bridge deve passare da iptables,
+#                      altrimenti i Service Kubernetes non funzionano.
+#   inotify            RKE2 apre molti watch: con i default bassi i pod
+#                      falliscono con "too many open files".
+#   nf_conntrack_max   con poche connessioni tracciabili il nodo perde
+#                      pacchetti sotto carico senza dirlo.
+pf_sysctl_da_leggere:
+  - net.ipv4.ip_forward
+  - net.ipv4.ip_nonlocal_bind
+  - net.bridge.bridge-nf-call-iptables
+  - net.bridge.bridge-nf-call-ip6tables
+  - fs.inotify.max_user_instances
+  - fs.inotify.max_user_watches
+  - net.netfilter.nf_conntrack_max
+  - vm.swappiness
+
+# Moduli del kernel che i CNI e kube-proxy si aspettano di trovare. Se non
+# risultano caricati non e' detto che manchino: possono essere compilati nel
+# kernel oppure venire caricati al primo uso.
+pf_moduli_da_verificare:
+  - br_netfilter
+  - overlay
+  - ip_vs
+  - nf_conntrack

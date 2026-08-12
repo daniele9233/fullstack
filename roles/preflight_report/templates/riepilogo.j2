@@ -1,0 +1,92 @@
+{#
+  Riepilogo di tutti i nodi, una riga per macchina.
+
+  L'elenco dei nodi arriva da pf_nodi_riepilogo, cioe' da chi faceva parte
+  del play: cosi' compaiono anche quelli che non hanno risposto, che sono
+  proprio quelli da guardare per primi, e restano fuori quelli che un --limit
+  non aveva nemmeno chiesto. Un nodo si riconosce come non raggiunto dal fatto
+  che non ha nemmeno una riga di verifica.
+#}
+{% set L = pf_larghezza | int %}
+{% set nodi = pf_nodi_riepilogo %}
+{% set non_raggiunti = [] %}
+{% set con_problemi = [] %}
+{% set avvisi_totali = [] %}
+{% for n in nodi %}
+{% set righe = hostvars[n].pf_righe | default([]) %}
+{% if (righe | length) == 0 %}
+{% set _ = non_raggiunti.append(n) %}
+{% endif %}
+{% if (righe | selectattr('esito', 'equalto', 'PROBLEMA') | list | length) > 0 %}
+{% set _ = con_problemi.append(n) %}
+{% endif %}
+{% for r in righe | selectattr('esito', 'equalto', 'ATTENZIONE') %}
+{% set _ = avvisi_totali.append(n ~ '|' ~ r.voce ~ '|' ~ (r.valore | string | regex_replace('\s+', ' ') | trim)) %}
+{% endfor %}
+{% endfor %}
+{{ '=' * L }}
+  RIEPILOGO DELLA VERIFICA  -  {{ nodi | length }} nodi verificati  -  {{ lookup('pipe', 'date "+%d/%m/%Y %H:%M"') }}
+{{ '=' * L }}
+
+  {{ 'NODO'.ljust(16) }} {{ 'INDIRIZZO'.ljust(15) }} {{ 'GRUPPI'.ljust(20) }} {{ 'CPU/RAM'.ljust(15) }} {{ 'DISCHI'.ljust(6) }} {{ 'ESITO'.ljust(17) }}
+  {{ '-' * (L - 2) }}
+{% for n in nodi %}
+{% set hv = hostvars[n] %}
+{% set righe = hv.pf_righe | default([]) %}
+{% set raggiunto = (righe | length) > 0 %}
+{% set problemi = righe | selectattr('esito', 'equalto', 'PROBLEMA') | list %}
+{% set avvisi = righe | selectattr('esito', 'equalto', 'ATTENZIONE') | list %}
+{% set risorse = (hv.ansible_processor_vcpus | default('?') | string) ~ ' cpu  ' ~ ((hv.ansible_memtotal_mb | default(0) | int / 1024) | round(1) | string) ~ 'G' %}
+{% set esito = 'IRRAGGIUNGIBILE' if not raggiunto
+               else ('DA RISOLVERE (' ~ problemi | length ~ ')' if problemi | length > 0
+                     else ('AVVISI (' ~ avvisi | length ~ ')' if avvisi | length > 0 else 'PRONTO')) %}
+  {{ n[:16].ljust(16) }} {{ (hv.ansible_host | default('-'))[:15].ljust(15) }} {{ (hv.group_names | default([]) | reject('equalto', 'all') | join(','))[:20].ljust(20) }} {{ (risorse if raggiunto else '-')[:15].ljust(15) }} {{ ((hv.pf_dischi_liberi | default([]) | length | string) if raggiunto else '-').ljust(6) }} {{ esito.ljust(17) }}
+{% endfor %}
+
+  Legenda:  PRONTO = nessun rilievo.  AVVISI = si puo' partire, ma leggi la scheda.
+            DA RISOLVERE = c'e' qualcosa che fara' fallire l'installazione.
+            DISCHI = dischi liberi utilizzabili per i dati.
+
+{% if non_raggiunti | length > 0 %}
+  NODI CHE NON HANNO RISPOSTO
+  {{ '-' * (L - 2) }}
+{% for n in non_raggiunti %}
+    {{ n[:16].ljust(16) }} {{ hostvars[n].ansible_host | default('indirizzo non dichiarato') }}
+{% endfor %}
+
+    Ansible non li ha raggiunti. Prima di ogni altra cosa: la macchina e'
+    accesa? l'indirizzo scritto nell'inventario e' quello giusto? la chiave
+    SSH e' quella dell'utente dichiarato in ansible_user?
+
+{% endif %}
+{% if con_problemi | length > 0 %}
+  QUELLO CHE FARA' FALLIRE L'INSTALLAZIONE
+  {{ '-' * (L - 2) }}
+{% for n in con_problemi %}
+{% for r in hostvars[n].pf_righe | selectattr('esito', 'equalto', 'PROBLEMA') %}
+    {{ n }}  -  {{ r.voce }}: {{ r.valore | string | regex_replace('\s+', ' ') | trim }}
+{% for pezzo in (r.nota | string | regex_replace('\s+', ' ') | trim | wordwrap(L - 10, wrapstring='\n')).split('\n') %}
+        {{ pezzo }}
+{% endfor %}
+{% endfor %}
+{% endfor %}
+
+{% endif %}
+{% if avvisi_totali | length > 0 %}
+  DA GUARDARE, MA NON BLOCCA
+  {{ '-' * (L - 2) }}
+{% for a in avvisi_totali %}
+    {{ a.split('|')[0][:16].ljust(16) }} {{ a.split('|')[1][:26].ljust(26) }} {{ a.split('|')[2] }}
+{% endfor %}
+
+{% endif %}
+{{ '=' * L }}
+{% if non_raggiunti | length > 0 or con_problemi | length > 0 %}
+  ESITO: NON si e' pronti a lanciare l'installazione.
+         {{ non_raggiunti | length }} nodi non raggiunti, {{ con_problemi | length }} con problemi bloccanti.
+{% elif avvisi_totali | length > 0 %}
+  ESITO: si puo' lanciare l'installazione. Restano {{ avvisi_totali | length }} avvisi da leggere.
+{% else %}
+  ESITO: tutti i nodi sono pronti. Nessun rilievo.
+{% endif %}
+{{ '=' * L }}

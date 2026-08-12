@@ -1,0 +1,63 @@
+---
+# Requisiti INDICATIVI per gruppo di inventario: non sono limiti imposti da
+# RKE2, Patroni o Gluster, sono la soglia sotto la quale, per esperienza, il
+# nodo comincia a dare problemi. Servono solo a colorare l'esito: il ruolo non
+# blocca niente e non modifica niente.
+#
+# Alzali o abbassali secondo le macchine che hai davvero.
+pf_requisiti_gruppo:
+  masters:         { vcpu: 4, ram_mb: 7500, disco_gb: 40 }
+  new_managers:    { vcpu: 4, ram_mb: 7500, disco_gb: 40 }
+  workers:         { vcpu: 2, ram_mb: 3500, disco_gb: 30 }
+  ingress:         { vcpu: 2, ram_mb: 3500, disco_gb: 20 }
+  nginx_servers:   { vcpu: 2, ram_mb: 1800, disco_gb: 20 }
+  db_servers:      { vcpu: 4, ram_mb: 7500, disco_gb: 40 }
+  gluster_servers: { vcpu: 2, ram_mb: 3500, disco_gb: 20 }
+
+# Usati quando l'host non appartiene a nessuno dei gruppi elencati sopra.
+pf_requisiti_default: { vcpu: 2, ram_mb: 1800, disco_gb: 20 }
+
+# Gruppi che ospitano un kubelet. Serve a una cosa sola: sui nodi Kubernetes lo
+# swap acceso e' un problema (kubelet si rifiuta di partire), altrove no.
+pf_gruppi_kubernetes:
+  - masters
+  - new_managers
+  - workers
+  - ingress
+
+# Pacchetti la cui presenza dice che la macchina e' gia' stata installata.
+# Non e' un errore trovarli: e' un'informazione che cambia il modo di lanciare
+# il playbook (clean_node_state, postgres_force_reinit).
+pf_pacchetti_infra:
+  - rke2-server
+  - rke2-agent
+  - nginx
+  - haproxy
+  - keepalived
+  - patroni
+  - etcd
+  - pgbouncer
+  - glusterfs-server
+  - nfs-ganesha
+  - pacemaker
+  - corosync
+  - pcs
+  - docker.io
+  - containerd
+
+# Comandi che i ruoli di installazione danno per scontati. Mancarne uno non
+# ferma il playbook (i ruoli installano i pacchetti che servono), ma vederlo
+# prima evita di scoprirlo a meta' esecuzione.
+pf_comandi_richiesti:
+  - { comando: python3,  a_cosa_serve: "interprete usato da Ansible sul nodo" }
+  - { comando: systemctl, a_cosa_serve: "tutti i ruoli gestiscono servizi systemd" }
+  - { comando: ss,       a_cosa_serve: "lettura delle porte in ascolto" }
+  - { comando: lsblk,    a_cosa_serve: "lettura dei dischi" }
+  - { comando: findmnt,  a_cosa_serve: "riconoscimento dei mountpoint" }
+  - { comando: curl,     a_cosa_serve: "installer RKE2 e Helm" }
+  - { comando: tar,      a_cosa_serve: "estrazione degli archivi scaricati" }
+
+# Scarto massimo tollerato fra l'orologio del nodo e quello del control node.
+# etcd e Patroni sono sensibili al tempo: con nodi sfasati di minuti il quorum
+# si comporta in modi difficili da leggere.
+pf_scarto_orologio_max: 30

@@ -29,6 +29,92 @@ fullchain.pem
 privkey.pem
 
 
+PRIMA DI INSTALLARE: LA VERIFICA
+
+  ansible-playbook -i inventory.ini playbooks/00-verifica.yml
+
+Guarda le macchine e racconta che cosa ha trovato. NON MODIFICA NIENTE: nessun
+servizio fermato, nessun pacchetto installato, nessun disco toccato, nessun
+file scritto sui nodi ne' sul controller. Sono letture (lsblk, ss, findmnt, df,
+sysctl, ufw status) piu' qualche connessione TCP aperta e chiusa subito per
+vedere se la strada c'e'. Il riepilogo di Ansible resta a zero changed, e la si
+puo' rilanciare quante volte si vuole, anche su un'infrastruttura gia' in
+esercizio.
+
+Stampa una SCHEDA per nodo, divisa in sezioni, e alla fine un RIEPILOGO con una
+riga per macchina. Ogni voce ha un esito:
+
+  OK           niente da fare
+  INFO         come stanno le cose, senza giudizio
+  ATTENZIONE   si puo' partire, ma sapendolo
+  PROBLEMA     l'installazione fallira' li'
+
+Che cosa guarda:
+
+  CONTROLLER   versione di Ansible e di Python, presenza dei certificati che i
+               ruoli copiano sui nodi
+  INVENTARIO   indirizzi ripetuti, numerosita' dei gruppi (etcd e Patroni
+               vogliono un numero dispari di nodi, Gluster esattamente 3), VIP
+               che coincidono con l'indirizzo di un nodo, VRID uguali fra loro
+  SISTEMA      distribuzione, kernel, CPU, memoria, swap, hostname contro nome
+               di inventario, sincronizzazione dell'orologio, cloud-init ancora
+               in corso, lock di apt occupato, software d'infrastruttura gia'
+               installato
+  FIREWALL     ufw, firewalld, regole e policy iptables, tabelle nftables,
+               AppArmor, SELinux, moduli del kernel, parametri sysctl
+  RETE         interfacce, indirizzo di inventario che non sta sul nodo,
+               instradamento, risoluzione del dominio, VIP gia' occupati,
+               nodi del cluster che non si raggiungono fra loro, endpoint da
+               cui i ruoli scaricano
+  PORTE        per ogni porta che l'installazione aprira' su quel nodo: libera,
+               oppure gia' tenuta, e da chi. Le porte non sono ricopiate a
+               mano: vengono da group_vars/all.yml, quindi cambiando
+               haproxy_stats_port o rke2_supervisor_port il controllo la segue
+  DISCHI       lsblk, dischi liberi, LVM esistenti, filesystem montati, spazio
+               libero, presenza di lvm2/parted/xfsprogs
+
+Varianti:
+
+  # solo un gruppo
+  ansible-playbook -i inventory.ini playbooks/00-verifica.yml --limit db_servers
+
+  # senza le prove verso internet, su una rete chiusa
+  ansible-playbook -i inventory.ini playbooks/00-verifica.yml -e pf_verifica_endpoint=false
+
+  # come barriera: esce in errore se un nodo ha un PROBLEMA o non risponde
+  ansible-playbook -i inventory.ini playbooks/00-verifica.yml -e pf_blocca_se_problemi=true
+
+La verifica e' anche il primo passo di site.yml. Li' racconta e basta, poi
+l'installazione parte comunque; per farne una barriera vera si aggiunge
+-e pf_blocca_se_problemi=true, per saltarla --skip-tags verifica.
+
+
+LSBLK E LE VARIABILI DEGLI LVM
+
+La sezione DISCHI della scheda serve a due cose. La prima e' dire se il nodo e'
+pronto. La seconda e' rispondere alla domanda che viene dopo, cioe' CON QUALI
+VALORI si popolano le variabili di create_disk quando si decide di far creare
+gli LVM ad Ansible invece che a mano.
+
+Ogni disco viene classificato con gli stessi criteri che usa create_disk per
+scegliere:
+
+  SISTEMA    il disco su cui sta /, che non si tocca
+  LIBERO     nessuna partizione, non montato, nessun filesystem: utilizzabile
+  PICCOLO    libero, ma sotto pf_disco_dati_minimo_gb: quasi sempre un residuo
+  OCCUPATO   ha gia' partizioni, un mount o un filesystem
+
+Il candidato che la scheda indica e' esattamente quello che sceglierebbe
+create_disk, quindi non ci sono sorprese al momento di lanciarlo. In fondo alla
+scheda c'e' un blocco gia' pronto da copiare, costruito con i nomi che quel
+nodo ha davvero (disk_vg_name, disk_lv_name e disk_mount_point del suo gruppo):
+il blocco per group_vars, la riga per inventory.ini valida per quel solo host,
+e la riga che finirebbe in /etc/fstab.
+
+zram, loop, sr e ram non compaiono fra i candidati: lsblk li classifica come
+"disk" ma dischi non sono.
+
+
 PRODECURA DI INSTALLAZIONE
 
 Tutto in una volta, nell'ordine corretto:
@@ -37,6 +123,7 @@ Tutto in una volta, nell'ordine corretto:
 
 Oppure un'area alla volta, quando serve piu' controllo:
 
+  ansible-playbook -i inventory.ini playbooks/00-verifica.yml
   ansible-playbook -i inventory.ini playbooks/10-bilanciatori.yml
   ansible-playbook -i inventory.ini playbooks/20-rancher.yml
   ansible-playbook -i inventory.ini playbooks/30-database.yml

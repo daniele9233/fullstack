@@ -1,0 +1,37 @@
+---
+# Larghezza della pagina, in caratteri. Da questa derivano tutte le colonne:
+# cambiandola qui, scheda e riepilogo restano allineati.
+pf_larghezza: 96
+
+# Colonne della scheda per nodo. La somma, piu' i separatori, deve dare
+# pf_larghezza:  2 + 30 + 1 + 48 + 1 + 14 = 96
+pf_col_voce: 30
+pf_col_valore: 48
+pf_col_esito: 14
+
+# Ordine in cui le sezioni compaiono nella scheda. Una sezione senza righe non
+# viene stampata, quindi elencarne una in piu' non fa danni.
+# CONTROLLER e INVENTARIO le riempie solo preflight_inventario, che gira sul
+# control node: sui nodi restano vuote e non vengono stampate.
+pf_sezioni:
+  - CONTROLLER
+  - INVENTARIO
+  - SISTEMA
+  - FIREWALL
+  - RETE
+  - PORTE
+  - DISCHI
+
+# Gruppi di inventario che non sono nodi da verificare. [local] e' il control
+# node, che ha un play tutto suo (ruolo preflight_inventario).
+pf_gruppi_esclusi:
+  - local
+
+# Con true il playbook di verifica ESCE IN ERRORE se almeno un nodo ha una voce
+# con esito PROBLEMA. Serve a incatenarlo davanti a un'installazione
+# automatica, dove nessuno legge il video:
+#
+#   ansible-playbook playbooks/00-verifica.yml -e pf_blocca_se_problemi=true
+#
+# Di default e' false: la verifica racconta e basta, non decide per te.
+pf_blocca_se_problemi: false

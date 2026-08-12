@@ -115,11 +115,18 @@ proprio inventario**:
 
 | Nome | Playbook | Inventario |
 |---|---|---|
+| Verifica pre-installazione | `playbooks/00-verifica.yml` | `inventory.ini` |
 | Deploy completo | `site.yml` | `inventory.ini` |
 | Bilanciatori | `playbooks/10-bilanciatori.yml` | `inventory.ini` |
 | Cluster Rancher e downstream | `playbooks/20-rancher.yml` | `inventory.ini` |
 | Database PostgreSQL | `playbooks/30-database.yml` | `inventory.ini` |
 | Storage GlusterFS | `playbooks/40-storage.yml` | `inventory.ini` |
+
+La **verifica** apre l'elenco perche' va lanciata per prima: guarda le macchine
+e non tocca niente (porte gia' occupate, firewall, dischi, VIP, nodi che si
+parlano), e stampa una scheda per nodo piu' un riepilogo finale. E' anche il
+playbook giusto per provare il collegamento la prima volta, visto che non puo'
+cambiare niente su nessuna macchina.
 
 Le celle sono modificabili: per dare a un playbook un inventario diverso basta
 scriverlo nella sua riga. **Aggiungi** crea una voce nuova, **Ripristina

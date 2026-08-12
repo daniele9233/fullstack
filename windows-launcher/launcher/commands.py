@@ -61,6 +61,14 @@ class Opzioni:
 # compare al primo avvio: dall'interfaccia si aggiunge, si modifica e si toglie.
 PLAYBOOK_PREDEFINITI: list[Playbook] = [
     Playbook(
+        nome="Verifica pre-installazione",
+        percorso="playbooks/00-verifica.yml",
+        inventario="inventory.ini",
+        descrizione="Guarda le macchine e non tocca niente: porte occupate, "
+                    "firewall, dischi, VIP, nodi che si parlano. Da lanciare "
+                    "prima di tutto il resto.",
+    ),
+    Playbook(
         nome="Deploy completo",
         percorso="site.yml",
         inventario="inventory.ini",

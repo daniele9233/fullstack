@@ -1,0 +1,111 @@
+---
+# VERIFICA PRIMA DELL'INSTALLAZIONE.
+#
+#   ansible-playbook playbooks/00-verifica.yml
+#
+# Guarda le macchine e racconta che cosa ha trovato: porte gia' occupate,
+# firewall acceso, dischi disponibili, VIP gia' presi, nodi che non si parlano,
+# repository irraggiungibili, orologi sfasati. Poi stampa una scheda per nodo e
+# un riepilogo finale con una riga per macchina.
+#
+# NON MODIFICA NIENTE. Nessun servizio viene fermato, nessun pacchetto
+# installato, nessun disco toccato, nessun file scritto sui nodi ne' sul
+# controller. Sono solo letture: lsblk, ss, findmnt, df, sysctl, ufw status,
+# piu' qualche connessione TCP aperta e chiusa subito per vedere se la strada
+# c'e'. Il riepilogo di Ansible resta a zero changed.
+#
+# Si puo' lanciare tutte le volte che si vuole, anche su un'infrastruttura gia'
+# installata: in quel caso segnala da solo che i servizi sono gia' su e che le
+# porte le tengono loro.
+#
+# ---------------------------------------------------------------------------
+# COME LEGGERE GLI ESITI
+# ---------------------------------------------------------------------------
+#   OK           niente da fare
+#   INFO         come stanno le cose, senza giudizio: quanti dischi ci sono,
+#                che kernel gira, quali servizi sono gia' installati
+#   ATTENZIONE   si puo' partire, ma sapendolo
+#   PROBLEMA     l'installazione fallira' li': va sistemato prima
+#
+# ---------------------------------------------------------------------------
+# VARIANTI UTILI
+# ---------------------------------------------------------------------------
+#   # solo i database
+#   ansible-playbook playbooks/00-verifica.yml --limit db_servers
+#
+#   # senza le prove verso internet, su una rete chiusa dove sono inutili
+#   ansible-playbook playbooks/00-verifica.yml -e pf_verifica_endpoint=false
+#
+#   # come barriera davanti a un'installazione non sorvegliata: esce in errore
+#   # se qualche nodo ha un PROBLEMA o non risponde
+#   ansible-playbook playbooks/00-verifica.yml -e pf_blocca_se_problemi=true
+#
+# L'INVENTARIO VA TENUTO COMPLETO, come per gli altri playbook: la verifica
+# controlla anche che i gruppi si parlino fra loro, e con un gruppo commentato
+# quel controllo non ha nessuno da provare.
+
+
+# Play 1: il control node e l'inventario. Prima ancora di toccare le macchine,
+# perche' un certificato che manca o due host con lo stesso indirizzo si vedono
+# da qui, e non c'e' motivo di aspettare la fine per accorgersene.
+- name: Verifica del control node e dell'inventario
+  hosts: localhost
+  gather_facts: yes
+  become: no
+  vars:
+    pf_titolo_scheda: "CONTROL NODE E INVENTARIO  -  le verifiche che non richiedono i nodi"
+  roles:
+    - role: preflight_inventario
+    - role: preflight_report
+
+
+# Play 2: i nodi, uno per uno.
+#
+# ignore_unreachable: un nodo spento non deve far saltare la verifica di tutti
+# gli altri. Chi non risponde esce dal play e ricompare nel riepilogo finale
+# come IRRAGGIUNGIBILE, che e' un'informazione, non un incidente.
+#
+# become: serve per leggere. Senza root "ss -p" non mostra chi tiene le porte,
+# "ufw status" non risponde e pvs non vede i volumi.
+- name: Verifica dei nodi
+  hosts: masters,new_managers,workers,ingress,nginx_servers,db_servers,gluster_servers
+  gather_facts: yes
+  become: yes
+  ignore_unreachable: yes
+  pre_tasks:
+    # Quali nodi fa questa esecuzione, --limit compreso. Il riepilogo finale
+    # gira sul control node, dove ansible_play_hosts_all vale localhost e non
+    # servirebbe a niente: senza questo elenco, lanciando la verifica con
+    # --limit db_servers tutti gli altri nodi risulterebbero IRRAGGIUNGIBILI,
+    # quando invece non erano nemmeno stati chiesti.
+    #
+    # ansible_play_hosts_all e non ansible_play_hosts: comprende anche chi non
+    # ha risposto, che nel riepilogo e' la riga piu' importante.
+    - name: Ricorda quali nodi fanno parte di questa verifica
+      set_fact:
+        pf_nodi_verificati: "{{ ansible_play_hosts_all }}"
+      delegate_to: localhost
+      delegate_facts: yes
+      run_once: yes
+  roles:
+    - role: preflight_sistema
+    - role: preflight_firewall
+    - role: preflight_rete
+    - role: preflight_dischi
+    - role: preflight_report
+
+
+# Play 3: il riepilogo, sul control node.
+#
+# In un play a parte e non in un post_tasks con run_once: i nodi irraggiungibili
+# sono usciti dal play 2, e da dentro a quel play non ci sarebbe modo di
+# elencarli. Qui l'elenco arriva dall'inventario, quindi ci sono anche loro.
+- name: Riepilogo finale
+  hosts: localhost
+  gather_facts: no
+  become: no
+  tasks:
+    - name: Stampa il riepilogo di tutti i nodi
+      include_role:
+        name: preflight_report
+        tasks_from: riepilogo

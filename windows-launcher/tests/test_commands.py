@@ -10,12 +10,25 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from launcher.commands import (  # noqa: E402
+    PLAYBOOK_PREDEFINITI,
     Opzioni,
     Playbook,
     anteprima_comando,
     comando_remoto,
     costruisci_argomenti,
 )
+
+
+def test_la_verifica_e_il_primo_playbook_dell_elenco():
+    """La verifica va lanciata prima dell'installazione, e l'elenco lo dice.
+
+    E' il playbook che guarda le macchine senza toccarle: se comparisse in
+    fondo, dopo "Deploy completo", l'ordine dell'interfaccia suggerirebbe di
+    installare per primo.
+    """
+    primo = PLAYBOOK_PREDEFINITI[0]
+    assert primo.percorso == "playbooks/00-verifica.yml"
+    assert "Deploy completo" == PLAYBOOK_PREDEFINITI[1].nome
 
 
 def test_comando_minimo():

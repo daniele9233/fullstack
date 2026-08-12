@@ -20,6 +20,24 @@
 # [db_servers], nginx legge [masters] e [ingress], Ganesha i gruppi Kubernetes).
 # Commentare un gruppo per "isolare" un test produce configurazioni monche
 # senza che niente fallisca: per isolare si usa il playbook, non l'inventario.
+#
+# 00-verifica.yml apre la fila e NON MODIFICA NIENTE: guarda le macchine e
+# stampa una scheda per nodo piu' un riepilogo. Serve a vedere PRIMA le cose
+# che altrimenti si scoprono a meta' installazione: una porta gia' occupata, un
+# firewall acceso, un VIP che e' gia' di qualcun altro, due nodi che non si
+# parlano, un repository irraggiungibile.
+#
+# Di suo racconta e basta, poi l'installazione parte comunque. Per farne una
+# barriera vera, che si ferma quando un nodo non e' pronto:
+#
+#   ansible-playbook site.yml -e pf_blocca_se_problemi=true
+#
+# Per saltarla del tutto:
+#
+#   ansible-playbook site.yml --skip-tags verifica
+
+- import_playbook: playbooks/00-verifica.yml
+  tags: verifica
 
 - import_playbook: playbooks/10-bilanciatori.yml
 - import_playbook: playbooks/20-rancher.yml
