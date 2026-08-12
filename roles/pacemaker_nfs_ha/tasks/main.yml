@@ -55,6 +55,50 @@
 
 # --- Da qui solo sui nodi del cluster: l'arbitro non partecipa ---
 
+# ocf:heartbeat:IPaddr2 non sceglie l'interfaccia da una variabile: la ricava
+# dalla tabella di instradamento, cercando quale interfaccia serve la rete a cui
+# il VIP appartiene con la netmask dichiarata. Se nessuna corrisponde, la
+# risorsa non parte e lascia questo messaggio, che non dice quale sia il
+# problema:
+#
+#   nfs_ip start on <nodo> returned 'error' ([findif] failed)
+#
+# L'errore quasi sempre e' nfs_vip_prefix diverso dal prefisso vero della VLAN:
+# nodi in /28 e VIP dichiarato /24, o viceversa. Qui si guardano i prefissi
+# realmente configurati sul nodo e si pretende che nfs_vip_prefix sia uno di
+# quelli. E' un controllo per eccesso, non fa aritmetica di reti, ma prende
+# esattamente il caso che si verifica.
+- name: Leggi i prefissi di rete configurati sul nodo
+  shell: |
+    set -o pipefail
+    ip -o -4 addr show scope global | awk '{ print $4 }' | awk -F/ '{ print $2 }' | sort -u | tr '\n' ' '
+  args:
+    executable: /bin/bash
+  register: pcs_prefissi
+  changed_when: false
+  when: inventory_hostname in pcs_cluster_nodes
+
+- name: Verifica che nfs_vip_prefix sia il prefisso della rete dei nodi
+  assert:
+    that:
+      - (nfs_vip_prefix | string) in (pcs_prefissi.stdout | default('') | split)
+    fail_msg: >-
+      nfs_vip_prefix e' {{ nfs_vip_prefix }}, ma su {{ inventory_hostname }} le
+      interfacce usano /{{ pcs_prefissi.stdout | default('') | trim | replace(' ', ', /') }}.
+      IPaddr2 cerca l'interfaccia che serve la rete del VIP con quella netmask,
+      non la trova, e la risorsa nfs_ip resta Stopped con "[findif] failed".
+      Il valore giusto si legge con "ip -br addr" sui nodi, ed e' lo stesso che
+      sta in vip_rancher_prefix per i bilanciatori se stanno nella stessa VLAN.
+    success_msg: >-
+      nfs_vip_prefix {{ nfs_vip_prefix }} coerente con le interfacce di
+      {{ inventory_hostname }}.
+  # Se la lettura non ha prodotto niente il controllo non si puo' fare, e non
+  # deve inventarsi un errore: meglio lasciar proseguire e vedere che cosa dice
+  # IPaddr2, piuttosto che fermare il playbook su un dato che non c'e'.
+  when:
+    - inventory_hostname in pcs_cluster_nodes
+    - (pcs_prefissi.stdout | default('') | trim | length) > 0
+
 - name: Installa Pacemaker e pcs
   apt:
     name: "{{ pcs_pacchetti }}"
@@ -91,11 +135,57 @@
 
 # --- Da qui solo sul primo nodo del cluster ---
 
-- name: Verifica se il cluster esiste gia'
-  command: pcs cluster status
-  register: pcs_status
+# NON si chiede "esiste un cluster?" ma "esiste IL NOSTRO cluster?".
+#
+# La differenza non e' teorica. Il pacchetto corosync di Debian e Ubuntu
+# installa un /etc/corosync/corosync.conf gia' pronto, con cluster_name: debian
+# e un nodo solo, e systemd lo avvia da solo appena installato. Un controllo su
+# "pcs cluster status" trova quel cluster, esce zero, e il ruolo conclude che
+# non c'e' niente da fare: setup e autenticazione vengono saltati, le risorse
+# vengono create dentro al cluster fasullo, e ci si ritrova con
+#
+#   Cluster name: debian
+#   1 node configured
+#
+# cioe' un nodo solo, senza il secondo e senza nessun failover possibile.
+#
+# Si legge quindi direttamente corosync.conf: il nome del cluster e l'elenco dei
+# ring0_addr. Se non corrispondono a pcs_cluster_name e pcs_cluster_nodes, il
+# cluster va rifatto.
+- name: Leggi il cluster attualmente configurato
+  shell: |
+    set +e
+    nome=$(awk -F':[[:space:]]*' '/cluster_name/ { print $2 }' /etc/corosync/corosync.conf 2>/dev/null | tr -d ' ')
+    nodi=$(awk '/ring0_addr/ { print $2 }' /etc/corosync/corosync.conf 2>/dev/null | tr '\n' ' ')
+    echo "NOME=${nome:-nessuno}"
+    echo "NODI=${nodi}"
+  args:
+    executable: /bin/bash
+  register: pcs_corosync
   changed_when: false
-  failed_when: false
+  when: inventory_hostname == pcs_cluster_nodes[0]
+
+- name: Decidi se il cluster va creato
+  set_fact:
+    pcs_da_creare: >-
+      {{ nome_attuale != pcs_cluster_name
+         or (nodi_attuali | sort) != (pcs_cluster_nodes | sort) }}
+  vars:
+    nome_attuale: >-
+      {{ pcs_corosync.stdout_lines | select('match', '^NOME=')
+         | map('regex_replace', '^NOME=', '') | first | default('nessuno') }}
+    nodi_attuali: >-
+      {{ (pcs_corosync.stdout_lines | select('match', '^NODI=')
+          | map('regex_replace', '^NODI=', '') | first | default('')).split() }}
+  when: inventory_hostname == pcs_cluster_nodes[0]
+
+- name: Mostra che cosa si e' trovato
+  debug:
+    msg: >-
+      {{ 'Cluster gia a posto: ' ~ pcs_cluster_name ~ ' su ' ~ (pcs_cluster_nodes | join(', ')) ~ ', non si tocca.'
+         if not pcs_da_creare | bool
+         else 'Il cluster va creato: quello configurato adesso non e il nostro. Trovato -> '
+              ~ (pcs_corosync.stdout_lines | join('  ')) }}
   when: inventory_hostname == pcs_cluster_nodes[0]
 
 - name: Autentica i nodi del cluster
@@ -104,18 +194,22 @@
     -u {{ pcs_cluster_user }} -p {{ pcs_cluster_password }}
   when:
     - inventory_hostname == pcs_cluster_nodes[0]
-    - pcs_status.rc != 0
+    - pcs_da_creare | bool
   no_log: true
 
 # --enable, che la procedura a mano non ha: senza, dopo un reboot il nodo non
 # rientra nel cluster finche' qualcuno non lo avvia.
+#
+# --force perche' un cluster c'e' quasi sempre gia': quello preconfezionato dal
+# pacchetto Debian. Senza, "pcs cluster setup" si rifiuta di sovrascriverlo e il
+# ruolo si ferma. Con --force lo distrugge sui nodi elencati e crea il nostro.
 - name: Crea il cluster
   command: >-
     pcs cluster setup {{ pcs_cluster_name }}
-    {{ pcs_cluster_nodes | join(' ') }} --start --enable
+    {{ pcs_cluster_nodes | join(' ') }} --start --enable --force
   when:
     - inventory_hostname == pcs_cluster_nodes[0]
-    - pcs_status.rc != 0
+    - pcs_da_creare | bool
 
 - name: Attendi che il cluster risponda
   command: pcs cluster status
