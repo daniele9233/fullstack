@@ -276,6 +276,18 @@ local_ssl_key_path: "files/privkey.pem"
 # e lascia "[findif] failed", che non spiega niente.
 #
 # Il controllo lo fa da solo playbooks/00-verifica.yml, sezione RETE.
+#
+# DUE COSE ANCORA DA SISTEMARE, prima di installare i bilanciatori:
+#
+#   vip_rancher_ip e' lo STESSO indirizzo di balancer01c nell inventario. Un VIP
+#   deve essere libero: se coincide con una macchina viva, keepalived se lo
+#   prende sul nodo che in quel momento e' MASTER e i due se lo contendono.
+#
+#   vip_patroni_ip e' fuori dalla rete dei bilanciatori: .231 sta in
+#   10.205.166.224/28, i bilanciatori in 10.205.166.208/28. keepalived non
+#   protestera', ma da fuori quel VIP non lo raggiunge nessuno.
+#
+# Servono due indirizzi liberi fra .209 e .222, diversi da nfs_vip_ip.
 vip_rancher_ip: "10.205.166.221"
 vip_rancher_prefix: 28
 vip_patroni_ip: "10.205.166.231"
@@ -501,8 +513,13 @@ ganesha_extra_clients: []
 # se per arrivare al VIP si passa dal gateway, non ne trova nessuna e la risorsa
 # resta Stopped con "[findif] failed". Il ruolo pacemaker_nfs_ha se ne accorge
 # prima e si ferma dicendo perche'.
-nfs_vip_ip: "10.205.166.253"
-nfs_vip_prefix: 24
+#
+# I nodi Gluster stanno in 10.205.166.208/28, cioe' da .209 a .222: era .253 a
+# essere sbagliato, non il prefisso. .253 sta in 10.205.166.240/28, un'altra
+# rete, e Pacemaker non riusciva a pubblicarlo.
+# Libero e verificato all ARP c e anche .222, se questo servisse altrove.
+nfs_vip_ip: "10.205.166.212"
+nfs_vip_prefix: 28
 
 # Pacemaker
 pcs_cluster_name: "nfs_export"
