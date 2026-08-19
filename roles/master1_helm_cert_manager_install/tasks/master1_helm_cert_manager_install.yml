@@ -2,8 +2,17 @@
 - name: Add Rancher Helm repository
   command: helm repo add rancher-stable https://releases.rancher.com/server-charts/stable
 
+# "kubectl create" su un namespace che c'e' gia' esce 1 con AlreadyExists, e
+# senza questo il secondo run del playbook si fermava qui. Non si usa
+# "kubectl apply" perche' un apply su un namespace creato in modo imperativo
+# lascia un warning sulla annotazione last-applied-configuration mancante.
 - name: Create cattle-system namespace
   command: kubectl create namespace cattle-system
+  register: cattle_ns
+  changed_when: cattle_ns.rc == 0
+  failed_when:
+    - cattle_ns.rc != 0
+    - "'AlreadyExists' not in (cattle_ns.stderr | default(''))"
 
 - name: Update Helm repositories
   command: helm repo update
@@ -29,25 +38,74 @@
     dest: "{{ remote_cert_path }}/cacerts.pem"
     mode: '0644'
 
+# "create --dry-run=client -o yaml | apply -f -" invece di "create" e basta:
+# create fallisce con AlreadyExists al secondo run, mentre questa forma crea il
+# secret se manca e lo AGGIORNA se i .pem sono cambiati. E' l'unico modo per
+# far arrivare un certificato rinnovato senza cancellare il secret a mano.
+#
+# Al primo apply su un secret nato imperativamente kubectl avvisa che manca
+# l'annotazione last-applied-configuration e lo corregge da solo: succede una
+# volta sola, sui cluster gia' installati prima di questa modifica.
 - name: Create TLS secret for Rancher ingress
-  command: kubectl -n cattle-system create secret tls tls-rancher-ingress --cert={{ remote_cert_path }}/fullchain.pem --key={{ remote_cert_path }}/privkey.pem
+  shell: >-
+    set -o pipefail;
+    kubectl -n cattle-system create secret tls tls-rancher-ingress
+    --cert={{ remote_cert_path }}/fullchain.pem
+    --key={{ remote_cert_path }}/privkey.pem
+    --dry-run=client -o yaml | kubectl apply -f -
+  args:
+    executable: /bin/bash
+  register: tls_rancher_ingress
+  changed_when: "'unchanged' not in (tls_rancher_ingress.stdout | default(''))"
 
 - name: Create CA secret for Rancher
-  command: kubectl -n cattle-system create secret generic tls-ca --from-file={{ remote_cert_path }}/cacerts.pem
+  shell: >-
+    set -o pipefail;
+    kubectl -n cattle-system create secret generic tls-ca
+    --from-file={{ remote_cert_path }}/cacerts.pem
+    --dry-run=client -o yaml | kubectl apply -f -
+  args:
+    executable: /bin/bash
+  register: tls_ca
+  changed_when: "'unchanged' not in (tls_ca.stdout | default(''))"
 
 - name: Verify secrets creation
   command: kubectl get secret -n cattle-system
 
+# Serve a due cose: decidere se questo run e' una prima installazione (e quindi
+# se il task sotto va contato come changed) e, soprattutto, se passare
+# bootstrapPassword. Quella password vale solo al primo avvio, quando l'utente
+# admin non ha ancora fatto il setup: ripassarla a ogni upgrade non ha motivo e
+# la rimetterebbe sulla riga di comando di helm per niente.
+- name: Verifica se il release Rancher esiste gia'
+  command: helm status rancher --namespace cattle-system
+  register: rancher_release
+  changed_when: false
+  failed_when: false
+
+# "upgrade --install" invece di "install": install fallisce con
+# "cannot re-use a name that is still in use" al secondo run. upgrade --install
+# installa se il release non c'e' e riconcilia se qualche valore e' cambiato.
+# La versione resta fissata da rancher_version, quindi rilanciare il playbook
+# non fa saltare Rancher a una release nuova.
 - name: Install Rancher with Helm
   command: >
-    helm install rancher rancher-stable/rancher
+    helm upgrade --install rancher rancher-stable/rancher
     --namespace cattle-system
     --set hostname={{ rancher_domain }}
-    --set bootstrapPassword={{ rancher_password }}
+    {% if rancher_release.rc != 0 %}--set bootstrapPassword={{ rancher_password }}{% endif %}
     --version {{ rancher_version }}
     --set ingress.tls.source=secret
     --set ingress.ingressClassName={{ rancher_ingress_class }}
     --set privateCA=true
+  register: rancher_helm
+  # changed solo alla prima installazione. Un upgrade che non cambia niente
+  # incrementa comunque la revision di Helm, ma non tocca i pod.
+  changed_when: rancher_release.rc != 0
+  # bootstrapPassword finirebbe in chiaro in ansible.log, che ansible.cfg
+  # scrive sempre. Per vedere l'output durante una diagnosi:
+  #   -e rancher_hide_secrets=false
+  no_log: "{{ rancher_hide_secrets | bool }}"
 
 - name: Wait for Rancher to be ready
   command: kubectl -n cattle-system wait --for=condition=ready pod -l app=rancher --timeout=600s

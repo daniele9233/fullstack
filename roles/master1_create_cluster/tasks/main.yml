@@ -46,7 +46,31 @@
     validate_certs: no
   ignore_errors: yes
 
+# Il POST qui sotto crea il cluster e accetta solo 201: al secondo run
+# risponderebbe 409 e il playbook si fermerebbe. Si guarda prima se il cluster
+# c'e' gia' e, se c'e', non si tocca — riapplicare la definizione a un cluster
+# in esercizio farebbe ripartire i nodi.
+- name: Verifica se il cluster downstream esiste gia'
+  delegate_to: "{{ ansibleSshHost }}"
+  uri:
+    url: "https://{{ rancher_domain }}/v1/provisioning.cattle.io.clusters/fleet-default/{{ cluster_name }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ api_token_response.json.token }}"
+      Content-Type: "application/json"
+    status_code: [200, 404]
+    validate_certs: no
+  register: cluster_esistente
+
+- name: Mostra se il cluster va creato
+  debug:
+    msg: >-
+      {{ ('Il cluster ' ~ cluster_name ~ ' esiste gia in fleet-default: non viene ricreato.')
+         if cluster_esistente.status == 200
+         else ('Il cluster ' ~ cluster_name ~ ' non esiste: viene creato adesso.') }}
+
 - name: Create a new Kubernetes RKE2 custom cluster via Rancher API
+  when: cluster_esistente.status == 404
   delegate_to: "{{ ansibleSshHost }}"
   uri:
     url: "https://{{ rancher_domain }}/v1/provisioning.cattle.io.clusters"
@@ -106,6 +130,7 @@
 - name: Show cluster creation result
   debug:
     var: create_cluster_result.json
+  when: cluster_esistente.status == 404
 
 - name: Wait for cluster to be provisioned
   delegate_to: "{{ ansibleSshHost }}"
@@ -171,14 +196,17 @@
   retries: 20
   delay: 10
 
+# Legge da cluster_name e cluster_k8s_version, non da create_cluster_result:
+# quel registro non esiste quando il cluster c'era gia' e il task di creazione
+# e' stato saltato.
 - name: Show cluster status
   debug:
     msg: |
-      Cluster creato con successo!
+      Cluster {{ 'creato adesso' if cluster_esistente.status == 404 else 'gia esistente, non ricreato' }}.
       Nome: {{ cluster_name }}
-      ID: {{ create_cluster_result.json.metadata.name }}
-      Namespace: {{ create_cluster_result.json.metadata.namespace }}
-      Kubernetes Version: {{ create_cluster_result.json.spec.kubernetesVersion }}
+      Namespace: fleet-default
+      Kubernetes Version: {{ cluster_k8s_version }}
+      ID legacy: {{ legacy_cluster_info.json.data[0].id | default('non ancora assegnato') }}
 
 - name: Debug registration token
   debug:
