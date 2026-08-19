@@ -1,3 +1,0 @@
-# I file batch devono restare CRLF anche se il repository viene clonato su Linux:
-# cmd.exe puo' sbagliare a interpretare un .bat con terminazioni Unix.
-*.bat text eol=crlf

@@ -10,9 +10,11 @@
 # YAML folded (>-) i backslash NON vengono interpretati dal parser, quindi '\\1'
 # arriverebbe al motore delle espressioni regolari come backslash-backslash-1,
 # cioe' un backslash letterale seguito da 1, e il risultato sarebbe
-# "\1:9092,\1:9092,\1:9092". La forma giusta li' sarebbe '\1' con un backslash
-# solo (come in preflight_dischi), ma qui il gruppo non serve proprio:
-# sostituire la fine della stringa aggiunge la porta in coda e basta.
+# "\1:9092,\1:9092,\1:9092". La forma giusta dentro uno scalare folded sarebbe
+# '\1' con un backslash solo, mentre dentro uno scalare fra virgolette doppie
+# serve '\\1' perche' li' e' il parser YAML a consumarne uno. Qui pero' il
+# gruppo non serve proprio: sostituire la fine della stringa aggiunge la porta
+# in coda e basta, e non c'e' niente da sbagliare.
 - name: Componi l'elenco dei bootstrap server
   set_fact:
     kafka_bootstrap_servers: >-

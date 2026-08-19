@@ -111,10 +111,19 @@
   when: kafka_ntp.stdout | trim | lower != 'yes'
 
 # --- Disco dati -------------------------------------------------------------
-# Il disco lo monta l'operatore, come per i database: qui si garantisce solo
-# che la directory ci sia. Se sopra c'e' un mount, il modulo file non lo tocca.
+# A MANO c'e' solo il MOUNT: il disco lo prepara e lo monta l'operatore, come
+# per i database e per i brick Gluster.
+#
+# La DIRECTORY invece la crea il ruolo se non c'e', qui e poi in install.yml,
+# dove le viene dato il proprietario giusto (l'utente kafka a questo punto non
+# esiste ancora). Serve in entrambi i casi: senza disco dedicato e' l'unica cosa
+# che la crea, e con il disco dedicato il mount ha bisogno lo stesso che il
+# punto di innesto esista.
+#
+# Se sopra c'e' gia' un mount, il modulo file non lo tocca: vede una directory
+# presente e non cambia niente.
 
-- name: "Assicura che {{ kafka_data_dir }} esista"
+- name: "Crea {{ kafka_data_dir }} se non c'e'"
   file:
     path: "{{ kafka_data_dir }}"
     state: directory

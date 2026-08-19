@@ -298,7 +298,10 @@ local_ssl_key_path: "{{ repo_dir }}/files/privkey.pem"
 # non e' raggiungibile da fuori; IPaddr2 di Pacemaker invece rifiuta di partire
 # e lascia "[findif] failed", che non spiega niente.
 #
-# Il controllo lo fa da solo playbooks/00-verifica.yml, sezione RETE.
+# Il controllo si fa a mano prima di lanciare: "ip -br addr" su un nodo dice
+# indirizzo e prefisso, e "ip route get <vip>" risponde senza fare aritmetica —
+# se nella risposta compare " via " il VIP e' su un'altra rete. Il ruolo
+# pacemaker_nfs_ha lo verifica anche da solo prima di creare la risorsa.
 #
 # DUE COSE ANCORA DA SISTEMARE, prima di installare i bilanciatori:
 #

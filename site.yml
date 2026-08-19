@@ -10,6 +10,7 @@
 #   ansible-playbook playbooks/20-rancher.yml
 #   ansible-playbook playbooks/30-database.yml
 #   ansible-playbook playbooks/40-storage.yml
+#   ansible-playbook playbooks/50-kafka.yml
 #
 # La preparazione dei nodi (host_prep) e il disco dati (create_disk) non sono
 # piu' due play su "all": ogni playbook prepara i propri host. Il risultato per
@@ -21,23 +22,16 @@
 # Commentare un gruppo per "isolare" un test produce configurazioni monche
 # senza che niente fallisca: per isolare si usa il playbook, non l'inventario.
 #
-# 00-verifica.yml apre la fila e NON MODIFICA NIENTE: guarda le macchine e
-# stampa una scheda per nodo piu' un riepilogo. Serve a vedere PRIMA le cose
-# che altrimenti si scoprono a meta' installazione: una porta gia' occupata, un
-# firewall acceso, un VIP che e' gia' di qualcun altro, due nodi che non si
-# parlano, un repository irraggiungibile.
+# LA VERIFICA PRELIMINARE NON C'E' PIU'. I ruoli preflight_* e il playbook
+# 00-verifica.yml sono stati rimossi: al loro posto arriveranno una dashboard
+# web e dei controlli scritti meglio. Nel frattempo l'installazione parte
+# direttamente, quindi le cose che la verifica raccontava prima — una porta gia'
+# occupata, un firewall acceso, un VIP che e' di qualcun altro, due nodi che non
+# si parlano — si scoprono quando il ruolo che ci sbatte contro fallisce.
 #
-# Di suo racconta e basta, poi l'installazione parte comunque. Per farne una
-# barriera vera, che si ferma quando un nodo non e' pronto:
-#
-#   ansible-playbook site.yml -e pf_blocca_se_problemi=true
-#
-# Per saltarla del tutto:
-#
-#   ansible-playbook site.yml --skip-tags verifica
-
-- import_playbook: playbooks/00-verifica.yml
-  tags: verifica
+# I controlli che impediscono un DANNO restano dentro ai ruoli, dove servono:
+# kafka_cluster, per esempio, si ferma prima di riformattare un nodo che ha gia'
+# dei dati o che ha un node.id diverso da quello atteso.
 
 - import_playbook: playbooks/10-bilanciatori.yml
 - import_playbook: playbooks/20-rancher.yml

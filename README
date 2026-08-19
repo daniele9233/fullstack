@@ -54,90 +54,42 @@ inventory_dir e non playbook_dir, perche' playbook_dir cambia a seconda di come
 si lancia: la radice con site.yml, playbooks/ con un playbook singolo.
 
 
-PRIMA DI INSTALLARE: LA VERIFICA
+LA VERIFICA PRELIMINARE NON C'E' PIU'
 
-  ansible-playbook -i inventory.ini playbooks/00-verifica.yml
+I ruoli preflight_* e il playbook playbooks/00-verifica.yml sono stati rimossi.
+Al loro posto arriveranno una dashboard web e dei controlli scritti meglio.
 
-Guarda le macchine e racconta che cosa ha trovato. NON MODIFICA NIENTE: nessun
-servizio fermato, nessun pacchetto installato, nessun disco toccato, nessun
-file scritto sui nodi ne' sul controller. Sono letture (lsblk, ss, findmnt, df,
-sysctl, ufw status) piu' qualche connessione TCP aperta e chiusa subito per
-vedere se la strada c'e'. Il riepilogo di Ansible resta a zero changed, e la si
-puo' rilanciare quante volte si vuole, anche su un'infrastruttura gia' in
-esercizio.
+Nel frattempo l'installazione parte diretta, e le cose che la verifica
+raccontava prima si scoprono quando il ruolo che ci sbatte contro fallisce: una
+porta gia' occupata, un firewall acceso, un VIP che e' gia' di qualcun altro,
+due nodi che non si parlano, un repository irraggiungibile. Vale la pena
+guardarle a mano prima di lanciare su macchine nuove:
 
-Stampa una SCHEDA per nodo, divisa in sezioni, e alla fine un RIEPILOGO con una
-riga per macchina. Ogni voce ha un esito:
+  ss -lntup                    chi tiene le porte
+  ufw status                   firewall (host_prep lo disattiva comunque)
+  lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE     dischi liberi
+  ping <vip> ; ip route get <vip>               VIP gia' preso, VIP fuori rete
+  timedatectl                  orologio sincronizzato
 
-  OK           niente da fare
-  INFO         come stanno le cose, senza giudizio
-  ATTENZIONE   si puo' partire, ma sapendolo
-  PROBLEMA     l'installazione fallira' li'
-
-Che cosa guarda:
-
-  CONTROLLER   versione di Ansible e di Python, presenza dei certificati che i
-               ruoli copiano sui nodi
-  INVENTARIO   indirizzi ripetuti, numerosita' dei gruppi (etcd e Patroni
-               vogliono un numero dispari di nodi, Gluster esattamente 3), VIP
-               che coincidono con l'indirizzo di un nodo, VRID uguali fra loro
-  SISTEMA      distribuzione, kernel, CPU, memoria, swap, hostname contro nome
-               di inventario, sincronizzazione dell'orologio, cloud-init ancora
-               in corso, lock di apt occupato, software d'infrastruttura gia'
-               installato
-  FIREWALL     ufw, firewalld, regole e policy iptables, tabelle nftables,
-               AppArmor, SELinux, moduli del kernel, parametri sysctl
-  RETE         interfacce, indirizzo di inventario che non sta sul nodo,
-               instradamento, risoluzione del dominio, VIP gia' occupati,
-               nodi del cluster che non si raggiungono fra loro, endpoint da
-               cui i ruoli scaricano
-  PORTE        per ogni porta che l'installazione aprira' su quel nodo: libera,
-               oppure gia' tenuta, e da chi. Le porte non sono ricopiate a
-               mano: vengono da group_vars/all.yml, quindi cambiando
-               haproxy_stats_port o rke2_supervisor_port il controllo la segue
-  DISCHI       lsblk, dischi liberi, LVM esistenti, filesystem montati, spazio
-               libero, presenza di lvm2/parted/xfsprogs
-
-Varianti:
-
-  # solo un gruppo
-  ansible-playbook -i inventory.ini playbooks/00-verifica.yml --limit db_servers
-
-  # senza le prove verso internet, su una rete chiusa
-  ansible-playbook -i inventory.ini playbooks/00-verifica.yml -e pf_verifica_endpoint=false
-
-  # come barriera: esce in errore se un nodo ha un PROBLEMA o non risponde
-  ansible-playbook -i inventory.ini playbooks/00-verifica.yml -e pf_blocca_se_problemi=true
-
-La verifica e' anche il primo passo di site.yml. Li' racconta e basta, poi
-l'installazione parte comunque; per farne una barriera vera si aggiunge
--e pf_blocca_se_problemi=true, per saltarla --skip-tags verifica.
+I controlli che impediscono un DANNO non erano nel preflight e restano dove
+sono sempre stati, cioe' dentro ai ruoli: pacemaker_nfs_ha si ferma se un VIP
+non sta nella rete dei nodi, postgresql_cluster se il gruppo non ha tre nodi
+raggiungibili, kafka_cluster se un nodo ha gia' dei dati o un node.id diverso da
+quello che la configurazione prevede.
 
 
-LSBLK E LE VARIABILI DEGLI LVM
+I DISCHI SI MONTANO A MANO
 
-La sezione DISCHI della scheda serve a due cose. La prima e' dire se il nodo e'
-pronto. La seconda e' rispondere alla domanda che viene dopo, cioe' CON QUALI
-VALORI si popolano le variabili di create_disk quando si decide di far creare
-gli LVM ad Ansible invece che a mano.
+Nessun playbook crea LVM: create_disk esiste ancora in roles/ ma non viene
+invocato da nessuna parte, e i dischi dati (PostgreSQL, brick Gluster,
+/opt/kafka/data) si preparano e si montano prima di lanciare. I ruoli creano la
+directory se manca, le danno il proprietario giusto e dicono, in fase di
+esecuzione, se sotto c'e' un disco dedicato o la partizione di sistema.
 
-Ogni disco viene classificato con gli stessi criteri che usa create_disk per
-scegliere:
+Per pretendere il disco dedicato invece di scoprirlo dopo:
 
-  SISTEMA    il disco su cui sta /, che non si tocca
-  LIBERO     nessuna partizione, non montato, nessun filesystem: utilizzabile
-  PICCOLO    libero, ma sotto pf_disco_dati_minimo_gb: quasi sempre un residuo
-  OCCUPATO   ha gia' partizioni, un mount o un filesystem
-
-Il candidato che la scheda indica e' esattamente quello che sceglierebbe
-create_disk, quindi non ci sono sorprese al momento di lanciarlo. In fondo alla
-scheda c'e' un blocco gia' pronto da copiare, costruito con i nomi che quel
-nodo ha davvero (disk_vg_name, disk_lv_name e disk_mount_point del suo gruppo):
-il blocco per group_vars, la riga per inventory.ini valida per quel solo host,
-e la riga che finirebbe in /etc/fstab.
-
-zram, loop, sr e ram non compaiono fra i candidati: lsblk li classifica come
-"disk" ma dischi non sono.
+  ansible-playbook playbooks/30-database.yml -e postgres_require_dedicated_disk=true
+  ansible-playbook playbooks/50-kafka.yml    -e kafka_require_dedicated_disk=true
 
 
 PRODECURA DI INSTALLAZIONE
@@ -148,11 +100,11 @@ Tutto in una volta, nell'ordine corretto:
 
 Oppure un'area alla volta, quando serve piu' controllo:
 
-  ansible-playbook -i inventory.ini playbooks/00-verifica.yml
   ansible-playbook -i inventory.ini playbooks/10-bilanciatori.yml
   ansible-playbook -i inventory.ini playbooks/20-rancher.yml
   ansible-playbook -i inventory.ini playbooks/30-database.yml
   ansible-playbook -i inventory.ini playbooks/40-storage.yml
+  ansible-playbook -i inventory.ini playbooks/50-kafka.yml
 
 site.yml non contiene piu' i play: li importa da playbooks/ con
 import_playbook. Ogni play e' scritto una volta sola, quindi le due modalita'
@@ -515,9 +467,8 @@ per arrivare al VIP si passa dal gateway non ne trova nessuna e lascia
 
   nfs_ip start on <nodo> returned 'error' ([findif] failed)
 
-che non dice quale sia il problema. Il ruolo pacemaker_nfs_ha adesso se ne
-accorge prima e si ferma spiegando cosa non torna; playbooks/00-verifica.yml lo
-segnala in sezione RETE prima ancora di installare, per tutti e tre i VIP.
+che non dice quale sia il problema. Il ruolo pacemaker_nfs_ha se ne accorge
+prima di arrivarci e si ferma spiegando cosa non torna.
 
 Si legge con "ip -br addr" su un nodo: l'indirizzo con il suo prefisso dice
 qual e' la rete, e il VIP va scelto libero dentro a quella.

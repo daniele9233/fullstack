@@ -46,7 +46,7 @@
 #    una cosa da ricordare.
 
 - name: Controlli preliminari
-  import_tasks: preflight.yml
+  import_tasks: controlli.yml
 
 - name: Java 17
   import_tasks: java.yml
