@@ -43,13 +43,63 @@
     enabled: yes
 
 # --- Primo avvio ------------------------------------------------------------
-
+#
+# Solo l'avvio: l'attesa del listener sta IN FONDO, dopo il riavvio a rotazione.
+# L'ordine non e' un dettaglio.
+#
+# Un nodo appena avviato ha la roba nuova (distribuzione, server.properties,
+# keystore, truststore); un nodo gia' in esecuzione ha in memoria quella che
+# aveva al PROPRIO avvio, perche' la JVM legge i keystore una volta sola, allo
+# start. Se qualcosa e' cambiato mentre il nodo fermo era fermo, i due parlano
+# materiale diverso e il quorum non si forma:
+#
+#   ERROR [RaftManager id=2] Connection to node 3 failed authentication due to:
+#   SSL handshake failed
+#   Caused by: PKIX path building failed: unable to find valid certification
+#   path to requested target
+#
+# Aspettare li' il listener del nodo appena avviato significa aspettare 300
+# secondi un quorum che non puo' formarsi, e fallire, mentre la cosa che lo
+# sbloccherebbe — il riavvio dei nodi rimasti indietro — e' il task subito
+# dopo. Avviando prima e aspettando dopo, quando si arriva all'attesa i nodi
+# hanno tutti lo stesso materiale e il quorum si chiude da solo.
 - name: Avvia i nodi non ancora attivi
   systemd:
     name: "{{ kafka_service_name }}"
     state: started
   when: not kafka_gia_attivo | bool
   register: kafka_avviato
+
+# --- Riavvio a rotazione ----------------------------------------------------
+
+- name: Componi l'elenco dei nodi da riavviare
+  set_fact:
+    kafka_nodi_da_riavviare: "{{ (kafka_nodi_da_riavviare | default([])) + [item] }}"
+  loop: "{{ ansible_play_hosts }}"
+  when:
+    # Chi e' stato avviato adesso ha gia' la configurazione nuova: riavviarlo
+    # sarebbe un fermo macchina per niente. kafka_gia_attivo e' stato rilevato
+    # PRIMA dell'avvio qui sopra, quindi i nodi appena avviati non ci finiscono.
+    - hostvars[item].kafka_gia_attivo | default(false) | bool
+    - hostvars[item].kafka_da_riavviare | default(false) | bool
+  run_once: true
+
+- name: Mostra quali nodi verranno riavviati
+  debug:
+    msg: >-
+      {{ ('Riavvio a rotazione di: ' ~ (kafka_nodi_da_riavviare | default([]) | join(', ')))
+         if (kafka_nodi_da_riavviare | default([]) | length > 0)
+         else 'Nessun riavvio necessario: configurazione, certificati e distribuzione sono gia quelli attesi.' }}
+  run_once: true
+
+- name: Riavvia i nodi uno alla volta
+  include_tasks: riavvio_a_rotazione.yml
+  loop: "{{ kafka_nodi_da_riavviare | default([]) }}"
+  loop_control:
+    loop_var: kafka_nodo
+  run_once: true
+
+# --- Attesa dei nodi avviati adesso -----------------------------------------
 
 # Il listener del broker si apre quando il nodo e' entrato nel cluster, non
 # appena parte la JVM: se il quorum non si forma, questa attesa scade. Il
@@ -79,34 +129,10 @@
           problema e' quasi sempre a monte: il quorum sulla
           {{ kafka_controller_port }} non si forma perche' i nodi non si
           raggiungono, oppure perche' si rifiutano a vicenda (JAAS o node.id).
+          Se nel journal c'e' "SSL handshake failed" con "PKIX path building
+          failed", i nodi hanno materiale TLS diverso: succede quando i
+          certificati vengono rigenerati e qualche nodo non e' stato riavviato.
+          In quel caso: systemctl restart {{ kafka_service_name }} sugli altri.
           Ultime righe del journal:
           {{ kafka_journal.stdout | default('journal non leggibile') }}
           Log completo del broker: {{ kafka_service_log_dir }}/server.log
-
-# --- Riavvio a rotazione ----------------------------------------------------
-
-- name: Componi l'elenco dei nodi da riavviare
-  set_fact:
-    kafka_nodi_da_riavviare: "{{ (kafka_nodi_da_riavviare | default([])) + [item] }}"
-  loop: "{{ ansible_play_hosts }}"
-  when:
-    # Chi e' stato avviato adesso ha gia' la configurazione nuova: riavviarlo
-    # sarebbe un fermo macchina per niente.
-    - hostvars[item].kafka_gia_attivo | default(false) | bool
-    - hostvars[item].kafka_da_riavviare | default(false) | bool
-  run_once: true
-
-- name: Mostra quali nodi verranno riavviati
-  debug:
-    msg: >-
-      {{ ('Riavvio a rotazione di: ' ~ (kafka_nodi_da_riavviare | default([]) | join(', ')))
-         if (kafka_nodi_da_riavviare | default([]) | length > 0)
-         else 'Nessun riavvio necessario: configurazione, certificati e distribuzione sono gia quelli attesi.' }}
-  run_once: true
-
-- name: Riavvia i nodi uno alla volta
-  include_tasks: riavvio_a_rotazione.yml
-  loop: "{{ kafka_nodi_da_riavviare | default([]) }}"
-  loop_control:
-    loop_var: kafka_nodo
-  run_once: true
