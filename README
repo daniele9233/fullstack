@@ -567,8 +567,9 @@ ripiego: group_vars ha precedenza.
 
   inventory.ini            gli host di [kafka_servers], commentati: ci sono gli
                            IP della guida, vanno sostituiti con quelli reali
-  kafka_version            la guida dice 4.3.0. VERIFICA su
-                           kafka.apache.org/downloads che esista ancora
+  kafka_version            4.3.1, l'ultima patch della serie 4.3 (la guida dice
+                           4.3.0, ritirata da downloads.apache.org). VERIFICA su
+                           kafka.apache.org/downloads che sia ancora l'ultima
   kafka_keystore_password  password dei keystore. CAMBIALA
   kafka_sasl_users         utenti e password SASL. CAMBIALE
   kafka_java_install_method  "zulu" come da guida, "apt" se cdn.azul.com non e'

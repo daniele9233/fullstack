@@ -637,16 +637,19 @@ kafka_node_ip: "{{ ansible_host | default(ansible_default_ipv4.address | default
 # ---------------------------------------------------------------------------
 # VERSIONI
 # ---------------------------------------------------------------------------
-# La guida indica Kafka 4.3.0. VERIFICA su https://kafka.apache.org/downloads
-# che la versione esista ancora e che sia l'ultima patch della serie: il ruolo
-# prova prima downloads.apache.org (solo release correnti) e poi
-# archive.apache.org (tutte le altre), e se non la trova da nessuna parte si
-# ferma dicendolo.
-kafka_version: "4.3.0"
+# La guida indica Kafka 4.3.0, che non e' piu' l'ultima patch della serie 4.3:
+# 4.3.1 l'ha sostituita e downloads.apache.org, che tiene SOLO le release
+# correnti, ha smesso di pubblicare la 4.3.0 (da li' il 404 sul tarball).
+#
+# VERIFICA su https://kafka.apache.org/downloads che questa sia ancora l'ultima
+# patch della serie. Il ruolo prova prima downloads.apache.org e poi
+# archive.apache.org (che tiene tutte le release ritirate), e se non la trova da
+# nessuna parte si ferma dicendolo.
+kafka_version: "4.3.1"
 kafka_scala_version: "2.13"
 
 # Rete chiusa: percorso del tarball SUL CONTROLLER, e non viene scaricato
-# niente da internet. Es. "{{ repo_dir }}/files/kafka_2.13-4.3.0.tgz"
+# niente da internet. Es. "{{ repo_dir }}/files/kafka_2.13-4.3.1.tgz"
 kafka_tarball_local_path: ""
 
 # ---------------------------------------------------------------------------

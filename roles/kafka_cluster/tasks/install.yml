@@ -85,8 +85,16 @@
 
     # downloads.apache.org tiene solo le release correnti, archive.apache.org
     # tiene tutte le altre: si prova il primo, e se non c'e' si passa al
-    # secondo. Un 404 sul primo URL e' normale su una versione non recentissima
-    # e non deve fermare il playbook.
+    # secondo. Un 404 sul primo URL e' normale su una versione non piu' ultima
+    # patch della sua serie, e non deve fermare il playbook.
+    #
+    # I due block/rescue sono ANNIDATI, e il fail sta nel rescue interno: e'
+    # l'unico modo perche' scatti davvero solo quando fallisce anche il secondo
+    # URL. Con un solo livello e "failed_when: false" sul secondo get_url il
+    # messaggio non usciva mai — failed_when: false azzera il flag failed, quindi
+    # "kafka_dl_archivio is failed" e' FALSO anche dopo un 404 — e il ruolo
+    # tirava dritto fino a "Scompatta Kafka", che falliva su un /tmp inesistente
+    # senza dire una parola sul vero motivo.
     - name: Scarica Kafka
       when: kafka_tarball_local_path | length == 0
       block:
@@ -97,26 +105,27 @@
             mode: "0644"
             timeout: 60
       rescue:
-        - name: "Riprova da {{ kafka_download_urls[1] }}"
-          get_url:
-            url: "{{ kafka_download_urls[1] }}"
-            dest: "/tmp/{{ kafka_tarball }}"
-            mode: "0644"
-            timeout: 60
-          register: kafka_dl_archivio
-          failed_when: false
-
-        - name: Spiega perche' il download di Kafka e' fallito
-          fail:
-            msg: >-
-              Kafka {{ kafka_version }} non e' stato scaricato ne' da
-              downloads.apache.org ne' da archive.apache.org.
-              Controlla che kafka_version esista davvero
-              (https://kafka.apache.org/downloads) e che kafka_scala_version
-              sia quella pubblicata per quella release.
-              Su rete chiusa, copia il tarball sul controller e valorizza
-              kafka_tarball_local_path in group_vars/all.yml.
-          when: kafka_dl_archivio is failed or kafka_dl_archivio is skipped
+        - name: Ripiega sull'archivio Apache
+          block:
+            - name: "Riprova da {{ kafka_download_urls[1] }}"
+              get_url:
+                url: "{{ kafka_download_urls[1] }}"
+                dest: "/tmp/{{ kafka_tarball }}"
+                mode: "0644"
+                timeout: 60
+          rescue:
+            - name: Spiega perche' il download di Kafka e' fallito
+              fail:
+                msg: >-
+                  Kafka {{ kafka_version }} non e' stato scaricato ne' da
+                  downloads.apache.org ne' da archive.apache.org.
+                  Controlla che kafka_version esista davvero
+                  (https://kafka.apache.org/downloads) e che kafka_scala_version
+                  sia quella pubblicata per quella release: downloads.apache.org
+                  pubblica SOLO l'ultima patch di ogni serie, le precedenti
+                  restano solo su archive.apache.org.
+                  Su rete chiusa, copia il tarball sul controller e valorizza
+                  kafka_tarball_local_path in group_vars/all.yml.
 
     # Su un AGGIORNAMENTO le libs vecchie vanno tolte prima: scompattare sopra
     # lascia in libs/ i jar di entrambe le versioni, e kafka-run-class.sh mette
