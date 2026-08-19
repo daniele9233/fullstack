@@ -42,6 +42,12 @@ kafka_download_urls:
 # scaricato niente da internet.
 kafka_tarball_local_path: ""
 
+# Riscarica e riscompatta la distribuzione anche se il marcatore di versione
+# dice che c'e' gia' quella giusta. bin/ e libs/ vengono rifatti da zero.
+# Non tocca data/, config/ ne' i certificati: non cancella dati e non
+# riformatta niente.
+kafka_force_reinstall: false
+
 # --- Utente, percorsi -------------------------------------------------------
 
 kafka_user: "kafka"

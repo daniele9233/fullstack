@@ -56,11 +56,18 @@
   failed_when: false
   changed_when: false
 
+#
+# kafka_force_reinstall serve quando il marcatore dice la versione giusta ma
+# quello che c'e' in kafka_home non lo e': una distribuzione mescolata a una
+# precedente installata a mano, o uno scompattamento interrotto a meta'. Senza,
+# il ruolo si fiderebbe del marcatore e non rimetterebbe mai a posto bin/ e
+# libs/.
 - name: Determina se la distribuzione va installata o aggiornata
   set_fact:
     kafka_installed_version: "{{ (kafka_installed_version_raw.content | default('') | b64decode | trim) }}"
     kafka_dist_da_installare: >-
-      {{ (kafka_installed_version_raw.content is not defined)
+      {{ (kafka_force_reinstall | bool)
+         or (kafka_installed_version_raw.content is not defined)
          or ((kafka_installed_version_raw.content | b64decode | trim) != kafka_version) }}
 
 - name: Mostra lo stato della distribuzione
@@ -70,8 +77,10 @@
       {{ 'Kafka ' ~ kafka_version ~ ' da installare'
          if kafka_dist_da_installare | bool
          else 'Kafka ' ~ kafka_installed_version ~ ' gia in ' ~ kafka_home }}
-      {{ '(aggiornamento da ' ~ kafka_installed_version ~ ')'
-         if (kafka_dist_da_installare | bool and kafka_installed_version | length > 0) else '' }}
+      {{ '(reinstallazione forzata: bin/ e libs/ vengono rifatti da zero)'
+         if (kafka_dist_da_installare | bool and kafka_force_reinstall | bool)
+         else ('(aggiornamento da ' ~ kafka_installed_version ~ ')'
+               if (kafka_dist_da_installare | bool and kafka_installed_version | length > 0) else '') }}
 
 - name: Installazione della distribuzione Kafka
   when: kafka_dist_da_installare | bool
@@ -127,19 +136,40 @@
                   Su rete chiusa, copia il tarball sul controller e valorizza
                   kafka_tarball_local_path in group_vars/all.yml.
 
-    # Su un AGGIORNAMENTO le libs vecchie vanno tolte prima: scompattare sopra
-    # lascia in libs/ i jar di entrambe le versioni, e kafka-run-class.sh mette
-    # nel classpath tutto quello che trova. Il broker parte con due copie delle
-    # stesse classi e fallisce in modi che non somigliano a un problema di
-    # versione (NoSuchMethodError, LinkageError).
+    # bin/ e libs/ della distribuzione precedente vanno tolti PRIMA di
+    # scompattare, e vanno tolti SEMPRE. Scompattare sopra non ripulisce niente:
+    # tar sovrascrive i file che l'archivio contiene e lascia dov'erano tutti
+    # gli altri. In libs/ restano cosi' i jar della versione vecchia accanto a
+    # quelli della nuova, e kafka-run-class.sh mette nel classpath tutto quello
+    # che trova nella directory. Il risultato sono due copie delle stesse
+    # classi, e un errore che non somiglia affatto a un problema di versione:
     #
-    # Solo libs/: bin/ e config/ vengono sovrascritti dall'archivio, e
-    # config/server.properties lo riscrive comunque il ruolo.
-    - name: Rimuovi le librerie della versione precedente
+    #   SLF4J: Class path contains multiple SLF4J bindings.
+    #     log4j-slf4j-impl-2.25.4.jar   <- binding log4j2, Kafka 4.x
+    #     slf4j-reload4j-1.7.36.jar     <- binding reload4j, Kafka 3.x
+    #   NoSuchMethodError: com.fasterxml.jackson.dataformat.yaml.YAMLParser
+    #                      ._updateToken(...)
+    #
+    # cioe' il jackson-dataformat-yaml nuovo che chiama un metodo che il
+    # jackson-core vecchio non ha. Nessuna release di Kafka contiene entrambi i
+    # binding SLF4J: vederli insieme significa avere due distribuzioni mescolate
+    # nella stessa directory.
+    #
+    # "Sempre", e non solo quando kafka_installed_version e' valorizzata, perche'
+    # quel marcatore lo scrive questo ruolo: una installazione fatta A MANO
+    # seguendo la guida non ce l'ha, quindi risulterebbe "prima installazione" e
+    # i suoi jar sopravviverebbero allo scompattamento. E' il caso che produce
+    # l'errore qui sopra al primo run di Ansible su una macchina non vergine.
+    #
+    # config/ NON si tocca: contiene server.properties, security/ e cluster.id,
+    # che sono roba del ruolo, non dell'archivio.
+    - name: Rimuovi bin/ e libs/ della distribuzione precedente
       file:
-        path: "{{ kafka_home }}/libs"
+        path: "{{ item }}"
         state: absent
-      when: kafka_installed_version | length > 0
+      loop:
+        - "{{ kafka_bin_dir }}"
+        - "{{ kafka_home }}/libs"
 
     - name: "Scompatta Kafka in {{ kafka_home }}"
       unarchive:

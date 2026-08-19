@@ -652,6 +652,17 @@ kafka_scala_version: "2.13"
 # niente da internet. Es. "{{ repo_dir }}/files/kafka_2.13-4.3.1.tgz"
 kafka_tarball_local_path: ""
 
+# Riscarica e riscompatta la distribuzione anche se il marcatore di versione
+# scritto dal ruolo dice che c'e' gia' quella giusta: bin/ e libs/ vengono
+# rifatti da zero. Serve quando in /opt/kafka ci sono i resti di un'altra
+# versione — tipicamente un'installazione fatta a mano prima di usare Ansible —
+# e i comandi di Kafka falliscono con "multiple SLF4J bindings" o
+# NoSuchMethodError. Non tocca data/, config/ ne' i certificati: non cancella
+# dati e non riformatta niente.
+#
+#   ansible-playbook playbooks/50-kafka.yml -e kafka_force_reinstall=true
+kafka_force_reinstall: false
+
 # ---------------------------------------------------------------------------
 # JAVA
 # ---------------------------------------------------------------------------
