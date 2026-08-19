@@ -629,6 +629,11 @@ smettono di collegarsi):
 
   VERIFICA E PROVA
 
+I comandi per collaudare il cluster a mano — quorum, broker, TLS, certificati,
+autenticazione, scrittura e rilettura, coerenza fra i tre nodi — stanno tutti in
+VERIFICA-KAFKA, con accanto che cosa deve rispondere ciascuno e dove guardare
+quando la risposta e' diversa. Qui sotto solo il minimo.
+
 A fine installazione il playbook controlla, in sola lettura, che il quorum abbia
 eletto un leader e che rispondano tutti e tre i broker. Se qualcosa non torna,
 il messaggio di errore contiene gia' l'ordine di diagnosi: identita' del nodo

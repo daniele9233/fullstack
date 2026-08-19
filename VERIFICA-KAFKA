@@ -1,0 +1,522 @@
+VERIFICA DEL CLUSTER KAFKA
+
+Che cosa lanciare, dopo un ansible-playbook playbooks/50-kafka.yml, per sapere
+se il cluster funziona davvero invece di sperarlo.
+
+Ogni comando qui dentro e' in SOLA LETTURA tranne quelli della sezione 8, che
+crea e cancella un topic di prova, e quelli marcati MODIFICA. Si lanciano come
+root da UNO QUALSIASI dei tre nodi: sono tutti comandi che interrogano il
+cluster, non la macchina su cui girano.
+
+Accanto a ogni comando c'e' che cosa deve rispondere. Quando la risposta e'
+diversa, la sezione 10 dice dove guardare.
+
+
+  PERCHE' SERVONO --command-config E LA PORTA 9092
+
+Sono i due errori che si fanno sempre.
+
+Entrambi i listener sono in SASL_SSL. Un comando senza --command-config prova a
+collegarsi in chiaro, non riceve una risposta comprensibile e muore in timeout,
+oppure con un OutOfMemoryError del client: legge la risposta TLS come se fosse
+un frame Kafka, ne ricava una lunghezza enorme e prova ad allocarla. Non e' il
+cluster che sta male, e' il file di configurazione che manca.
+
+--bootstrap-server vuole la 9092, la porta dei BROKER. La 9093 e' il listener
+del quorum: ci parlano solo i tre controller fra loro, e non risponde ai comandi
+di amministrazione. Puntarci --bootstrap-server non funziona e basta.
+
+
+  LA SESSIONE
+
+Da impostare una volta per shell. Gli indirizzi sono quelli dell'ambiente di
+staging: cambiali se il cluster e' un altro.
+
+  export JAVA_HOME=$(grep -oP 'JAVA_HOME=\K.*' /etc/systemd/system/kafka.service)
+  export PATH="$JAVA_HOME/bin:/opt/kafka/bin:$PATH"
+  export BS=10.205.166.214:9092,10.205.166.217:9092,10.205.166.218:9092
+  export CFG=/opt/kafka/client.properties
+  export SEC=/opt/kafka/config/security
+  export LOG_DIR=/tmp/kafka-cli
+
+JAVA_HOME viene letto dalla unit systemd invece di essere scritto a mano: resta
+giusto anche cambiando kafka_java_install_method da zulu ad apt.
+
+LOG_DIR serve solo a non lasciare file di root dentro /opt/kafka/logs, che
+appartiene all'utente kafka.
+
+Se preferisci non impostare niente, ogni comando funziona anche scritto per
+esteso: al posto di $BS e $CFG metti gli indirizzi e
+/opt/kafka/client.properties.
+
+
+  1. IL PLAYBOOK NON TROVA PIU' NIENTE DA FARE
+
+E' la verifica piu' breve e la piu' severa: un ruolo idempotente su un cluster
+sano non ha niente da cambiare. Se trova qualcosa, quello che c'e' sul disco non
+e' quello che la configurazione descrive. Dal controller Ansible:
+
+  ansible-playbook -i inventory.ini playbooks/50-kafka.yml --diff
+
+Atteso: changed=0 su tutti e tre, failed=0, e il messaggio
+"Nessun riavvio necessario: configurazione, certificati e distribuzione sono
+gia quelli attesi".
+
+Un changed su "Scrivi server.properties" significa che qualcuno ha modificato il
+file a mano sul nodo. Un changed su "Scompatta Kafka" significa che kafka_version
+e' cambiata o che il marcatore .ansible_kafka_version non c'e'.
+
+
+  2. IL QUORUM
+
+Il quorum E' il cluster. Tre broker che rispondono senza un leader eletto sono
+tre macchine, non un cluster.
+
+  kafka-metadata-quorum.sh --bootstrap-server $BS --command-config $CFG \
+    describe --status
+
+Atteso:
+  LeaderId          diverso da -1
+  CurrentVoters     tutti e tre gli id con i loro endpoint CONTROLLER://
+  CurrentObservers  []
+  HighWatermark     cresce fra due esecuzioni
+
+Un osservatore nell'elenco e' un nodo che non vota: non e' previsto in questa
+configurazione, dove i tre nodi sono tutti votanti.
+
+  kafka-metadata-quorum.sh --bootstrap-server $BS --command-config $CFG \
+    describe --replication
+
+Atteso: tre righe, Lag a 0 e LastFetchTimestamp recente su tutte. Un votante con
+il Lag che cresce sta per uscire dal quorum.
+
+
+  3. I BROKER
+
+Il quorum sano dice che i controller si parlano, non che i client arrivano ai
+broker: sono due strati diversi e possono rompersi separatamente.
+
+  kafka-broker-api-versions.sh --bootstrap-server $BS --command-config $CFG \
+    | grep 'id: '
+
+Atteso: tre righe, una per nodo, con isFenced: false su tutte. Un nodo fenced e'
+isolato: c'e', ma il cluster non gli manda traffico.
+
+  kafka-broker-api-versions.sh --bootstrap-server $BS --command-config $CFG \
+    | grep -c 'id: '
+
+Atteso: 3. Se ne rispondono meno mentre il quorum e' sano, il sospetto e'
+advertised.listeners del nodo mancante, non l'autenticazione.
+
+  kafka-topics.sh --bootstrap-server $BS --command-config $CFG --list
+
+Su un cluster appena installato e' normale che ci sia solo __consumer_offsets, o
+nemmeno quello: auto.create.topics.enable e' false e i topic interni compaiono
+solo dopo che qualcuno li usa.
+
+  kafka-log-dirs.sh --bootstrap-server $BS --command-config $CFG --describe
+
+Quanto occupa ogni broker. Esce in JSON, ed e' l'unico modo per vedere
+l'occupazione dei tre nodi senza collegarsi a ciascuno.
+
+
+  4. LA CONFIGURAZIONE EFFETTIVA
+
+Non quella scritta nei file: quella che il cluster sta davvero usando.
+
+  kafka-configs.sh --bootstrap-server $BS --command-config $CFG \
+    --entity-type brokers --entity-name 1 --describe --all \
+    | grep -E 'min.insync.replicas|num.partitions|default.replication.factor|log.retention.hours|log.dirs|ssl.client.auth|sasl.enabled.mechanisms|listener.security.protocol.map|authorizer.class.name|auto.create.topics'
+
+La colonna synonyms dice da dove viene ogni valore, ed e' la parte che conta:
+
+  STATIC_BROKER_CONFIG          da server.properties, cioe' da Ansible
+  DEFAULT_CONFIG                il valore che Kafka userebbe da solo
+  DYNAMIC_DEFAULT_BROKER_CONFIG impostato a caldo, valido per tutti i broker
+  DYNAMIC_BROKER_CONFIG         impostato a caldo su quel broker soltanto
+
+Atteso, con i valori di group_vars/all.yml:
+
+  listener.security.protocol.map = BROKER:SASL_SSL,CONTROLLER:SASL_SSL
+  ssl.client.auth                = requested
+  sasl.enabled.mechanisms        = PLAIN
+  authorizer.class.name          = ...StandardAuthorizer
+  auto.create.topics.enable      = false
+  default.replication.factor     = 3
+  num.partitions                 = 3
+  log.dirs                       = /opt/kafka/data
+
+  kafka-configs.sh --bootstrap-server $BS --command-config $CFG \
+    --entity-type brokers --entity-default --describe
+
+Atteso: una sola voce, min.insync.replicas.
+
+QUELLA VOCE NON E' UN ERRORE e non va tolta. La mette Kafka stesso durante
+kafka-storage.sh format perche' ELR (Eligible Leader Replicas, attivo di default
+in Kafka 4.x) pretende un min.insync.replicas a livello di cluster. Provare a
+cancellarla risponde:
+
+  Cluster-level min.insync.replicas cannot be removed while ELR is enabled.
+
+Ha pero' una conseguenza da sapere: IL VALORE DINAMICO HA LA PRECEDENZA SU
+QUELLO STATICO. Cambiare kafka_min_insync_replicas in group_vars e rilanciare il
+playbook riscrive server.properties, Ansible dice changed, i nodi si riavviano —
+e il cluster continua a usare il valore vecchio. Per cambiarlo davvero serve
+anche, una volta sola (MODIFICA):
+
+  kafka-configs.sh --bootstrap-server $BS --command-config $CFG \
+    --entity-type brokers --entity-default --alter \
+    --add-config min.insync.replicas=3
+
+Qualsiasi altra voce in quell'elenco e' invece una modifica fatta a mano, che
+scavalca Ansible e non e' scritta in nessun file del repository.
+
+
+  5. IL TLS C'E' E FUNZIONA
+
+Tre prove diverse, che dicono tre cose diverse.
+
+La prima e' negativa, ed e' la piu' importante: senza --command-config non si
+deve entrare.
+
+  timeout 30 kafka-topics.sh --bootstrap-server $BS --list
+
+DEVE FALLIRE, con un timeout o con un OutOfMemoryError del client. Se invece
+elenca i topic, il listener accetta traffico in chiaro e tutto il resto di
+questa sezione non serve a niente.
+
+La seconda: l'handshake riesce e la catena e' valida, su tutte e sei le porte.
+
+  for ip in 10.205.166.214 10.205.166.217 10.205.166.218; do
+    for p in 9092 9093; do
+      printf '%s:%s  ' "$ip" "$p"
+      openssl s_client -connect $ip:$p -CAfile $SEC/ca.crt \
+        </dev/null 2>/dev/null | grep -m1 'Verify return code'
+    done
+  done
+
+Atteso: sei righe "Verify return code: 0 (ok)".
+
+Lo 0 vale piu' di quanto sembri. -CAfile punta alla CA LOCALE del nodo da cui
+stai lanciando: ottenerlo anche interrogando gli altri due dimostra che i
+certificati di tutti e tre risalgono alla STESSA CA. E' esattamente il controllo
+che fallisce quando compare "PKIX path building failed", e rende inutile andare
+a confrontare le impronte nodo per nodo.
+
+La terza: che protocollo e che cifrario.
+
+  openssl s_client -connect 10.205.166.214:9092 -CAfile $SEC/ca.crt \
+    </dev/null 2>/dev/null \
+    | grep -E 'New,|Server Temp Key|Server public key|Verify return code'
+
+Atteso: "New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384" o equivalente, e
+"Server public key is 2048 bit", che corrisponde a kafka_keystore_key_size.
+
+Attenzione al grep: openssl scrive "Cipher is", non "Cipher :", quindi cercare
+'Cipher *:' non trova niente.
+
+E i protocolli vecchi devono essere rifiutati:
+
+  openssl s_client -connect 10.205.166.214:9092 -tls1_1 </dev/null 2>&1 \
+    | grep -E 'New,|alert|error'
+
+DEVE FALLIRE. Se negozia, c'e' TLS 1.1 attivo su un broker.
+
+
+  6. IL CERTIFICATO
+
+Che certificato e', chi l'ha firmato, quando scade.
+
+  openssl s_client -connect 10.205.166.214:9092 </dev/null 2>/dev/null \
+    | openssl x509 -noout -subject -issuer -serial -dates -fingerprint -sha256
+
+Atteso: subject CN uguale all'IP del nodo, issuer CN = Kafka-Security-CA.
+
+Questo comando chiede il certificato ALLA RETE, non al disco, ed e' voluto: la
+JVM legge i keystore una volta sola, all'avvio. Se qualcuno ha rigenerato i file
+senza riavviare il servizio, il certificato su disco e quello servito sono
+diversi — ed e' proprio quella divergenza a far fallire l'handshake fra i nodi.
+
+I nomi per cui il certificato e' valido:
+
+  for ip in 10.205.166.214 10.205.166.217 10.205.166.218; do
+    printf '%s\n' "$ip"
+    openssl s_client -connect $ip:9092 </dev/null 2>/dev/null \
+      | openssl x509 -noout -subject -ext subjectAltName
+  done
+
+Atteso, per ogni nodo:
+
+  subject=CN = 10.205.166.214
+  X509v3 Subject Alternative Name:
+      IP Address:10.205.166.214, DNS:pu-kfk-stg-01
+
+NON C'E' UN FQDN. Il CN e' un indirizzo IP e il nome DNS nel SAN e' l'hostname
+corto dell'inventario, non un nome qualificato. I nomi validi sono esattamente
+quei due. Oggi non ha conseguenze perche'
+ssl.endpoint.identification.algorithm e' vuoto, cioe' la verifica del nome host
+e' disattivata; accendendola, i client dovranno collegarsi usando precisamente
+uno di quei due, e qualsiasi altro nome verrebbe rifiutato.
+
+Le scadenze, con i giorni che mancano:
+
+  for ip in 10.205.166.214 10.205.166.217 10.205.166.218; do
+    end=$(openssl s_client -connect $ip:9092 </dev/null 2>/dev/null \
+          | openssl x509 -noout -enddate | cut -d= -f2)
+    printf '%s  scade %s  (fra %s giorni)\n' "$ip" "$end" \
+      "$(( ( $(date -d "$end" +%s) - $(date +%s) ) / 86400 ))"
+  done
+
+Con kafka_cert_validity_days: 3650 mancano circa 3650 giorni. I tre certificati
+nascono nello stesso minuto e SCADONO NELLO STESSO MINUTO: quando succede, il
+cluster si ferma tutto insieme, non un nodo alla volta.
+
+La CA:
+
+  openssl x509 -in $SEC/ca.crt -noout -subject -issuer -dates \
+    -fingerprint -sha256
+
+Atteso: subject e issuer identici (CN = Kafka-Security-CA). Sono uguali perche'
+la CA e' autofirmata, che e' quello che deve essere.
+
+La verifica esplicita della firma, se il "Verify return code: 0" non basta:
+
+  openssl s_client -connect 10.205.166.214:9092 </dev/null 2>/dev/null \
+    | openssl x509 > /tmp/nodo.crt
+  openssl verify -CAfile $SEC/ca.crt /tmp/nodo.crt
+  rm -f /tmp/nodo.crt
+
+Atteso: /tmp/nodo.crt: OK
+
+
+  COME FUNZIONA IL TLS QUI DENTRO
+
+Su kafka_ca_node — il PRIMO host del gruppo [kafka_servers] — nasce una CA
+interna autofirmata, CN=Kafka-Security-CA. La sua chiave privata, ca.key, resta
+solo li' e non viene copiata da nessuna parte, nemmeno sul controller Ansible:
+e' quella che permette di emettere certificati nuovi.
+
+Quella CA firma UN CERTIFICATO PER NODO, con l'IP e il nome della macchina nel
+SAN. Ogni certificato vive nel keystore del suo nodo,
+config/security/kafka-<ip>.keystore.jks.
+
+Tutti e tre i nodi hanno poi lo STESSO TRUSTSTORE, kafka.truststore.jks, che
+contiene una cosa sola: la CA. E' questo che li fa fidare l'uno dell'altro. Non
+si fidano di certificati specifici, si fidano di chi li ha firmati — ed e' il
+motivo per cui un nodo che non riconosce la CA non riconosce nessuno, e il
+messaggio che ne esce e' "PKIX path building failed".
+
+Il TLS cifra il traffico e prova l'identita' della MACCHINA. L'identita'
+dell'UTENTE la stabilisce SASL/PLAIN, che viaggia dentro il tunnel TLS: da qui
+il nome SASL_SSL. ssl.client.auth=requested vuol dire che il broker il
+certificato al client lo chiede ma non lo pretende: chi si collega si autentica
+con utente e password, non con un certificato.
+
+Vale su entrambe le porte, la 9092 dei client e la 9093 dei voti del quorum.
+
+Un client esterno ha bisogno del solo ca.crt (/opt/kafka/config/security/ca.crt,
+l'unico file di quella directory leggibile da tutti) da importare nel proprio
+truststore. La chiave privata sta nel keystore del broker e non serve a chi si
+collega.
+
+
+  DOVE STANNO LE PASSWORD
+
+Una sola variabile genera le tre password TLS. kafka_keystore_password in
+group_vars/all.yml vale per il keystore, per la chiave privata e per il
+truststore: kafka_key_password e kafka_truststore_password la ereditano.
+
+Le password SASL stanno in kafka_sasl_users, ed e' l'unico posto dove esistono:
+con SASL/PLAIN gli utenti non si creano con kafka-configs.sh.
+
+Sui nodi finiscono in chiaro dentro server.properties, e non c'e' modo di
+evitarlo — Kafka legge quel file com'e'. La difesa e' il permesso:
+
+  ls -l /opt/kafka/config/server.properties /opt/kafka/client.properties
+  ls -ld $SEC
+  ls -l  $SEC
+
+Atteso: server.properties e client.properties a -rw-r----- kafka kafka, la
+directory security a drwx------, i keystore a -rw-------, e solo ca.crt a
+-rw-r--r--, perche' e' la parte pubblica.
+
+Per leggerle senza digitarle:
+
+  grep -E '^ssl\.(keystore|key|truststore)\.password=' \
+    /opt/kafka/config/server.properties
+
+CAMBIARE LA PASSWORD DEI KEYSTORE NON E' UNA MODIFICA SOLA. Alzare
+kafka_keystore_password e rilanciare riscrive server.properties con la password
+nuova, ma i keystore sul disco hanno ancora quella vecchia dentro e il broker
+non li apre piu'. Per cambiarla davvero serve anche
+-e kafka_force_regenerate_certs=true, che rifa' CA, truststore e keystore: da
+quel momento ogni client con il vecchio truststore smette di collegarsi finche'
+non riceve il nuovo ca.crt.
+
+Le password SASL invece si cambiano da sole: si modifica kafka_sasl_users, si
+rilancia, e il ruolo riavvia i nodi a rotazione.
+
+Nel repository sono in chiaro. Se finisce in mani condivise, il posto giusto e'
+ansible-vault.
+
+
+  7. L'AUTENTICAZIONE VIENE APPLICATA
+
+Cifrato non vuol dire autenticato. Due prove, entrambe negative.
+
+  sed 's/password="[^"]*"/password="sbagliata"/' $CFG > /tmp/kafka-badpw.properties
+  timeout 60 kafka-topics.sh --bootstrap-server $BS \
+    --command-config /tmp/kafka-badpw.properties --list
+  rm -f /tmp/kafka-badpw.properties
+
+DEVE FALLIRE con SaslAuthenticationException: Authentication failed. Se elenca i
+topic, il listener non sta verificando le credenziali.
+
+E l'authorizer deve filtrare. appclient non e' super user e, con
+kafka_manage_acls: false, non ha nessuna ACL: deve poter ENTRARE, perche' le
+credenziali sono valide, e non poter FARE niente.
+
+  timeout 60 kafka-topics.sh --bootstrap-server $BS \
+    --command-config /opt/kafka/client-appclient.properties \
+    --create --topic prova-permessi --partitions 1 --replication-factor 3
+
+DEVE FALLIRE con TopicAuthorizationException. Se il topic viene creato,
+l'authorizer non e' attivo oppure appclient e' finito fra i super user.
+
+  kafka-acls.sh --bootstrap-server $BS --command-config $CFG --list
+
+Vuoto con kafka_manage_acls: false. I super user (User:admin) sono esenti e non
+compaiono qui: le ACL non li riguardano.
+
+
+  8. SCRITTURA E RILETTURA
+
+L'unica verifica che attraversa tutto: rete, TLS, SASL, authorizer, replica,
+disco. Crea un topic e lo cancella.
+
+  T=verifica-$(date +%s)
+
+  kafka-topics.sh --bootstrap-server $BS --command-config $CFG \
+    --create --topic $T --partitions 3 --replication-factor 3
+
+  kafka-topics.sh --bootstrap-server $BS --command-config $CFG \
+    --describe --topic $T
+
+Atteso: tre partizioni, e per ognuna Replicas con tre id e Isr CON GLI STESSI
+TRE. E' Isr la riga che conta: se elenca meno di tre id, una replica e' indietro
+o il suo broker e' fermo. Che l'ordine cambi da una partizione all'altra
+(3,1,2 - 1,2,3 - 2,3,1) e' giusto: e' il leader che ruota.
+
+  echo "prova $(date -Is)" | kafka-console-producer.sh \
+    --bootstrap-server $BS --command-config $CFG --topic $T
+
+  kafka-console-consumer.sh --bootstrap-server $BS --command-config $CFG \
+    --topic $T --from-beginning --max-messages 1 --timeout-ms 30000
+
+  kafka-topics.sh --bootstrap-server $BS --command-config $CFG --delete --topic $T
+
+Atteso: il consumer stampa la riga scritta e chiude con
+"Processed a total of 1 messages". Ricordarsi della cancellazione: un topic di
+prova dimenticato resta a replicare per sempre.
+
+La stessa cosa, fatta dal playbook sul topic test-3node:
+
+  ansible-playbook -i inventory.ini playbooks/50-kafka.yml -e kafka_smoke_test=true
+
+
+  9. COERENZA FRA I TRE NODI
+
+Dal controller Ansible, perche' guardano il disco di ciascun nodo.
+
+  cd <repository>
+  ansible -i inventory.ini kafka_servers -m command -a \
+    'cat /opt/kafka/data/meta.properties'
+
+Atteso: cluster.id IDENTICO su tutti e tre, e node.id 1, 2, 3 nell'ordine
+dell'inventario. Sono i due valori che non cambiano piu' dopo la formattazione:
+riordinare gli host nell'inventario a cluster formattato li fa divergere da
+controller.quorum.voters, e il quorum si rifiuta.
+
+  ansible -i inventory.ini kafka_servers -m command -a \
+    'cat /opt/kafka/.ansible_kafka_version'
+
+Atteso: la stessa versione su tutti e tre, uguale a kafka_version.
+
+  ansible -i inventory.ini kafka_servers -m shell -a \
+    'ls /opt/kafka/libs | grep -E "slf4j|reload4j"'
+
+Atteso: solo log4j-slf4j-impl-*.jar e slf4j-api-*.jar. La comparsa di
+slf4j-reload4j-*.jar — il binding di Kafka 3.x — significa DUE DISTRIBUZIONI
+SOVRAPPOSTE in libs/, ed e' il guasto che si presenta come NoSuchMethodError
+invece che come un problema di versione. Si rimedia con:
+
+  ansible-playbook -i inventory.ini playbooks/50-kafka.yml \
+    -e kafka_force_reinstall=true
+
+  ansible -i inventory.ini kafka_servers -m shell -a \
+    'ls /opt/kafka/libs | grep -c "^jackson-core-"'
+
+Atteso: 1. Piu' di uno e' lo stesso problema visto da un'altra angolazione.
+
+  ansible -i inventory.ini kafka_servers -m shell -a \
+    'ls -l /opt/kafka/config/security/ca.key 2>&1 | tail -1'
+
+Atteso: presente SOLO sul primo host del gruppo, "No such file or directory"
+sugli altri due. ca.key firma certificati: se fosse su tutti e tre, ognuno
+potrebbe emetterne di nuovi.
+
+
+  10. QUANDO QUALCOSA NON VA
+
+  journalctl -u kafka -n 100 --no-pager
+  tail -n 200 /opt/kafka/logs/server.log
+  grep -iE 'error|exception' /opt/kafka/logs/server.log | tail -40
+
+PKIX path building failed
+  I nodi hanno materiale TLS diverso. Quasi mai e' il disco a essere sbagliato:
+  e' un processo avviato prima che tiene in memoria i certificati vecchi, perche'
+  la JVM legge i keystore una volta sola. Controlla la sezione 5: se le sei
+  porte danno tutte "0 (ok)", i file sono coerenti e basta riavviare i nodi
+  rimasti indietro.
+
+SaslAuthenticationException: Invalid username or password
+  Nel JAAS password= e user_<nome>= non coincidono. Il ruolo le genera dalla
+  stessa variabile e non possono divergere, quindi il sospetto e' un
+  server.properties modificato a mano: rilancia il playbook.
+
+Voter key for VOTE ... didn't match the receiver's replica key
+  node.id in meta.properties non corrisponde a controller.quorum.voters. E'
+  cambiato l'ordine degli host nel gruppo [kafka_servers] dopo la formattazione.
+  Rimettilo com'era, oppure dichiara kafka_node_id nell'inventario per ogni host.
+
+multiple SLF4J bindings / NoSuchMethodError
+  Due distribuzioni sovrapposte in /opt/kafka/libs. Sezione 9, e
+  -e kafka_force_reinstall=true.
+
+Timeout when waiting for <ip>:9092
+  Il nodo e' partito ma non entra nel quorum: il listener del broker si apre solo
+  a cluster raggiunto, non appena parte la JVM. Guarda le righe raft nel journal
+  e che la 9093 passi fra i nodi:
+
+  for ip in 10.205.166.214 10.205.166.217 10.205.166.218; do
+    nc -vz -w3 $ip 9093
+  done
+
+
+  PROVA DI RESILIENZA
+
+Da fare fuori produzione: ferma un nodo e verifica che il cluster regga.
+
+  systemctl stop kafka          # sul nodo da fermare
+
+  kafka-metadata-quorum.sh --bootstrap-server $BS --command-config $CFG \
+    describe --status
+  kafka-topics.sh --bootstrap-server $BS --command-config $CFG --describe
+
+  systemctl start kafka
+
+Atteso: il quorum resta con LeaderId valorizzato (due votanti su tre sono la
+maggioranza), Isr scende a due id, e la scrittura continua a funzionare perche'
+min.insync.replicas e' 2. Fermando DUE nodi il cluster si blocca: e' il
+comportamento corretto, non un guasto — con un solo votante non c'e'
+maggioranza, e continuare ad accettare scritture vorrebbe dire perderle.
