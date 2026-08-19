@@ -1,0 +1,231 @@
+---
+# CA interna, un keystore per nodo, un truststore per tutti.
+#
+# Tutto nasce su UN nodo solo (kafka_ca_node, il primo del gruppo), come nella
+# guida: e' li' che stanno ca.key e ca.crt, ed e' da li' che si firmano i
+# certificati. La chiave della CA non viene mai copiata altrove, nemmeno sul
+# controller Ansible.
+#
+# Distribuzione: ogni nodo riceve il PROPRIO keystore piu' il truststore comune.
+# Il passaggio dal controller e' obbligato — non c'e' un modo diretto di copiare
+# un file binario da un nodo all'altro con i moduli standard — e la directory di
+# transito e' una temporanea che viene cancellata alla fine.
+#
+# IDEMPOTENZA: ogni passo ha il suo "creates". Un run successivo non rigenera
+# niente, quindi i certificati gia' distribuiti restano validi e i client non
+# devono aggiornare il truststore. Per rifare tutto da capo serve
+# kafka_force_regenerate_certs=true, che e' DISTRUTTIVO: cambia la CA, e ogni
+# client con il vecchio truststore smette di collegarsi.
+
+- name: Cancella i certificati esistenti (richiesto esplicitamente)
+  file:
+    path: "{{ kafka_security_dir }}"
+    state: absent
+  when: kafka_force_regenerate_certs | bool
+
+- name: Ricrea la directory dei certificati
+  file:
+    path: "{{ kafka_security_dir }}"
+    state: directory
+    owner: "{{ kafka_user }}"
+    group: "{{ kafka_group }}"
+    mode: "0700"
+
+# --- CA ---------------------------------------------------------------------
+
+- name: "Crea la CA interna su {{ kafka_ca_node }}"
+  command:
+    argv:
+      - openssl
+      - req
+      - -new
+      - -newkey
+      - "rsa:{{ kafka_cert_key_size }}"
+      - -days
+      - "{{ kafka_cert_validity_days }}"
+      - -x509
+      - -subj
+      - "{{ kafka_ca_subject }}"
+      - -keyout
+      - "{{ kafka_security_dir }}/ca.key"
+      - -out
+      - "{{ kafka_security_dir }}/ca.crt"
+      - -nodes
+    creates: "{{ kafka_security_dir }}/ca.crt"
+  delegate_to: "{{ kafka_ca_node }}"
+  run_once: true
+
+- name: Proteggi la chiave della CA
+  file:
+    path: "{{ kafka_security_dir }}/ca.key"
+    owner: "{{ kafka_user }}"
+    group: "{{ kafka_group }}"
+    mode: "0600"
+  delegate_to: "{{ kafka_ca_node }}"
+  run_once: true
+
+# --- Truststore -------------------------------------------------------------
+# Contiene solo la CA ed e' uguale su tutti i nodi e su tutti i client.
+
+- name: Crea il truststore
+  command:
+    argv:
+      - "{{ kafka_java_home }}/bin/keytool"
+      - -keystore
+      - "{{ kafka_security_dir }}/{{ kafka_truststore_file }}"
+      - -storetype
+      - "{{ kafka_keystore_type }}"
+      - -alias
+      - CARoot
+      - -import
+      - -file
+      - "{{ kafka_security_dir }}/ca.crt"
+      - -storepass
+      - "{{ kafka_truststore_password }}"
+      - -noprompt
+    creates: "{{ kafka_security_dir }}/{{ kafka_truststore_file }}"
+  delegate_to: "{{ kafka_ca_node }}"
+  run_once: true
+  no_log: "{{ kafka_hide_secrets | bool }}"
+
+# --- Keystore dei nodi ------------------------------------------------------
+# Uno per nodo, tutti generati e firmati sul nodo CA. Il ciclo e' sugli host del
+# gruppo e non sugli IP: cosi' nel SAN finisce anche il nome della macchina.
+#
+# SAN con IP *e* DNS: la guida mette solo l'IP perche' tanto la verifica del
+# hostname e' disattivata (ssl.endpoint.identification.algorithm vuoto). Con
+# entrambi, attivare la verifica in seguito e' solo un cambio di variabile e
+# non impone di rigenerare i certificati.
+- name: Genera e firma il keystore di ogni nodo
+  shell: |
+    set -euo pipefail
+    umask 077
+    cd {{ kafka_security_dir | quote }}
+
+    KT={{ (kafka_java_home ~ '/bin/keytool') | quote }}
+    KS={{ ('kafka-' ~ hostvars[item].kafka_node_ip ~ '.keystore.jks') | quote }}
+    IP={{ hostvars[item].kafka_node_ip | quote }}
+    SAN="IP:{{ hostvars[item].kafka_node_ip }},DNS:{{ item }}"
+
+    # 1. chiave privata e certificato autofirmato provvisorio
+    "$KT" -genkeypair -keystore "$KS" -alias localhost \
+      -storetype {{ kafka_keystore_type | quote }} \
+      -validity {{ kafka_cert_validity_days }} \
+      -keyalg RSA -keysize {{ kafka_keystore_key_size }} \
+      -storepass {{ kafka_keystore_password | quote }} \
+      -keypass {{ kafka_key_password | quote }} \
+      -dname "CN=$IP" -ext "SAN=$SAN"
+
+    # 2. richiesta di firma
+    "$KT" -keystore "$KS" -alias localhost \
+      -certreq -file "cert-file-$IP" \
+      -storepass {{ kafka_keystore_password | quote }}
+
+    # 3. firma con la CA. Il SAN va ripetuto qui: openssl non lo eredita dalla
+    #    CSR, e un certificato firmato senza SAN fa fallire i client che hanno
+    #    la verifica del hostname attiva ("No subject alternative names").
+    printf 'subjectAltName=%s\n' "$SAN" > "ext-$IP.cnf"
+    openssl x509 -req -sha256 -CA ca.crt -CAkey ca.key -in "cert-file-$IP" \
+      -out "cert-signed-$IP" -days {{ kafka_cert_validity_days }} \
+      -CAcreateserial -extfile "ext-$IP.cnf"
+
+    # 4. prima la CA, poi il certificato firmato: importando il secondo per
+    #    primo keytool rifiuta la catena ("Failed to establish chain").
+    "$KT" -keystore "$KS" -alias CARoot -import -file ca.crt \
+      -storepass {{ kafka_keystore_password | quote }} -noprompt
+    "$KT" -keystore "$KS" -alias localhost -import -file "cert-signed-$IP" \
+      -storepass {{ kafka_keystore_password | quote }} -noprompt
+  args:
+    executable: /bin/bash
+    creates: "{{ kafka_security_dir }}/kafka-{{ hostvars[item].kafka_node_ip }}.keystore.jks"
+  loop: "{{ groups[kafka_cluster_group] }}"
+  delegate_to: "{{ kafka_ca_node }}"
+  run_once: true
+  no_log: "{{ kafka_hide_secrets | bool }}"
+
+- name: Proteggi i file dei certificati sul nodo CA
+  file:
+    path: "{{ kafka_security_dir }}"
+    state: directory
+    owner: "{{ kafka_user }}"
+    group: "{{ kafka_group }}"
+    recurse: yes
+  delegate_to: "{{ kafka_ca_node }}"
+  run_once: true
+
+# --- Distribuzione ----------------------------------------------------------
+
+- name: Crea la directory di transito sul controller
+  tempfile:
+    state: directory
+    prefix: kafka-certificati-
+  delegate_to: localhost
+  become: no
+  run_once: true
+  register: kafka_transito
+  changed_when: false
+
+- name: Blocco di distribuzione dei certificati
+  block:
+    - name: Preleva il truststore e la CA dal nodo CA
+      fetch:
+        src: "{{ kafka_security_dir }}/{{ item }}"
+        dest: "{{ kafka_transito.path }}/"
+        flat: yes
+      loop:
+        - "{{ kafka_truststore_file }}"
+        - "ca.crt"
+      delegate_to: "{{ kafka_ca_node }}"
+      run_once: true
+      # Copia verso una temporanea del controller, che viene cancellata a fine
+      # ruolo: sui nodi non cambia niente, e senza questo il playbook
+      # segnalerebbe "changed" a ogni esecuzione.
+      changed_when: false
+
+    # Senza run_once: gira per ogni host del play e preleva dal nodo CA il
+    # keystore di QUEL host, che e' l'unico che gli serve.
+    - name: Preleva dal nodo CA il keystore di ciascun nodo
+      fetch:
+        src: "{{ kafka_security_dir }}/{{ kafka_keystore_file }}"
+        dest: "{{ kafka_transito.path }}/"
+        flat: yes
+      delegate_to: "{{ kafka_ca_node }}"
+      changed_when: false
+
+    - name: Installa il keystore sul nodo
+      copy:
+        src: "{{ kafka_transito.path }}/{{ kafka_keystore_file }}"
+        dest: "{{ kafka_security_dir }}/{{ kafka_keystore_file }}"
+        owner: "{{ kafka_user }}"
+        group: "{{ kafka_group }}"
+        mode: "0600"
+      register: kafka_keystore_copiato
+
+    - name: Installa il truststore e la CA sul nodo
+      copy:
+        src: "{{ kafka_transito.path }}/{{ item.file }}"
+        dest: "{{ kafka_security_dir }}/{{ item.file }}"
+        owner: "{{ kafka_user }}"
+        group: "{{ kafka_group }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { file: "{{ kafka_truststore_file }}", mode: "0600" }
+        # ca.crt e' pubblico: e' il certificato che i client devono importare
+        # nel proprio truststore. 0644 per poterlo copiare via senza sudo.
+        - { file: "ca.crt", mode: "0644" }
+      loop_control:
+        label: "{{ item.file }}"
+      register: kafka_truststore_copiato
+
+  always:
+    # La directory di transito contiene i keystore, cioe' chiavi private:
+    # non resta sul controller nemmeno se qualcosa sopra e' fallito.
+    - name: Rimuovi la directory di transito dal controller
+      file:
+        path: "{{ kafka_transito.path }}"
+        state: absent
+      delegate_to: localhost
+      become: no
+      run_once: true
+      changed_when: false
+      when: kafka_transito.path is defined

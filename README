@@ -591,3 +591,168 @@ funzionante.
 
 
 
+
+
+CLUSTER KAFKA KRAFT A 3 NODI CON SASL_SSL
+
+  ansible-playbook -i inventory.ini playbooks/50-kafka.yml
+
+Tre nodi, ognuno broker E controller (process.roles=broker,controller). Tre
+controller vuol dire maggioranza due: il cluster continua a funzionare con un
+nodo giu'. Il numero di controller deve restare DISPARI, quindi il gruppo
+[kafka_servers] ha 3 host, non 2 e non 4.
+
+Tutto passa da SASL_SSL su entrambe le porte: 9092 per i client e per il
+traffico fra broker, 9093 per il quorum KRaft. La cifratura e' TLS con una CA
+interna, l'autenticazione e' SASL/PLAIN, l'autorizzazione e' lo
+StandardAuthorizer con super.users=User:admin.
+
+Le variabili stanno tutte in group_vars/all.yml, nella sezione in fondo. I
+defaults del ruolo (roles/kafka_cluster/defaults/main.yml) sono valori di
+ripiego: group_vars ha precedenza.
+
+
+  CHE COSA VA SISTEMATO PRIMA DI LANCIARE
+
+  inventory.ini            gli host di [kafka_servers], commentati: ci sono gli
+                           IP della guida, vanno sostituiti con quelli reali
+  kafka_version            la guida dice 4.3.0. VERIFICA su
+                           kafka.apache.org/downloads che esista ancora
+  kafka_keystore_password  password dei keystore. CAMBIALA
+  kafka_sasl_users         utenti e password SASL. CAMBIALE
+  kafka_java_install_method  "zulu" come da guida, "apt" se cdn.azul.com non e'
+                           raggiungibile: e' sempre Java 17, cambia solo da
+                           dove arriva
+  kafka_heap_opts          4G presuppone 8 GB di RAM per nodo. Su macchine da
+                           4 GB va abbassato
+
+
+  IL DISCO DATI SI MONTA A MANO
+
+Come per i database e per i brick Gluster. Il playbook crea /opt/kafka/data, la
+assegna a kafka e dice se sotto c'e' un disco dedicato o la partizione di
+sistema. Con kafka_require_dedicated_disk=true si ferma se il disco non c'e',
+invece di riempire la root con i segmenti dei topic.
+
+
+  L'ORDINE DEGLI HOST NELL'INVENTARIO CONTA
+
+Il primo host di [kafka_servers] e' node.id 1, il secondo 2, il terzo 3, e quel
+numero finisce dentro /opt/kafka/data/meta.properties, dove non cambia piu'.
+Riordinando le righe a cluster gia' formattato, server.properties direbbe una
+cosa e il disco un'altra: il quorum rifiuterebbe i voti con "Voter key for VOTE
+... didn't match the receiver's replica key". Il ruolo se ne accorge prima e si
+ferma dicendo quale nodo non torna.
+
+Il primo host fa anche da CA: li' nascono ca.key, ca.crt, il truststore e i tre
+keystore. La chiave della CA non viene copiata da nessun'altra parte, nemmeno
+sul controller Ansible. Ogni nodo riceve il PROPRIO keystore piu' il truststore
+comune, che passano da una directory temporanea sul controller, cancellata a
+fine ruolo anche se qualcosa fallisce.
+
+
+  CHE COSA SUCCEDE RILANCIANDO IL PLAYBOOK
+
+Niente, se non e' cambiato niente. Il ruolo e' idempotente:
+
+  - i log si formattano UNA VOLTA SOLA. Se /opt/kafka/data/meta.properties
+    esiste, il nodo non viene toccato: riformattare cancella i dati
+  - il cluster id viene riletto da meta.properties, cosi' un nodo aggiunto dopo
+    entra nel cluster esistente invece di crearne uno suo
+  - i certificati non vengono rigenerati se ci sono gia'
+  - i nodi si riavviano solo se distribuzione, server.properties, unit systemd
+    o certificati sono cambiati DAVVERO, e si riavviano UNO ALLA VOLTA,
+    aspettando che ciascuno rientri nel quorum prima di passare al successivo
+
+L'ultimo punto e' il motivo per cui il riavvio non e' affidato a un handler: gli
+handler girano su tutti gli host insieme a fine play, e tre broker riavviati
+nello stesso istante sono un cluster fermo. Con min.insync.replicas=2 i
+produttori prenderebbero errore.
+
+Per rigenerare i certificati (DISTRUTTIVO, i client con il vecchio truststore
+smettono di collegarsi):
+
+  ansible-playbook playbooks/50-kafka.yml -e kafka_force_regenerate_certs=true
+
+
+  VERIFICA E PROVA
+
+A fine installazione il playbook controlla, in sola lettura, che il quorum abbia
+eletto un leader e che rispondano tutti e tre i broker. Se qualcosa non torna,
+il messaggio di errore contiene gia' l'ordine di diagnosi: identita' del nodo
+(meta.properties), poi coerenza del JAAS, poi i log.
+
+La prova che SCRIVE — crea un topic, ci manda un messaggio e lo rilegge — non
+gira di default:
+
+  ansible-playbook playbooks/50-kafka.yml -e kafka_smoke_test=true
+
+I comandi a mano vogliono tutti --command-config: con Kafka 4.x non esiste piu'
+--zookeeper e senza quel file i client si collegherebbero in PLAINTEXT,
+prendendo un timeout che non spiega niente.
+
+  BS="172.29.83.74:9092,172.29.83.75:9092,172.29.83.76:9092"
+  CC="--command-config /opt/kafka/client.properties"
+
+  /opt/kafka/bin/kafka-metadata-quorum.sh --bootstrap-server $BS $CC describe --status
+  /opt/kafka/bin/kafka-topics.sh --bootstrap-server $BS $CC --list
+  /opt/kafka/bin/kafka-acls.sh --bootstrap-server $BS $CC --list
+
+Un client esterno ha bisogno del solo truststore, o della sola CA
+(/opt/kafka/config/security/ca.crt) da importare nel proprio. La chiave privata
+sta nel keystore del broker e non serve a chi si collega.
+
+
+  ACL
+
+Con lo StandardAuthorizer attivo, appclient non puo' fare NIENTE finche' non gli
+si concede qualcosa: admin e' super user ed e' esente. Le regole stanno in
+kafka_acls, e sono quelle della guida.
+
+kafka_manage_acls e' false di default, perche' quelle regole parlano del topic
+di prova test-3node: si mette a true dopo aver messo li' i topic veri. Un
+consumer ha bisogno anche di Read/Write su __consumer_offsets, altrimenti si
+collega e poi fallisce al commit degli offset con un errore che sembra un altro
+problema.
+
+Gli utenti SASL/PLAIN esistono SOLO dentro il JAAS di server.properties: non si
+creano con kafka-configs.sh. Aggiungerne uno vuol dire modificare
+kafka_sasl_users e rilanciare il playbook, che riscrive la configurazione e
+riavvia i nodi a rotazione. Il ruolo scrive anche un client.properties per
+ciascun utente (/opt/kafka/client-appclient.properties), utile per provare le
+ACL con l'utente giusto.
+
+
+  QUATTRO DIFFERENZE VOLUTE RISPETTO ALLA GUIDA CARTACEA
+
+1. kafka-storage.sh format SENZA --standalone.
+   La guida lo usa su tutti e tre i nodi, ed e' l'origine di uno degli errori
+   che la guida stessa elenca fra i problemi noti: "Voter key for VOTE ...
+   didn't match the receiver's replica key". --standalone (KIP-853) inizializza
+   un quorum DINAMICO con UN SOLO votante; dato a tre nodi, ognuno si formatta
+   come unico votante del proprio quorum e all'avvio i tre non si riconoscono.
+   Qui il quorum e' statico, scritto in controller.quorum.voters, e la
+   formattazione giusta e' quella senza flag.
+
+2. systemd: After=network-online.target, non network.target.
+   La unit della guida ha Wants=network-online.target ma ordina su
+   network.target. Wants senza After non impone nessun ordine: il broker si
+   mette in ascolto su un indirizzo preciso e, se parte prima che
+   quell'indirizzo esista, muore con "Cannot assign requested address".
+
+3. server.properties con permessi 0640 kafka:kafka.
+   Contiene in chiaro le password del JAAS e dei keystore. Con i permessi di
+   default lo leggerebbe qualsiasi utente della macchina. Per lo stesso motivo
+   i task che scrivono file con password dentro hanno no_log: ansible.cfg ha
+   [diff] always = True, e senza quello il contenuto finirebbe in chiaro dentro
+   ansible.log. Per vederlo durante una diagnosi: -e kafka_hide_secrets=false
+
+4. SAN dei certificati con IP E hostname, non solo IP.
+   Non cambia niente finche' ssl.endpoint.identification.algorithm resta vuoto
+   (verifica del hostname disattivata, come nella guida), e permette di
+   attivarla in seguito senza rigenerare i certificati: basta metterci "https".
+
+In piu', la "regola d'oro del JAAS" della guida — dentro ogni blocco
+*.plain.sasl.jaas.config la password di password= deve essere identica a quella
+di user_<nome>= — qui non e' piu' una cosa da ricordare: le due vengono dalla
+stessa variabile e non possono divergere.

@@ -1,0 +1,216 @@
+---
+# Valori di ripiego: group_vars/all.yml ha precedenza maggiore.
+#
+# Qui c'e' l'elenco COMPLETO, cosi' il ruolo funziona anche se qualcuno lo
+# riusa in un altro repository senza portarsi dietro group_vars. Le variabili
+# che si toccano davvero — versioni, password, utenti, ACL — stanno commentate
+# una per una in group_vars/all.yml, che e' il posto da cui si lavora.
+
+kafka_cluster_group: "kafka_servers"
+
+# --- Identita' del nodo -----------------------------------------------------
+# Queste due sono ANCHE in group_vars/all.yml, e li' devono restare: un ruolo
+# legge i defaults solo del nodo su cui sta girando, mentre server.properties
+# ha bisogno di node.id e IP di TUTTI e tre i nodi per scrivere
+# controller.quorum.voters. Le variabili di inventario (group_vars) sono le
+# uniche visibili da hostvars[altro_nodo].
+#
+# node.id segue l'ORDINE DEL GRUPPO nell'inventario: primo host = 1. Non
+# riordinare le righe a cluster formattato, perche' l'id finisce dentro
+# data/meta.properties e non cambia piu'. Per fissarlo a mano, dichiaralo
+# nell'inventario:  pu-kfk-stg-01 ansible_host=... kafka_node_id=1
+kafka_node_id: >-
+  {{ ((groups[kafka_cluster_group] | default([])).index(inventory_hostname) + 1)
+     if inventory_hostname in (groups[kafka_cluster_group] | default([]))
+     else 0 }}
+kafka_node_ip: "{{ ansible_host | default(ansible_default_ipv4.address | default(inventory_hostname)) }}"
+
+# --- Versioni ---------------------------------------------------------------
+
+kafka_version: "4.3.0"
+kafka_scala_version: "2.13"
+kafka_tarball: "kafka_{{ kafka_scala_version }}-{{ kafka_version }}.tgz"
+
+# downloads.apache.org tiene SOLO le release correnti: appena esce una patch
+# nuova la vecchia sparisce e resta solo su archive.apache.org. Per questo gli
+# URL sono due e vengono provati in ordine.
+kafka_download_urls:
+  - "https://downloads.apache.org/kafka/{{ kafka_version }}/{{ kafka_tarball }}"
+  - "https://archive.apache.org/dist/kafka/{{ kafka_version }}/{{ kafka_tarball }}"
+
+# Rete chiusa: metti qui il percorso del tarball sul CONTROLLER e non viene
+# scaricato niente da internet.
+kafka_tarball_local_path: ""
+
+# --- Utente, percorsi -------------------------------------------------------
+
+kafka_user: "kafka"
+kafka_group: "kafka"
+kafka_home: "/opt/kafka"
+kafka_bin_dir: "{{ kafka_home }}/bin"
+kafka_config_dir: "{{ kafka_home }}/config"
+kafka_security_dir: "{{ kafka_config_dir }}/security"
+kafka_data_dir: "{{ kafka_home }}/data"
+kafka_service_log_dir: "{{ kafka_home }}/logs"
+kafka_server_properties: "{{ kafka_config_dir }}/server.properties"
+kafka_client_properties: "{{ kafka_home }}/client.properties"
+
+# Il disco dati si monta A MANO su kafka_data_dir. Con true il ruolo si ferma
+# se li' sotto non c'e' un mountpoint, invece di riempire la partizione di
+# sistema senza dire niente.
+kafka_require_dedicated_disk: false
+
+# --- Porte e listener -------------------------------------------------------
+
+kafka_broker_port: 9092
+kafka_controller_port: 9093
+kafka_broker_listener: "BROKER"
+kafka_controller_listener: "CONTROLLER"
+
+# --- Java -------------------------------------------------------------------
+# Kafka 4.x NON parte con Java 11: servono almeno le 17.
+#
+#   zulu = tarball Azul Zulu 17, come da guida
+#   apt  = openjdk-17-jre-headless dai repository Ubuntu, per reti chiuse o
+#          quando cdn.azul.com non e' raggiungibile
+kafka_java_install_method: "zulu"
+kafka_zulu_release: "zulu17.52.17-ca-jdk17.0.12-linux_x64"
+kafka_zulu_url: "https://cdn.azul.com/zulu/bin/{{ kafka_zulu_release }}.tar.gz"
+kafka_zulu_local_tarball: ""
+kafka_jvm_base_dir: "/usr/lib/jvm"
+kafka_apt_java_package: "openjdk-17-jre-headless"
+kafka_apt_java_home: "/usr/lib/jvm/java-17-openjdk-amd64"
+kafka_java_home: >-
+  {{ (kafka_jvm_base_dir ~ '/' ~ kafka_zulu_release)
+     if kafka_java_install_method == 'zulu'
+     else kafka_apt_java_home }}
+
+# update-alternatives: rende questa JVM la java di sistema. Kafka non ne ha
+# bisogno (JAVA_HOME e' scritto nel service systemd), serve solo a chi lancia i
+# comandi a mano.
+kafka_java_set_default: true
+
+# Heap della JVM. 4G presuppone gli 8 GB della guida: su un nodo da 4 GB
+# ABBASSALO (-Xmx2G -Xms2G), altrimenti il kernel uccide il broker.
+# Vuoto = default di Kafka, 1 GB.
+kafka_heap_opts: "-Xmx4G -Xms4G"
+
+kafka_utility_packages:
+  - openssl
+  - curl
+  - tar
+
+# --- Certificati TLS --------------------------------------------------------
+# La CA e tutti i keystore nascono su UN nodo solo (il primo del gruppo), poi
+# ogni nodo riceve il PROPRIO keystore e il truststore comune. ca.key non si
+# muove mai da li'.
+kafka_ca_node: "{{ groups[kafka_cluster_group][0] }}"
+kafka_ca_subject: "/CN=Kafka-Security-CA"
+kafka_cert_validity_days: 3650
+kafka_cert_key_size: 4096
+kafka_keystore_key_size: 2048
+kafka_keystore_type: "JKS"
+kafka_truststore_file: "kafka.truststore.jks"
+kafka_keystore_file: "kafka-{{ kafka_node_ip }}.keystore.jks"
+
+kafka_keystore_password: "RASUNICOcoll.2026"
+kafka_key_password: "{{ kafka_keystore_password }}"
+kafka_truststore_password: "{{ kafka_keystore_password }}"
+
+# requested: il broker CHIEDE il certificato al client ma non lo pretende.
+# L'autenticazione vera la fa SASL. Con "required" i client senza certificato
+# smettono di connettersi.
+kafka_ssl_client_auth: "requested"
+
+# Vuoto = verifica del hostname DISATTIVATA, come nella guida. I certificati
+# generati qui hanno pero' sia l'IP sia il nome nel SAN, quindi si puo' anche
+# mettere "https" e attivarla: cambia il valore qui e nei client.
+kafka_ssl_endpoint_identification_algorithm: ""
+
+# Rigenera CA, truststore e keystore anche se esistono gia'. DISTRUTTIVO: i
+# client con il vecchio truststore smettono di collegarsi.
+kafka_force_regenerate_certs: false
+
+# --- SASL / PLAIN -----------------------------------------------------------
+# Gli utenti PLAIN esistono SOLO qui: con SASL/PLAIN non si creano con
+# kafka-configs.sh. Aggiungerne uno significa modificare questa mappa e
+# riavviare i nodi (il ruolo fa il riavvio a rotazione da solo).
+kafka_sasl_users:
+  admin: "RASUNICOcoll.2026"
+  appclient: "RASUNICOcoll.2026"
+
+# Utente con cui i nodi parlano fra loro (inter-broker e controller).
+kafka_inter_broker_user: "admin"
+
+# Utenti accettati sul listener CONTROLLER: solo quelli di servizio, i client
+# applicativi non hanno niente da fare sul quorum.
+kafka_controller_users:
+  - "admin"
+
+kafka_super_users:
+  - "User:admin"
+
+kafka_authorizer_class: "org.apache.kafka.metadata.authorizer.StandardAuthorizer"
+
+# Utente usato dai comandi di gestione (client.properties sui nodi).
+kafka_admin_user: "admin"
+
+# --- server.properties ------------------------------------------------------
+
+kafka_num_network_threads: 8
+kafka_num_io_threads: 16
+kafka_socket_send_buffer_bytes: 102400
+kafka_socket_receive_buffer_bytes: 102400
+kafka_socket_request_max_bytes: 104857600
+
+kafka_num_partitions: 3
+kafka_default_replication_factor: 3
+kafka_offsets_topic_replication_factor: 3
+kafka_transaction_state_log_replication_factor: 3
+kafka_transaction_state_log_min_isr: 2
+kafka_min_insync_replicas: 2
+kafka_log_retention_hours: 168
+kafka_log_segment_bytes: 1073741824
+kafka_log_retention_check_interval_ms: 300000
+kafka_auto_create_topics_enable: false
+kafka_delete_topic_enable: true
+
+# Righe aggiuntive da appendere a server.properties, per quello che qui non ha
+# una variabile propria:  kafka_extra_server_properties: { "log.cleaner.threads": 2 }
+kafka_extra_server_properties: {}
+
+# --- Cluster ID -------------------------------------------------------------
+# Vuoto = il ruolo lo genera al primo run e lo conserva, cosi' i run successivi
+# non riformattano niente. Valorizzalo solo per riprodurre un cluster esistente.
+kafka_cluster_id: ""
+kafka_cluster_id_file: "{{ kafka_config_dir }}/cluster.id"
+kafka_format_extra_args: ""
+
+# --- Avvio e attese ---------------------------------------------------------
+
+kafka_service_name: "kafka"
+kafka_restart_sec: 10
+kafka_limit_nofile: 100000
+kafka_timeout_stop_sec: 300
+
+kafka_quorum_retries: 30
+kafka_quorum_delay: 10
+kafka_port_wait_timeout: 300
+
+# --- ACL --------------------------------------------------------------------
+# Spento di default: le ACL della guida parlano del topic di prova test-3node.
+# Si accende DOPO aver messo in kafka_acls i topic veri.
+kafka_manage_acls: false
+kafka_acls: []
+
+# --- Verifica ---------------------------------------------------------------
+# La verifica in sola lettura (versioni API, stato del quorum) gira sempre.
+# Questa crea un topic e ci scrive dentro: si accende a mano.
+#   ansible-playbook playbooks/50-kafka.yml -e kafka_smoke_test=true
+kafka_smoke_test: false
+kafka_smoke_topic: "test-3node"
+
+# ansible.cfg ha [diff] always = True: senza questo, il diff di
+# server.properties finirebbe in ansible.log con dentro le password del JAAS.
+# Metterlo a false serve solo per capire perche' un task fallisce.
+kafka_hide_secrets: true

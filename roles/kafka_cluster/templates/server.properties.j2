@@ -1,0 +1,98 @@
+{{ ansible_managed | comment }}
+# Ruolo kafka_cluster. Le modifiche fatte a mano qui vengono sovrascritte al
+# prossimo run: si cambia group_vars/all.yml.
+#
+# Il file e' identico sui tre nodi tranne node.id, listeners,
+# advertised.listeners e il percorso del keystore.
+
+# ============ KRaft ============
+process.roles=broker,controller
+node.id={{ kafka_node_id }}
+{% set voters = [] %}
+{% for h in groups[kafka_cluster_group] %}
+{%   set _ = voters.append(hostvars[h].kafka_node_id | int | string ~ '@' ~ hostvars[h].kafka_node_ip ~ ':' ~ kafka_controller_port) %}
+{% endfor %}
+# L'elenco dei votanti e' lo stesso su tutti e tre i nodi e l'ordine non conta,
+# ma ogni coppia id@indirizzo deve corrispondere al node.id scritto in
+# data/meta.properties di quel nodo: se non combaciano il quorum si rifiuta con
+# "Voter key for VOTE ... didn't match the receiver's replica key".
+controller.quorum.voters={{ voters | join(',') }}
+
+# ============ Listener ============
+listeners={{ kafka_broker_listener }}://{{ kafka_node_ip }}:{{ kafka_broker_port }},{{ kafka_controller_listener }}://{{ kafka_node_ip }}:{{ kafka_controller_port }}
+advertised.listeners={{ kafka_broker_listener }}://{{ kafka_node_ip }}:{{ kafka_broker_port }}
+inter.broker.listener.name={{ kafka_broker_listener }}
+controller.listener.names={{ kafka_controller_listener }}
+listener.security.protocol.map={{ kafka_broker_listener }}:SASL_SSL,{{ kafka_controller_listener }}:SASL_SSL
+
+num.network.threads={{ kafka_num_network_threads }}
+num.io.threads={{ kafka_num_io_threads }}
+socket.send.buffer.bytes={{ kafka_socket_send_buffer_bytes }}
+socket.receive.buffer.bytes={{ kafka_socket_receive_buffer_bytes }}
+socket.request.max.bytes={{ kafka_socket_request_max_bytes }}
+
+# ============ Log ============
+log.dirs={{ kafka_data_dir }}
+num.partitions={{ kafka_num_partitions }}
+default.replication.factor={{ kafka_default_replication_factor }}
+offsets.topic.replication.factor={{ kafka_offsets_topic_replication_factor }}
+transaction.state.log.replication.factor={{ kafka_transaction_state_log_replication_factor }}
+transaction.state.log.min.isr={{ kafka_transaction_state_log_min_isr }}
+min.insync.replicas={{ kafka_min_insync_replicas }}
+log.retention.hours={{ kafka_log_retention_hours }}
+log.segment.bytes={{ kafka_log_segment_bytes }}
+log.retention.check.interval.ms={{ kafka_log_retention_check_interval_ms }}
+auto.create.topics.enable={{ kafka_auto_create_topics_enable | bool | lower }}
+delete.topic.enable={{ kafka_delete_topic_enable | bool | lower }}
+
+# ============ TLS ============
+ssl.keystore.location={{ kafka_security_dir }}/{{ kafka_keystore_file }}
+ssl.keystore.password={{ kafka_keystore_password }}
+ssl.key.password={{ kafka_key_password }}
+ssl.keystore.type={{ kafka_keystore_type }}
+ssl.truststore.location={{ kafka_security_dir }}/{{ kafka_truststore_file }}
+ssl.truststore.password={{ kafka_truststore_password }}
+ssl.truststore.type={{ kafka_keystore_type }}
+ssl.client.auth={{ kafka_ssl_client_auth }}
+# Vuoto = verifica del hostname disattivata. I certificati generati dal ruolo
+# hanno IP e nome nel SAN, quindi qui si puo' mettere "https" e attivarla,
+# ricordandosi di cambiarla anche nei client.
+ssl.endpoint.identification.algorithm={{ kafka_ssl_endpoint_identification_algorithm }}
+
+# ============ SASL / PLAIN ============
+sasl.enabled.mechanisms=PLAIN
+sasl.mechanism.inter.broker.protocol=PLAIN
+sasl.mechanism.controller.protocol=PLAIN
+
+# Regola d'oro del JAAS: la password del campo password= (quella che il nodo
+# PRESENTA quando esce) e la password user_<nome>= (quella che il nodo ACCETTA
+# quando entra) devono essere identiche, altrimenti i nodi si rifiutano a
+# vicenda con "SaslAuthenticationException: Invalid username or password".
+# Qui vengono dalla stessa variabile (kafka_sasl_users), quindi non possono
+# divergere.
+listener.name.{{ kafka_broker_listener | lower }}.plain.sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required \
+  username="{{ kafka_inter_broker_user }}" password="{{ kafka_sasl_users[kafka_inter_broker_user] }}" \
+{% for utente, password in kafka_sasl_users.items() %}
+  user_{{ utente }}="{{ password }}"{{ ';' if loop.last else ' \\' }}
+{% endfor %}
+
+# Sul listener del quorum entrano solo gli utenti di servizio: i client
+# applicativi non hanno niente da fare sulla 9093.
+listener.name.{{ kafka_controller_listener | lower }}.plain.sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required \
+  username="{{ kafka_inter_broker_user }}" password="{{ kafka_sasl_users[kafka_inter_broker_user] }}" \
+{% for utente in kafka_controller_users %}
+  user_{{ utente }}="{{ kafka_sasl_users[utente] }}"{{ ';' if loop.last else ' \\' }}
+{% endfor %}
+
+# ============ ACL ============
+# Con l'authorizer attivo nessuno ha permessi finche' non glieli si danno.
+# I super user sono esenti.
+authorizer.class.name={{ kafka_authorizer_class }}
+super.users={{ kafka_super_users | join(';') }}
+{% if kafka_extra_server_properties %}
+
+# ============ Aggiunte da kafka_extra_server_properties ============
+{% for chiave, valore in kafka_extra_server_properties.items() %}
+{{ chiave }}={{ valore }}
+{% endfor %}
+{% endif %}

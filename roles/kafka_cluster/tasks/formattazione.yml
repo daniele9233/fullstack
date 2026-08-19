@@ -1,0 +1,200 @@
+---
+# Cluster ID e formattazione delle directory dei log.
+#
+# Si fa UNA VOLTA SOLA, prima del primo avvio, e riformattare CANCELLA I DATI.
+# Per questo tutto qui dentro e' condizionato all'assenza di
+# data/meta.properties: se il nodo e' gia' formattato non viene toccato.
+#
+# --- PERCHE' NON C'E' --standalone -----------------------------------------
+#
+# La guida formatta i tre nodi con:
+#   kafka-storage.sh format --standalone -t <id> -c server.properties
+#
+# --standalone (KIP-853) serve a inizializzare un quorum DINAMICO con un solo
+# votante, cioe' il caso "un controller adesso, gli altri li aggiungo dopo".
+# Dato a tutti e tre i nodi, ognuno si formatta come unico votante del proprio
+# quorum: all'avvio i tre non si riconoscono e il log si riempie di
+#   Voter key for VOTE ... didn't match the receiver's replica key
+# che e' esattamente l'errore elencato fra i problemi noti della guida.
+#
+# Qui il quorum e' STATICO: i tre votanti sono scritti in
+# controller.quorum.voters dentro server.properties, e la formattazione
+# corretta e' quella senza flag, che legge i votanti dal file di configurazione.
+#
+# Per un quorum dinamico servirebbero --initial-controllers con le directory.id
+# dei tre nodi: e' un'altra procedura, non un'opzione da aggiungere a questa.
+
+- name: Verifica se il nodo e' gia' formattato
+  stat:
+    path: "{{ kafka_data_dir }}/meta.properties"
+  register: kafka_meta
+
+- name: Leggi meta.properties dei nodi gia' formattati
+  slurp:
+    src: "{{ kafka_data_dir }}/meta.properties"
+  register: kafka_meta_contenuto
+  when: kafka_meta.stat.exists
+
+- name: Estrai cluster id e node.id dai nodi gia' formattati
+  set_fact:
+    kafka_meta_cluster_id: >-
+      {{ (kafka_meta_contenuto.content | b64decode
+          | regex_search('cluster.id=(.+)', '\1') | default([''], true) | first | trim)
+         if kafka_meta.stat.exists else '' }}
+    kafka_meta_node_id: >-
+      {{ (kafka_meta_contenuto.content | b64decode
+          | regex_search('node.id=(.+)', '\1') | default([''], true) | first | trim)
+         if kafka_meta.stat.exists else '' }}
+
+# Se i nodi sono stati formattati con id diversi non si vedranno mai: all'avvio
+# ognuno rifiuta gli altri con "CLUSTER_ID mismatch" o "Invalid cluster id".
+# Da qui e' un messaggio; a cluster avviato sono log da leggere su tre macchine.
+- name: Verifica che i nodi gia' formattati abbiano lo stesso cluster id
+  assert:
+    that:
+      - kafka_cluster_id_esistenti | length <= 1
+    fail_msg: >-
+      I nodi gia' formattati non hanno lo stesso cluster id:
+      {{ kafka_cluster_id_esistenti | join(', ') }}.
+      Un cluster KRaft e' definito dal suo id: nodi formattati con id diversi
+      non formeranno mai un quorum. Va riformattato chi ha l'id sbagliato, e la
+      riformattazione CANCELLA i dati di quel nodo:
+      systemctl stop kafka && rm -rf {{ kafka_data_dir }}/* e poi rilancia.
+  vars:
+    kafka_cluster_id_esistenti: >-
+      {{ ansible_play_hosts
+         | map('extract', hostvars, 'kafka_meta_cluster_id')
+         | select('string') | reject('equalto', '') | unique | list }}
+  run_once: true
+
+# node.id sta sia in server.properties sia in meta.properties, e i due devono
+# combaciare. Divergono quando si cambia l'ordine degli host nell'inventario a
+# cluster gia' formattato: il file di configurazione dice una cosa, il disco
+# un'altra, e il quorum rifiuta il voto.
+- name: Verifica che il node.id sul disco sia quello atteso
+  assert:
+    that:
+      - kafka_meta_node_id | int == kafka_node_id | int
+    fail_msg: >-
+      {{ inventory_hostname }}: in {{ kafka_data_dir }}/meta.properties c'e'
+      node.id={{ kafka_meta_node_id }}, ma la configurazione ne prevede
+      {{ kafka_node_id }}. Succede quando si cambia l'ORDINE degli host nel
+      gruppo [{{ kafka_cluster_group }}] dopo la formattazione: l'id sul disco
+      non cambia piu'. Rimetti gli host nell'ordine di prima, oppure dichiara
+      kafka_node_id={{ kafka_meta_node_id }} nell'inventario per questo host.
+  when: kafka_meta.stat.exists
+
+# --- Cluster ID -------------------------------------------------------------
+# Tre casi, in ordine di precedenza:
+#   1. un nodo e' gia' formattato -> si riusa il suo id, cosi' i nodi aggiunti
+#      dopo entrano nello stesso cluster
+#   2. kafka_cluster_id valorizzato in group_vars -> si usa quello
+#   3. niente -> si genera e si conserva in un file, perche' il run successivo
+#      trovi lo stesso id anche se la formattazione si e' fermata a meta'
+
+- name: Verifica se un cluster id e' gia' stato generato
+  stat:
+    path: "{{ kafka_cluster_id_file }}"
+  register: kafka_id_file
+  delegate_to: "{{ kafka_ca_node }}"
+  run_once: true
+
+- name: Rileggi il cluster id gia' generato
+  slurp:
+    src: "{{ kafka_cluster_id_file }}"
+  register: kafka_id_file_contenuto
+  delegate_to: "{{ kafka_ca_node }}"
+  run_once: true
+  when: kafka_id_file.stat.exists
+
+- name: Genera un cluster id nuovo
+  command: "{{ kafka_bin_dir }}/kafka-storage.sh random-uuid"
+  register: kafka_id_generato
+  # random-uuid stampa e basta, non tocca niente: la modifica vera e' il file
+  # in cui l'id viene conservato, qualche task piu' sotto.
+  changed_when: false
+  delegate_to: "{{ kafka_ca_node }}"
+  run_once: true
+  environment:
+    JAVA_HOME: "{{ kafka_java_home }}"
+  when:
+    - kafka_cluster_id | length == 0
+    - not kafka_id_file.stat.exists
+    - kafka_cluster_id_dal_disco | length == 0
+  vars:
+    kafka_cluster_id_dal_disco: >-
+      {{ ansible_play_hosts
+         | map('extract', hostvars, 'kafka_meta_cluster_id')
+         | select('string') | reject('equalto', '') | unique | list | first | default('') }}
+
+- name: Fissa il cluster id da usare
+  set_fact:
+    kafka_cluster_id_effettivo: >-
+      {{ kafka_cluster_id_dal_disco
+         if kafka_cluster_id_dal_disco | length > 0
+         else (kafka_cluster_id
+               if kafka_cluster_id | length > 0
+               else (kafka_id_file_contenuto.content | default('') | b64decode | trim
+                     if kafka_id_file.stat.exists
+                     else kafka_id_generato.stdout | default('') | trim)) }}
+  vars:
+    kafka_cluster_id_dal_disco: >-
+      {{ ansible_play_hosts
+         | map('extract', hostvars, 'kafka_meta_cluster_id')
+         | select('string') | reject('equalto', '') | unique | list | first | default('') }}
+
+- name: Verifica di avere un cluster id
+  assert:
+    that:
+      - kafka_cluster_id_effettivo | length > 0
+    fail_msg: >-
+      Nessun cluster id disponibile: la generazione con
+      "kafka-storage.sh random-uuid" non ha prodotto niente su
+      {{ kafka_ca_node }}. Di solito significa che la JVM non parte: prova a
+      mano {{ kafka_java_home }}/bin/java -version su quel nodo.
+  run_once: true
+
+- name: Conserva il cluster id sul nodo CA
+  copy:
+    content: "{{ kafka_cluster_id_effettivo }}\n"
+    dest: "{{ kafka_cluster_id_file }}"
+    owner: "{{ kafka_user }}"
+    group: "{{ kafka_group }}"
+    mode: "0644"
+  delegate_to: "{{ kafka_ca_node }}"
+  run_once: true
+
+- name: Mostra il cluster id in uso
+  debug:
+    msg: >-
+      {{ inventory_hostname }}: cluster id {{ kafka_cluster_id_effettivo }}
+      ({{ 'letto da meta.properties, cluster gia esistente'
+          if kafka_meta_cluster_id | length > 0
+          else ('dichiarato in group_vars' if kafka_cluster_id | length > 0
+                else 'generato adesso') }}),
+      node.id {{ kafka_node_id }},
+      {{ 'da formattare' if not kafka_meta.stat.exists else 'gia formattato, non viene toccato' }}
+
+# --- Formattazione ----------------------------------------------------------
+
+- name: Formatta le directory dei log
+  command:
+    argv: >-
+      {{ [kafka_bin_dir ~ '/kafka-storage.sh', 'format',
+          '-t', kafka_cluster_id_effettivo,
+          '-c', kafka_server_properties,
+          '--ignore-formatted']
+         + (kafka_format_extra_args | split if kafka_format_extra_args | length > 0 else []) }}
+  become: yes
+  become_user: "{{ kafka_user }}"
+  environment:
+    JAVA_HOME: "{{ kafka_java_home }}"
+  register: kafka_format
+  # --ignore-formatted rende il comando innocuo su un nodo gia' formattato: in
+  # quel caso esce a zero senza toccare niente. La condizione resta lo stesso,
+  # perche' un task che non gira e' piu' chiaro di uno che gira e non fa nulla.
+  when: not kafka_meta.stat.exists
+
+- name: Mostra l'esito della formattazione
+  debug:
+    msg: "{{ inventory_hostname }}: {{ kafka_format.stdout | default('gia formattato, non toccato') | trim }}"

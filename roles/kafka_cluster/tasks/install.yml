@@ -1,0 +1,178 @@
+---
+# Utente, directory e distribuzione di Kafka.
+#
+# Layout, come nella guida: /opt/kafka e' insieme la home dell'utente kafka, la
+# directory di installazione (bin/, libs/, config/) e la radice dei dati
+# (data/) e dei log di servizio (logs/).
+
+- name: "Crea il gruppo {{ kafka_group }}"
+  group:
+    name: "{{ kafka_group }}"
+    system: yes
+
+# create_home: no invece di useradd -m. Con -m useradd copia dentro /opt/kafka
+# il contenuto di /etc/skel (.bashrc, .profile): sono file inutili in una
+# directory di installazione. La home resta /opt/kafka, che e' la directory
+# creata subito dopo.
+- name: "Crea l'utente {{ kafka_user }}"
+  user:
+    name: "{{ kafka_user }}"
+    group: "{{ kafka_group }}"
+    home: "{{ kafka_home }}"
+    create_home: no
+    shell: /usr/sbin/nologin
+    system: yes
+
+- name: Crea le directory di Kafka
+  file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ kafka_user }}"
+    group: "{{ kafka_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ kafka_home }}", mode: "0755" }
+    - { path: "{{ kafka_config_dir }}", mode: "0750" }
+    # 0700: qui dentro ci sono ca.key e i keystore.
+    - { path: "{{ kafka_security_dir }}", mode: "0700" }
+    - { path: "{{ kafka_data_dir }}", mode: "0750" }
+    - { path: "{{ kafka_service_log_dir }}", mode: "0755" }
+  loop_control:
+    label: "{{ item.path }}"
+
+# --- Distribuzione ----------------------------------------------------------
+# Il marcatore della versione installata sta dentro kafka_home e lo scrive solo
+# questo ruolo. Serve per due cose opposte: non riestrarre il tarball a ogni
+# run, e riestrarlo davvero quando kafka_version cambia.
+#
+# Senza, l'unico controllo possibile sarebbe "esiste bin/kafka-server-start.sh",
+# che c'e' anche dopo un aggiornamento di versione: alzare kafka_version non
+# aggiornerebbe niente e il playbook direbbe che e' tutto a posto.
+
+- name: Leggi la versione di Kafka gia' installata
+  slurp:
+    src: "{{ kafka_home }}/.ansible_kafka_version"
+  register: kafka_installed_version_raw
+  failed_when: false
+  changed_when: false
+
+- name: Determina se la distribuzione va installata o aggiornata
+  set_fact:
+    kafka_installed_version: "{{ (kafka_installed_version_raw.content | default('') | b64decode | trim) }}"
+    kafka_dist_da_installare: >-
+      {{ (kafka_installed_version_raw.content is not defined)
+         or ((kafka_installed_version_raw.content | b64decode | trim) != kafka_version) }}
+
+- name: Mostra lo stato della distribuzione
+  debug:
+    msg: >-
+      {{ inventory_hostname }}:
+      {{ 'Kafka ' ~ kafka_version ~ ' da installare'
+         if kafka_dist_da_installare | bool
+         else 'Kafka ' ~ kafka_installed_version ~ ' gia in ' ~ kafka_home }}
+      {{ '(aggiornamento da ' ~ kafka_installed_version ~ ')'
+         if (kafka_dist_da_installare | bool and kafka_installed_version | length > 0) else '' }}
+
+- name: Installazione della distribuzione Kafka
+  when: kafka_dist_da_installare | bool
+  block:
+    - name: Copia il tarball di Kafka dal controller
+      copy:
+        src: "{{ kafka_tarball_local_path }}"
+        dest: "/tmp/{{ kafka_tarball }}"
+        mode: "0644"
+      when: kafka_tarball_local_path | length > 0
+
+    # downloads.apache.org tiene solo le release correnti, archive.apache.org
+    # tiene tutte le altre: si prova il primo, e se non c'e' si passa al
+    # secondo. Un 404 sul primo URL e' normale su una versione non recentissima
+    # e non deve fermare il playbook.
+    - name: Scarica Kafka
+      when: kafka_tarball_local_path | length == 0
+      block:
+        - name: "Scarica {{ kafka_download_urls[0] }}"
+          get_url:
+            url: "{{ kafka_download_urls[0] }}"
+            dest: "/tmp/{{ kafka_tarball }}"
+            mode: "0644"
+            timeout: 60
+      rescue:
+        - name: "Riprova da {{ kafka_download_urls[1] }}"
+          get_url:
+            url: "{{ kafka_download_urls[1] }}"
+            dest: "/tmp/{{ kafka_tarball }}"
+            mode: "0644"
+            timeout: 60
+          register: kafka_dl_archivio
+          failed_when: false
+
+        - name: Spiega perche' il download di Kafka e' fallito
+          fail:
+            msg: >-
+              Kafka {{ kafka_version }} non e' stato scaricato ne' da
+              downloads.apache.org ne' da archive.apache.org.
+              Controlla che kafka_version esista davvero
+              (https://kafka.apache.org/downloads) e che kafka_scala_version
+              sia quella pubblicata per quella release.
+              Su rete chiusa, copia il tarball sul controller e valorizza
+              kafka_tarball_local_path in group_vars/all.yml.
+          when: kafka_dl_archivio is failed or kafka_dl_archivio is skipped
+
+    # Su un AGGIORNAMENTO le libs vecchie vanno tolte prima: scompattare sopra
+    # lascia in libs/ i jar di entrambe le versioni, e kafka-run-class.sh mette
+    # nel classpath tutto quello che trova. Il broker parte con due copie delle
+    # stesse classi e fallisce in modi che non somigliano a un problema di
+    # versione (NoSuchMethodError, LinkageError).
+    #
+    # Solo libs/: bin/ e config/ vengono sovrascritti dall'archivio, e
+    # config/server.properties lo riscrive comunque il ruolo.
+    - name: Rimuovi le librerie della versione precedente
+      file:
+        path: "{{ kafka_home }}/libs"
+        state: absent
+      when: kafka_installed_version | length > 0
+
+    - name: "Scompatta Kafka in {{ kafka_home }}"
+      unarchive:
+        src: "/tmp/{{ kafka_tarball }}"
+        dest: "{{ kafka_home }}"
+        remote_src: yes
+        owner: "{{ kafka_user }}"
+        group: "{{ kafka_group }}"
+        # --strip-components=1 toglie la cartella kafka_2.13-x.y.z/ dentro
+        # l'archivio: senza, l'installazione finirebbe in /opt/kafka/kafka_2.13-x.y.z.
+        extra_opts:
+          - --strip-components=1
+      # Il riavvio non lo fa un handler: gli handler girano su tutti gli host
+      # insieme a fine play, e tre broker che si riavviano nello stesso istante
+      # sono un cluster senza quorum. Chi ha bisogno di riavviare viene raccolto
+      # in servizio.yml e riavviato UNO ALLA VOLTA.
+      register: kafka_dist_estratta
+
+    - name: Registra la versione installata
+      copy:
+        content: "{{ kafka_version }}\n"
+        dest: "{{ kafka_home }}/.ansible_kafka_version"
+        owner: "{{ kafka_user }}"
+        group: "{{ kafka_group }}"
+        mode: "0644"
+
+    - name: Rimuovi il tarball di Kafka
+      file:
+        path: "/tmp/{{ kafka_tarball }}"
+        state: absent
+
+# L'archivio porta con se' config/server.properties, log4j2.yaml e compagni
+# come utente che ha creato il tar: questo li riporta a kafka:kafka.
+# Non tocca data/, che puo' essere grande e che appartiene gia' all'utente
+# giusto (la formattazione gira come kafka).
+- name: Allinea il proprietario dei file di Kafka
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ kafka_user }}"
+    group: "{{ kafka_group }}"
+    recurse: yes
+  loop:
+    - "{{ kafka_bin_dir }}"
+    - "{{ kafka_home }}/libs"

@@ -1,0 +1,74 @@
+---
+# Cluster Kafka 4.x in modalita' KRaft su tre nodi, con TLS e SASL/PLAIN.
+# Automatizza la guida "Cluster Kafka KRaft a 3 Nodi con Sicurezza SASL_SSL".
+#
+# Ogni nodo fa sia da broker sia da controller (process.roles=broker,controller):
+# tre controller, maggioranza due, il cluster sopravvive alla perdita di un nodo.
+#
+# Il ruolo e' IDEMPOTENTE. Rilanciarlo su un cluster attivo:
+#   - non riformatta niente (i log si formattano una volta sola, il cluster id
+#     viene riletto da data/meta.properties)
+#   - non rigenera i certificati se ci sono gia'
+#   - riavvia UN NODO ALLA VOLTA, e solo se qualcosa e' cambiato davvero,
+#     aspettando che ciascuno rientri nel quorum prima di toccare il successivo
+#
+# Il disco dati si monta A MANO su kafka_data_dir: qui ci si limita a creare la
+# directory e a darla all'utente kafka.
+#
+# --- DIFFERENZE VOLUTE RISPETTO ALLA GUIDA ---------------------------------
+#
+# 1. kafka-storage.sh format SENZA --standalone.
+#    La guida lo usa su tutti e tre i nodi, ed e' l'origine dell'errore che
+#    la guida stessa elenca fra i problemi noti:
+#      Voter key for VOTE ... didn't match the receiver's replica key
+#    --standalone (KIP-853) formatta un quorum DINAMICO con un solo votante:
+#    dato a tutti e tre i nodi, produce tre cluster da un votante ciascuno che
+#    poi si rifiutano a vicenda. Con controller.quorum.voters scritto in
+#    server.properties il quorum e' STATICO e la formattazione corretta e'
+#    semplicemente:  kafka-storage.sh format -t <id> -c server.properties
+#
+# 2. systemd: After=network-online.target, non network.target.
+#    La unit della guida ha Wants=network-online.target ma ordina su
+#    network.target: Wants senza After non impone nessun ordine, e il broker
+#    puo' partire prima che l'indirizzo su cui deve mettersi in ascolto esista.
+#
+# 3. server.properties con permessi 0640 kafka:kafka.
+#    Contiene le password del JAAS in chiaro: di default sarebbe leggibile da
+#    chiunque abbia un account sulla macchina.
+#
+# 4. SAN dei certificati con IP *e* hostname, non solo IP.
+#    Non cambia niente finche' la verifica del hostname resta disattivata, e
+#    permette di attivarla senza rigenerare i certificati.
+#
+# 5. Le password stanno in un posto solo (kafka_sasl_users). Nel JAAS il campo
+#    password= e i campi user_<nome>= sono generati dalla stessa variabile,
+#    quindi la "regola d'oro" della guida (devono essere identiche) non e' piu'
+#    una cosa da ricordare.
+
+- name: Controlli preliminari
+  import_tasks: preflight.yml
+
+- name: Java 17
+  import_tasks: java.yml
+
+- name: Utente, directory e installazione di Kafka
+  import_tasks: install.yml
+
+- name: Certificati TLS
+  import_tasks: certificati.yml
+
+- name: Configurazione (server.properties, client.properties, unit systemd)
+  import_tasks: configurazione.yml
+
+- name: Cluster ID e formattazione dei log
+  import_tasks: formattazione.yml
+
+- name: Avvio del cluster
+  import_tasks: servizio.yml
+
+- name: Verifica
+  import_tasks: verifica.yml
+
+- name: ACL
+  import_tasks: acl.yml
+  when: kafka_manage_acls | bool

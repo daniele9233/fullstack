@@ -43,3 +43,8 @@
 - import_playbook: playbooks/20-rancher.yml
 - import_playbook: playbooks/30-database.yml
 - import_playbook: playbooks/40-storage.yml
+
+# Kafka non c'entra con Rancher e non dipende da nessuno dei play sopra: sta in
+# fondo perche' e' l'ultimo arrivato, non perche' debba aspettare qualcosa. Con
+# il gruppo [kafka_servers] vuoto il play viene saltato senza rumore.
+- import_playbook: playbooks/50-kafka.yml

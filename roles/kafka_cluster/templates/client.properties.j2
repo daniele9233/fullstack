@@ -1,0 +1,24 @@
+{{ ansible_managed | comment }}
+# Configurazione per i comandi di gestione (kafka-topics.sh, kafka-acls.sh,
+# kafka-metadata-quorum.sh ...) e per i client.
+#
+# Con Kafka 4.x TUTTI gli script di gestione vogliono --bootstrap-server e
+# --command-config con questo file: --zookeeper non esiste piu'.
+#
+#   BS="{{ kafka_bootstrap_servers }}"
+#   {{ kafka_bin_dir }}/kafka-topics.sh --bootstrap-server $BS \
+#     --command-config {{ kafka_client_properties }} --list
+#
+# Il client ha bisogno del solo TRUSTSTORE: la chiave privata sta nel keystore
+# del broker e non serve a chi si collega.
+#
+# Utente: {{ kafka_client_user }}{{ ' (super user, puo fare tutto e non passa dalle ACL)' if ('User:' ~ kafka_client_user) in kafka_super_users else ' (client applicativo: senza ACL non puo fare niente, vedi kafka_acls)' }}
+
+security.protocol=SASL_SSL
+sasl.mechanism=PLAIN
+ssl.truststore.location={{ kafka_security_dir }}/{{ kafka_truststore_file }}
+ssl.truststore.password={{ kafka_truststore_password }}
+ssl.truststore.type={{ kafka_keystore_type }}
+ssl.endpoint.identification.algorithm={{ kafka_ssl_endpoint_identification_algorithm }}
+sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required \
+  username="{{ kafka_client_user }}" password="{{ kafka_sasl_users[kafka_client_user] }}";

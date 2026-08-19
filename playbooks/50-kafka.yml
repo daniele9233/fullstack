@@ -1,0 +1,69 @@
+---
+# KAFKA: cluster KRaft a 3 nodi con SASL_SSL sul gruppo [kafka_servers].
+#
+# Eseguibile da solo:
+#   ansible-playbook playbooks/50-kafka.yml
+#
+# Niente create_disk: il disco dati si monta a mano su kafka_data_dir, come per
+# i database e per i nodi Gluster. Il ruolo crea la directory, la assegna
+# all'utente kafka e dice in chiaro se sotto c'e' un disco dedicato o la
+# partizione di sistema. Con kafka_require_dedicated_disk=true si ferma se il
+# disco non c'e'.
+#
+# Niente update_hosts_file: il ruolo si scrive da solo le voci di /etc/hosts per
+# i propri nodi, e il dominio Rancher qui non serve a nessuno. Per la stessa
+# ragione questo playbook non ha bisogno che gli altri gruppi siano popolati.
+#
+# VARIANTI UTILI
+#
+#   # crea un topic di prova, ci scrive e rilegge (non lo fa di default)
+#   ansible-playbook playbooks/50-kafka.yml -e kafka_smoke_test=true
+#
+#   # JDK dai repository Ubuntu invece del tarball Zulu, per reti chiuse
+#   ansible-playbook playbooks/50-kafka.yml -e kafka_java_install_method=apt
+#
+#   # rigenera CA, truststore e keystore. DISTRUTTIVO: i client che hanno il
+#   # vecchio truststore smettono di collegarsi finche' non ricevono il nuovo
+#   ansible-playbook playbooks/50-kafka.yml -e kafka_force_regenerate_certs=true
+#
+#   # mostra i diff dei file di configurazione, password comprese: solo per
+#   # capire perche' un task fallisce, e non su un terminale registrato
+#   ansible-playbook playbooks/50-kafka.yml -e kafka_hide_secrets=false
+
+- name: Prepara i nodi Kafka
+  hosts: kafka_servers
+  become: yes
+  gather_facts: no
+  roles:
+    - role: host_prep
+
+
+# Il ruolo e' idempotente: rilanciarlo non riformatta niente e non cancella
+# dati. Riavvia i nodi solo se distribuzione, configurazione o certificati sono
+# cambiati davvero, e lo fa UNO ALLA VOLTA aspettando che ciascuno rientri nel
+# quorum: tre broker riavviati insieme sono un cluster fermo.
+#
+# gather_facts: yes serve per la memoria (controllo sull'heap della JVM) e per
+# l'architettura (percorso del JDK di sistema).
+- name: Cluster Kafka {{ kafka_version }} in KRaft con SASL_SSL
+  hosts: kafka_servers
+  become: yes
+  gather_facts: yes
+  roles:
+    - kafka_cluster
+  post_tasks:
+    - name: Riepilogo cluster Kafka
+      debug:
+        msg:
+          - "Nodi: {{ groups['kafka_servers'] | join(', ') }}"
+          - "node.id: {{ groups['kafka_servers'] | map('extract', hostvars, 'kafka_node_id') | join(', ') }}"
+          - "Bootstrap per i client: {{ kafka_bootstrap_servers }}"
+          - "Quorum controller sulla {{ kafka_controller_port }}, broker sulla {{ kafka_broker_port }}, entrambi SASL_SSL"
+          - "Cluster ID: {{ kafka_cluster_id_effettivo }}"
+          - "Dati in {{ kafka_data_dir }} (disco montato a mano)"
+          - "Utenti SASL: {{ kafka_sasl_users.keys() | join(', ') }} — super user: {{ kafka_super_users | join(', ') }}"
+          - "ACL: {{ 'gestite dal playbook (' ~ (kafka_acls | length) ~ ' regole)' if kafka_manage_acls | bool else 'NON gestite: kafka_manage_acls e false, appclient non ha permessi' }}"
+          - "Comandi di gestione: {{ kafka_bin_dir }}/kafka-topics.sh --bootstrap-server {{ kafka_bootstrap_servers }} --command-config {{ kafka_client_properties }} --list"
+          - "Stato quorum: {{ kafka_bin_dir }}/kafka-metadata-quorum.sh --bootstrap-server {{ kafka_bootstrap_servers }} --command-config {{ kafka_client_properties }} describe --status"
+          - "Per un client esterno serve la CA: {{ kafka_security_dir }}/ca.crt da importare nel proprio truststore"
+      run_once: true

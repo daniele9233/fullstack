@@ -1,0 +1,193 @@
+---
+# Verifica. La parte in sola lettura gira sempre; quella che scrive (topic di
+# prova, produce/consume) solo con -e kafka_smoke_test=true.
+#
+# Tutti i comandi passano da client.properties: senza --command-config si
+# collegherebbero in PLAINTEXT e prenderebbero un timeout che non spiega niente.
+
+- name: Attendi che il quorum abbia eletto un leader
+  command:
+    argv:
+      - "{{ kafka_bin_dir }}/kafka-metadata-quorum.sh"
+      - --bootstrap-server
+      - "{{ kafka_bootstrap_servers }}"
+      - --command-config
+      - "{{ kafka_client_properties }}"
+      - describe
+      - --status
+  environment:
+    JAVA_HOME: "{{ kafka_java_home }}"
+  register: kafka_quorum
+  until: kafka_quorum.rc == 0 and 'LeaderId' in (kafka_quorum.stdout | default(''))
+  retries: "{{ kafka_quorum_retries }}"
+  delay: "{{ kafka_quorum_delay }}"
+  changed_when: false
+  failed_when: false
+  run_once: true
+
+# I tre errori che si vedono davvero al primo avvio, con la diagnosi gia'
+# pronta: sono gli stessi della tabella "Risoluzione problemi" della guida.
+- name: Verifica che il cluster sia in piedi
+  assert:
+    that:
+      - kafka_quorum.rc == 0
+      - "'LeaderId' in (kafka_quorum.stdout | default(''))"
+    fail_msg: >-
+      Il quorum non risponde dopo
+      {{ kafka_quorum_retries | int * kafka_quorum_delay | int }} secondi.
+      In ordine di probabilita':
+      (1) autenticazione — SaslAuthenticationException nei log significa che nel
+      JAAS password= e user_<nome>= non coincidono; qui vengono dalla stessa
+      variabile, quindi il sospetto e' un server.properties modificato a mano;
+      (2) rete — la {{ kafka_controller_port }} non passa fra i nodi: da ogni
+      nodo, verso gli altri due,
+      nc -vz <ip> {{ kafka_controller_port }}
+      (indirizzi: {{ groups[kafka_cluster_group] | map('extract', hostvars, 'kafka_node_ip') | join(', ') }});
+      (3) identita' — node.id di meta.properties non combacia con
+      controller.quorum.voters ("Voter key ... didn't match").
+      Ordine di diagnosi:
+      cat {{ kafka_data_dir }}/meta.properties, poi
+      tail -n 100 {{ kafka_service_log_dir }}/server.log | grep -iE "auth|raft".
+      Ultimo output:
+      {{ (kafka_quorum.stdout | default('')) | trim }}
+      {{ (kafka_quorum.stderr | default('')) | trim }}
+  run_once: true
+
+- name: Mostra lo stato del quorum
+  debug:
+    msg: "{{ kafka_quorum.stdout_lines | default([]) }}"
+  run_once: true
+
+- name: Interroga le versioni API dei tre broker
+  command:
+    argv:
+      - "{{ kafka_bin_dir }}/kafka-broker-api-versions.sh"
+      - --bootstrap-server
+      - "{{ kafka_bootstrap_servers }}"
+      - --command-config
+      - "{{ kafka_client_properties }}"
+  environment:
+    JAVA_HOME: "{{ kafka_java_home }}"
+  register: kafka_api_versions
+  changed_when: false
+  failed_when: false
+  run_once: true
+
+# Una riga per broker che risponde: se ne compaiono meno di tre, uno dei nodi
+# non e' raggiungibile dai client anche se il quorum sta in piedi (tipicamente
+# advertised.listeners sbagliato, o la 9092 chiusa).
+- name: Conta i broker che rispondono
+  set_fact:
+    kafka_broker_che_rispondono: >-
+      {{ kafka_api_versions.stdout_lines | default([])
+         | select('search', 'id: [0-9]+')
+         | list | length }}
+  run_once: true
+
+- name: Verifica che rispondano tutti i broker
+  assert:
+    that:
+      - kafka_broker_che_rispondono | int == groups[kafka_cluster_group] | length
+    fail_msg: >-
+      Rispondono {{ kafka_broker_che_rispondono }} broker su
+      {{ groups[kafka_cluster_group] | length }} sulla porta
+      {{ kafka_broker_port }}. Il quorum e' in piedi, quindi non e' un problema
+      di autenticazione fra i nodi: guarda advertised.listeners del nodo che
+      manca (deve contenere un indirizzo raggiungibile DAI CLIENT, non
+      127.0.0.1) e che la {{ kafka_broker_port }} sia aperta.
+    success_msg: >-
+      {{ kafka_broker_che_rispondono }} broker su
+      {{ groups[kafka_cluster_group] | length }} rispondono su
+      {{ kafka_bootstrap_servers }}
+  run_once: true
+
+# --- Prova di scrittura (facoltativa) ---------------------------------------
+
+- name: Prova di funzionamento con un topic vero
+  when: kafka_smoke_test | bool
+  run_once: true
+  environment:
+    JAVA_HOME: "{{ kafka_java_home }}"
+  block:
+    - name: "Crea il topic di prova {{ kafka_smoke_topic }}"
+      command:
+        argv:
+          - "{{ kafka_bin_dir }}/kafka-topics.sh"
+          - --bootstrap-server
+          - "{{ kafka_bootstrap_servers }}"
+          - --command-config
+          - "{{ kafka_client_properties }}"
+          - --create
+          - --if-not-exists
+          - --topic
+          - "{{ kafka_smoke_topic }}"
+          - --partitions
+          - "{{ kafka_num_partitions }}"
+          - --replication-factor
+          - "{{ kafka_default_replication_factor }}"
+      register: kafka_smoke_create
+      changed_when: "'Created topic' in (kafka_smoke_create.stdout | default(''))"
+
+    - name: "Descrivi {{ kafka_smoke_topic }}"
+      command:
+        argv:
+          - "{{ kafka_bin_dir }}/kafka-topics.sh"
+          - --bootstrap-server
+          - "{{ kafka_bootstrap_servers }}"
+          - --command-config
+          - "{{ kafka_client_properties }}"
+          - --describe
+          - --topic
+          - "{{ kafka_smoke_topic }}"
+      register: kafka_smoke_describe
+      changed_when: false
+
+    # Replicas e Isr devono coincidere: se Isr ha meno repliche di Replicas, una
+    # copia e' indietro o il suo broker e' fermo. Con min.insync.replicas={{ kafka_min_insync_replicas }}
+    # il topic accetta scritture finche' restano {{ kafka_min_insync_replicas }} repliche allineate.
+    - name: Mostra partizioni e repliche
+      debug:
+        msg: "{{ kafka_smoke_describe.stdout_lines | default([]) }}"
+
+    - name: Scrivi un messaggio di prova
+      shell: >-
+        set -o pipefail;
+        echo "prova-ansible-$(date -Is)" |
+        {{ kafka_bin_dir }}/kafka-console-producer.sh
+        --bootstrap-server {{ kafka_bootstrap_servers | quote }}
+        --producer.config {{ kafka_client_properties | quote }}
+        --topic {{ kafka_smoke_topic | quote }}
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Rileggi i messaggi del topic di prova
+      command:
+        argv:
+          - "{{ kafka_bin_dir }}/kafka-console-consumer.sh"
+          - --bootstrap-server
+          - "{{ kafka_bootstrap_servers }}"
+          - --consumer.config
+          - "{{ kafka_client_properties }}"
+          - --topic
+          - "{{ kafka_smoke_topic }}"
+          - --from-beginning
+          - --max-messages
+          - "1"
+          - --timeout-ms
+          - "30000"
+      register: kafka_smoke_consume
+      changed_when: false
+
+    - name: Esito della prova
+      assert:
+        that:
+          - kafka_smoke_consume.stdout | default('') | length > 0
+        fail_msg: >-
+          Il messaggio e' stato scritto su {{ kafka_smoke_topic }} ma non e'
+          stato riletto. Con l'authorizer attivo il sospetto e' un permesso
+          mancante sul consumer group, ma qui il client e'
+          {{ kafka_admin_user }}, che e' super user: guarda i log del broker.
+        success_msg: >-
+          Scrittura e rilettura su {{ kafka_smoke_topic }} riuscite:
+          {{ kafka_smoke_consume.stdout | trim }}

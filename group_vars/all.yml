@@ -592,3 +592,239 @@ prometheus_memory_limits: "4Gi"
 # Timeout configurations
 helm_timeout: "15m"
 pod_wait_timeout: "5m"  # Ridotto per evitare blocchi lunghi
+
+
+# ===========================================================================
+# CLUSTER KAFKA KRAFT A 3 NODI, SASL_SSL  ->  gruppo [kafka_servers]
+# ===========================================================================
+# Automatizza la guida "Cluster Kafka KRaft a 3 Nodi con Sicurezza SASL_SSL".
+# Tre nodi, ognuno broker E controller: maggioranza due, il cluster sopravvive
+# alla perdita di un nodo. Il numero di nodi deve restare DISPARI.
+#
+#   ansible-playbook -i inventory.ini playbooks/50-kafka.yml
+#
+# Il disco dati NON viene toccato: si monta a mano su kafka_data_dir. Il ruolo
+# crea la directory, la assegna all'utente kafka e dice se sotto c'e' un disco
+# dedicato o la partizione di sistema.
+#
+# node.id e indirizzi NON si scrivono qui: derivano dall'inventario. Il primo
+# host del gruppo [kafka_servers] e' node.id 1, il secondo 2, il terzo 3, e
+# ansible_host di ciascuno finisce in listeners, advertised.listeners e
+# controller.quorum.voters. Per questo l'ORDINE DELLE RIGHE NELL'INVENTARIO NON
+# VA CAMBIATO a cluster formattato: node.id resta scritto in
+# data/meta.properties e il ruolo si ferma segnalando la divergenza.
+
+# Gruppo di inventario che ospita il cluster.
+kafka_cluster_group: "kafka_servers"
+
+# node.id e indirizzo di ciascun nodo. STANNO QUI, e non nei defaults del
+# ruolo, perche' server.properties ha bisogno di leggerli anche per GLI ALTRI
+# due nodi (controller.quorum.voters li elenca tutti e tre): un ruolo vede i
+# propri defaults solo sull'host su cui sta girando, mentre le variabili di
+# inventario sono visibili da hostvars[altro_nodo].
+#
+# Per fissare un node.id a mano, dichiaralo nell'inventario sull'host:
+#   pu-kfk-stg-01 ansible_host=172.29.83.74 ... kafka_node_id=1
+kafka_node_id: >-
+  {{ ((groups[kafka_cluster_group] | default([])).index(inventory_hostname) + 1)
+     if inventory_hostname in (groups[kafka_cluster_group] | default([]))
+     else 0 }}
+kafka_node_ip: "{{ ansible_host | default(ansible_default_ipv4.address | default(inventory_hostname)) }}"
+
+# ---------------------------------------------------------------------------
+# VERSIONI
+# ---------------------------------------------------------------------------
+# La guida indica Kafka 4.3.0. VERIFICA su https://kafka.apache.org/downloads
+# che la versione esista ancora e che sia l'ultima patch della serie: il ruolo
+# prova prima downloads.apache.org (solo release correnti) e poi
+# archive.apache.org (tutte le altre), e se non la trova da nessuna parte si
+# ferma dicendolo.
+kafka_version: "4.3.0"
+kafka_scala_version: "2.13"
+
+# Rete chiusa: percorso del tarball SUL CONTROLLER, e non viene scaricato
+# niente da internet. Es. "{{ repo_dir }}/files/kafka_2.13-4.3.0.tgz"
+kafka_tarball_local_path: ""
+
+# ---------------------------------------------------------------------------
+# JAVA
+# ---------------------------------------------------------------------------
+# Kafka 4.x NON parte con Java 11: servono almeno le 17. La JVM viene imposta a
+# Kafka con JAVA_HOME nel service systemd, quindi un aggiornamento di sistema
+# che cambia la java di default non puo' far ripartire il broker con quella
+# sbagliata.
+#
+#   zulu = tarball Azul Zulu, come nella guida
+#   apt  = openjdk-17 dai repository Ubuntu. Stessa versione di Java, nessun
+#          download da internet: e' la scelta giusta se cdn.azul.com non e'
+#          raggiungibile o se la build Zulu indicata non esiste piu'.
+kafka_java_install_method: "zulu"
+kafka_zulu_release: "zulu17.52.17-ca-jdk17.0.12-linux_x64"
+# Rete chiusa: percorso del tarball della Zulu sul controller.
+kafka_zulu_local_tarball: ""
+
+# Heap della JVM. 4G presuppone gli 8 GB richiesti dalla guida: su un nodo da
+# 4 GB ABBASSALO a "-Xmx2G -Xms2G". Non e' tutta la memoria che serve al
+# broker: il resto del lavoro lo fa il page cache del kernel, quindi lasciane
+# libera almeno altrettanta. Vuoto = default di Kafka, 1 GB.
+kafka_heap_opts: "-Xmx4G -Xms4G"
+
+# ---------------------------------------------------------------------------
+# PERCORSI E PORTE
+# ---------------------------------------------------------------------------
+kafka_home: "/opt/kafka"
+# Qui va montato il disco dedicato, a mano. Sotto ci finiscono i segmenti dei
+# topic: e' la directory che cresce.
+kafka_data_dir: "/opt/kafka/data"
+
+# true = il ruolo si ferma se kafka_data_dir non e' un mountpoint, invece di
+# riempire la partizione di sistema. Da mettere a true in produzione.
+kafka_require_dedicated_disk: false
+
+kafka_broker_port: 9092
+kafka_controller_port: 9093
+
+# ---------------------------------------------------------------------------
+# SICUREZZA: TLS
+# ---------------------------------------------------------------------------
+# Una CA interna firma i certificati dei tre nodi. Ogni nodo ha il proprio
+# keystore (chiave privata + certificato), tutti condividono il truststore (la
+# sola CA). CA e keystore nascono sul PRIMO nodo del gruppo e ca.key non si
+# muove da li'.
+#
+# CAMBIA QUESTE PASSWORD prima della produzione, e valuta ansible-vault:
+# finiscono in chiaro dentro server.properties sui nodi (0640 kafka:kafka) e,
+# se restano qui, dentro il repository.
+kafka_keystore_password: "RASUNICOcoll.2026"
+
+# Vuoto = verifica del hostname DISATTIVATA, come nella guida. I certificati
+# generati dal ruolo hanno pero' sia l'IP sia il nome nel SAN: per attivarla
+# basta mettere "https" qui e riavviare, senza rigenerare niente. Va cambiata
+# anche nei client.
+kafka_ssl_endpoint_identification_algorithm: ""
+
+# Durata dei certificati, dieci anni come nella guida. Segnati la scadenza:
+# quando i certificati scadono i nodi smettono di parlarsi e l'errore
+# (SSLHandshakeException) non dice che sono scaduti.
+kafka_cert_validity_days: 3650
+
+# ---------------------------------------------------------------------------
+# SICUREZZA: SASL/PLAIN
+# ---------------------------------------------------------------------------
+# Gli utenti PLAIN esistono SOLO qui dentro: con questo meccanismo NON si
+# creano con kafka-configs.sh. Aggiungerne o cambiarne uno significa modificare
+# questa mappa e rilanciare il playbook, che riscrive server.properties e
+# riavvia i nodi UNO ALLA VOLTA.
+#
+# admin      = gestione, super user, esente dalle ACL
+# appclient  = client applicativo, senza ACL non puo' fare niente
+#
+# CAMBIA QUESTE PASSWORD.
+kafka_sasl_users:
+  admin: "RASUNICOcoll.2026"
+  appclient: "RASUNICOcoll.2026"
+
+# Utente con cui i nodi parlano fra loro e con cui girano i comandi di
+# gestione. Deve essere uno di quelli sopra.
+kafka_admin_user: "admin"
+kafka_inter_broker_user: "admin"
+
+# Chi puo' presentarsi sul listener del quorum (porta 9093). Solo utenti di
+# servizio: i client applicativi non hanno niente da fare li'.
+kafka_controller_users:
+  - "admin"
+
+# Esenti dalle ACL. Un super user puo' fare tutto su tutto.
+kafka_super_users:
+  - "User:admin"
+
+# ---------------------------------------------------------------------------
+# ACL
+# ---------------------------------------------------------------------------
+# Con l'authorizer attivo, appclient non ha ALCUN permesso: ogni accesso va
+# concesso. Le regole qui sotto sono quelle della guida e parlano del topic di
+# prova test-3node.
+#
+# SPENTO di default: si accende dopo aver sostituito test-3node con i topic
+# veri, altrimenti si applicano permessi su un topic che non serve a nessuno.
+kafka_manage_acls: false
+kafka_acls:
+  # Tutte le operazioni sul topic (produttori)
+  - principal: "User:appclient"
+    operations: ["All"]
+    topic: "test-3node"
+    group: "*"
+
+  # Lettura con un consumer group specifico
+  - principal: "User:appclient"
+    operations: ["Read"]
+    topic: "test-3node"
+    group: "test-group"
+
+  # Topic interni: senza questi il client si autentica, vede il topic e poi
+  # fallisce al primo commit degli offset con un errore che sembra un altro
+  # problema.
+  - principal: "User:appclient"
+    operations: ["Read", "Write"]
+    topic: "__consumer_offsets"
+    group: "*"
+
+  - principal: "User:appclient"
+    operations: ["Create", "Describe"]
+    cluster: true
+
+  - principal: "User:appclient"
+    operations: ["Describe"]
+    topic: "*"
+
+# ---------------------------------------------------------------------------
+# VERIFICA
+# ---------------------------------------------------------------------------
+# La verifica in sola lettura (stato del quorum, versioni API dei tre broker)
+# gira sempre a fine installazione. Questa invece CREA UN TOPIC e ci scrive
+# dentro, quindi si accende a mano:
+#   ansible-playbook playbooks/50-kafka.yml -e kafka_smoke_test=true
+kafka_smoke_test: false
+kafka_smoke_topic: "test-3node"
+
+# ---------------------------------------------------------------------------
+# PARAMETRI DEL BROKER
+# ---------------------------------------------------------------------------
+# Valori della guida. replication factor 3 e min.insync.replicas 2 sono la
+# coppia che rende il cluster resistente alla perdita di UN nodo: con tre
+# copie e due richieste in sincrono, un nodo giu' non ferma le scritture.
+# Alzare min.insync.replicas a 3 significa fermarsi appena cade un nodo.
+kafka_num_partitions: 3
+kafka_default_replication_factor: 3
+kafka_offsets_topic_replication_factor: 3
+kafka_transaction_state_log_replication_factor: 3
+kafka_transaction_state_log_min_isr: 2
+kafka_min_insync_replicas: 2
+kafka_log_retention_hours: 168
+kafka_num_network_threads: 8
+kafka_num_io_threads: 16
+# false: i topic si creano a mano. Un topic creato al volo da un client nasce
+# con i default del broker e non con le repliche che gli servirebbero.
+kafka_auto_create_topics_enable: false
+kafka_delete_topic_enable: true
+
+# Righe aggiuntive per server.properties che qui non hanno una variabile
+# propria:  kafka_extra_server_properties: { "log.cleaner.threads": 2 }
+kafka_extra_server_properties: {}
+
+# ---------------------------------------------------------------------------
+# CLUSTER ID
+# ---------------------------------------------------------------------------
+# Vuoto = generato al primo run e conservato, cosi' i run successivi non
+# riformattano niente. Va valorizzato SOLO per far entrare nodi nuovi in un
+# cluster gia' esistente di cui si conosce l'id
+# (cat /opt/kafka/data/meta.properties su un nodo attivo).
+kafka_cluster_id: ""
+
+# ---------------------------------------------------------------------------
+# DIAGNOSI
+# ---------------------------------------------------------------------------
+# ansible.cfg ha [diff] always = True: senza questo il contenuto di
+# server.properties, password del JAAS comprese, finirebbe in chiaro dentro
+# ansible.log. Mettilo a false solo per capire perche' un task fallisce.
+kafka_hide_secrets: true

@@ -133,6 +133,19 @@ pf_porte_attese:
       servizio: "Corosync"
       atteso: [corosync]
 
+  # Kafka gira dentro una JVM: in ss il processo si chiama "java", non "kafka".
+  # Una 9092 tenuta da qualcos'altro (un altro broker, un tunnel) si vede qui e
+  # non al primo avvio.
+  kafka_servers:
+    - porta: "{{ kafka_broker_port | default(9092) }}"
+      proto: tcp
+      servizio: "Kafka, listener BROKER (client e inter-broker)"
+      atteso: [java]
+    - porta: "{{ kafka_controller_port | default(9093) }}"
+      proto: tcp
+      servizio: "Kafka, listener CONTROLLER (quorum KRaft)"
+      atteso: [java]
+
 # ---------------------------------------------------------------------------
 # CHI DEVE RAGGIUNGERE CHI
 # ---------------------------------------------------------------------------
@@ -148,6 +161,7 @@ pf_raggiungibilita:
   nginx_servers:   [nginx_servers, masters, ingress, db_servers]
   db_servers:      [db_servers]
   gluster_servers: [gluster_servers]
+  kafka_servers:   [kafka_servers]
 
 # ---------------------------------------------------------------------------
 # VIP CHE DEVONO ESSERE LIBERI

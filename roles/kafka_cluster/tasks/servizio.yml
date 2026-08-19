@@ -1,0 +1,112 @@
+---
+# Avvio del cluster.
+#
+# Due situazioni diverse, trattate in modo diverso:
+#
+#   PRIMO AVVIO — i nodi vanno avviati INSIEME. Il quorum si forma quando
+#   almeno due controller si trovano: avviandoli uno alla volta e aspettando
+#   che il primo sia "pronto" si aspetterebbe per sempre, perche' da solo non
+#   elegge nessun leader.
+#
+#   RIAVVIO PER MODIFICHE — UNO ALLA VOLTA, aspettando che ciascuno rientri nel
+#   quorum prima di toccare il successivo. Tre broker riavviati insieme sono un
+#   cluster fermo, e con min.insync.replicas=2 i produttori prendono errore.
+#
+# Per questo il riavvio non lo fa un handler: gli handler girano su tutti gli
+# host insieme a fine play.
+
+- name: Verifica se Kafka e' gia' in esecuzione
+  command: "systemctl is-active {{ kafka_service_name }}"
+  register: kafka_is_active
+  changed_when: false
+  failed_when: false
+
+- name: Determina che cosa fare su ogni nodo
+  set_fact:
+    kafka_gia_attivo: "{{ (kafka_is_active.stdout | trim) == 'active' }}"
+    # Che cosa rende superato il processo gia' in esecuzione: una distribuzione
+    # nuova, un server.properties diverso, un certificato sostituito, la unit
+    # cambiata. La unit e' gia' stata ricaricata con daemon_reload, ma il
+    # processo vivo tiene ancora la riga di comando vecchia.
+    kafka_da_riavviare: >-
+      {{ (kafka_dist_estratta.changed | default(false))
+         or (kafka_config_scritta.changed | default(false))
+         or (kafka_unit_scritta.changed | default(false))
+         or (kafka_keystore_copiato.changed | default(false))
+         or (kafka_truststore_copiato.changed | default(false)) }}
+
+# Niente daemon_reload qui: lo fa gia' configurazione.yml, e solo quando la
+# unit e' cambiata davvero.
+- name: Abilita l'avvio automatico di Kafka
+  systemd:
+    name: "{{ kafka_service_name }}"
+    enabled: yes
+
+# --- Primo avvio ------------------------------------------------------------
+
+- name: Avvia i nodi non ancora attivi
+  systemd:
+    name: "{{ kafka_service_name }}"
+    state: started
+  when: not kafka_gia_attivo | bool
+  register: kafka_avviato
+
+# Il listener del broker si apre quando il nodo e' entrato nel cluster, non
+# appena parte la JVM: se il quorum non si forma, questa attesa scade. Il
+# rescue trasforma il "Timeout when waiting for 172.29.83.74:9092" in qualcosa
+# che dice dove guardare.
+- name: Attesa del listener del broker
+  when: not kafka_gia_attivo | bool
+  block:
+    - name: Attendi che la porta del broker risponda
+      wait_for:
+        host: "{{ kafka_node_ip }}"
+        port: "{{ kafka_broker_port }}"
+        timeout: "{{ kafka_port_wait_timeout }}"
+  rescue:
+    - name: Raccogli lo stato del servizio
+      command: "journalctl -u {{ kafka_service_name }} -n 40 --no-pager"
+      register: kafka_journal
+      changed_when: false
+      failed_when: false
+
+    - name: Spiega perche' il broker non risponde
+      fail:
+        msg: >-
+          {{ inventory_hostname }}: la porta {{ kafka_broker_port }} non si e'
+          aperta entro {{ kafka_port_wait_timeout }} secondi. Il listener del
+          broker si apre solo quando il nodo entra nel cluster, quindi il
+          problema e' quasi sempre a monte: il quorum sulla
+          {{ kafka_controller_port }} non si forma perche' i nodi non si
+          raggiungono, oppure perche' si rifiutano a vicenda (JAAS o node.id).
+          Ultime righe del journal:
+          {{ kafka_journal.stdout | default('journal non leggibile') }}
+          Log completo del broker: {{ kafka_service_log_dir }}/server.log
+
+# --- Riavvio a rotazione ----------------------------------------------------
+
+- name: Componi l'elenco dei nodi da riavviare
+  set_fact:
+    kafka_nodi_da_riavviare: "{{ (kafka_nodi_da_riavviare | default([])) + [item] }}"
+  loop: "{{ ansible_play_hosts }}"
+  when:
+    # Chi e' stato avviato adesso ha gia' la configurazione nuova: riavviarlo
+    # sarebbe un fermo macchina per niente.
+    - hostvars[item].kafka_gia_attivo | default(false) | bool
+    - hostvars[item].kafka_da_riavviare | default(false) | bool
+  run_once: true
+
+- name: Mostra quali nodi verranno riavviati
+  debug:
+    msg: >-
+      {{ ('Riavvio a rotazione di: ' ~ (kafka_nodi_da_riavviare | default([]) | join(', ')))
+         if (kafka_nodi_da_riavviare | default([]) | length > 0)
+         else 'Nessun riavvio necessario: configurazione, certificati e distribuzione sono gia quelli attesi.' }}
+  run_once: true
+
+- name: Riavvia i nodi uno alla volta
+  include_tasks: riavvio_a_rotazione.yml
+  loop: "{{ kafka_nodi_da_riavviare | default([]) }}"
+  loop_control:
+    loop_var: kafka_nodo
+  run_once: true

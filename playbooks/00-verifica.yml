@@ -68,7 +68,7 @@
 # become: serve per leggere. Senza root "ss -p" non mostra chi tiene le porte,
 # "ufw status" non risponde e pvs non vede i volumi.
 - name: Verifica dei nodi
-  hosts: masters,new_managers,workers,ingress,nginx_servers,db_servers,gluster_servers
+  hosts: masters,new_managers,workers,ingress,nginx_servers,db_servers,gluster_servers,kafka_servers
   gather_facts: yes
   become: yes
   ignore_unreachable: yes

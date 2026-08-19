@@ -1,0 +1,177 @@
+---
+# Kafka 4.x richiede Java 17 o superiore. Con la 11 il broker non parte e
+# l'errore (UnsupportedClassVersionError) non dice quale JVM stia usando.
+#
+# La JVM per Kafka viene indicata esplicitamente con JAVA_HOME nel service
+# systemd: e' il punto in cui la scelta e' vincolante, e non dipende da quale
+# java sia quella di sistema ne' da un aggiornamento che la cambia sotto.
+
+- name: Installa i pacchetti di utilita'
+  apt:
+    name: "{{ kafka_utility_packages }}"
+    state: present
+    update_cache: yes
+    cache_valid_time: 3600
+  # Riprova SOLO se dpkg e' occupato da un altro processo (vedi apt_lock_retries
+  # in group_vars/all.yml). Qualsiasi altro errore ferma subito il task: senza
+  # questa condizione un pacchetto inesistente verrebbe ritentato 60 volte
+  # nascondendo il messaggio vero per cinque minuti.
+  register: apt_result
+  until: apt_result is succeeded or ('lock' not in apt_result.msg | default('') | lower)
+  retries: "{{ apt_lock_retries | default(60) }}"
+  delay: "{{ apt_lock_delay | default(5) }}"
+
+# --- Zulu 17 (metodo della guida) -------------------------------------------
+
+- name: Verifica se la Zulu 17 e' gia' installata
+  stat:
+    path: "{{ kafka_java_home }}/bin/java"
+  register: kafka_zulu_bin
+  when: kafka_java_install_method == 'zulu'
+
+- name: Installazione della Zulu 17
+  when:
+    - kafka_java_install_method == 'zulu'
+    - not (kafka_zulu_bin.stat.exists | default(false))
+  block:
+    - name: "Crea {{ kafka_jvm_base_dir }}"
+      file:
+        path: "{{ kafka_jvm_base_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Copia il tarball della Zulu dal controller
+      copy:
+        src: "{{ kafka_zulu_local_tarball }}"
+        dest: "/tmp/{{ kafka_zulu_release }}.tar.gz"
+        mode: "0644"
+      when: kafka_zulu_local_tarball | length > 0
+
+    # Se l'URL non risponde, il messaggio di get_url ("Request failed: 404") non
+    # spiega che il problema e' la stringa di versione: Azul toglie dal CDN le
+    # build superate e kafka_zulu_release va aggiornata. Il rescue lo dice.
+    - name: Scarica la Zulu 17
+      when: kafka_zulu_local_tarball | length == 0
+      block:
+        - name: "Scarica {{ kafka_zulu_url }}"
+          get_url:
+            url: "{{ kafka_zulu_url }}"
+            dest: "/tmp/{{ kafka_zulu_release }}.tar.gz"
+            mode: "0644"
+            timeout: 60
+      rescue:
+        - name: Spiega perche' il download della Zulu e' fallito
+          fail:
+            msg: >-
+              Download della Zulu fallito da {{ kafka_zulu_url }}.
+              Azul rimuove dal CDN le build superate: controlla su
+              https://www.azul.com/downloads/ quale release c'e' e aggiorna
+              kafka_zulu_release in group_vars/all.yml.
+              In alternativa usa il JDK dei repository Ubuntu, che qui basta:
+              -e kafka_java_install_method=apt
+              Su rete chiusa, copia il tarball sul controller e valorizza
+              kafka_zulu_local_tarball.
+
+    - name: "Estrai la Zulu in {{ kafka_jvm_base_dir }}"
+      unarchive:
+        src: "/tmp/{{ kafka_zulu_release }}.tar.gz"
+        dest: "{{ kafka_jvm_base_dir }}"
+        remote_src: yes
+        owner: root
+        group: root
+        creates: "{{ kafka_java_home }}/bin/java"
+
+    # Non servono permessi speciali per l'utente kafka: /usr/lib/jvm e'
+    # leggibile da tutti, ed e' quanto basta per eseguire la JVM.
+    - name: Rimuovi il tarball della Zulu
+      file:
+        path: "/tmp/{{ kafka_zulu_release }}.tar.gz"
+        state: absent
+
+# --- JDK dai repository Ubuntu (alternativa) --------------------------------
+
+- name: Installa OpenJDK 17 dai repository
+  apt:
+    name: "{{ kafka_apt_java_package }}"
+    state: present
+  when: kafka_java_install_method == 'apt'
+  # Riprova SOLO se dpkg e' occupato da un altro processo (vedi apt_lock_retries
+  # in group_vars/all.yml). Qualsiasi altro errore ferma subito il task: senza
+  # questa condizione un pacchetto inesistente verrebbe ritentato 60 volte
+  # nascondendo il messaggio vero per cinque minuti.
+  register: apt_result
+  until: apt_result is succeeded or ('lock' not in apt_result.msg | default('') | lower)
+  retries: "{{ apt_lock_retries | default(60) }}"
+  delay: "{{ apt_lock_delay | default(5) }}"
+
+# keytool genera CA, truststore e keystore, e il pacchetto -jre non ce l'ha.
+# Serve solo sul nodo che fa da CA, e solo con il metodo apt: il tarball Zulu
+# e' un JDK completo e keytool ce l'ha gia'.
+- name: Installa il JDK sul nodo CA (serve keytool)
+  apt:
+    name: "openjdk-17-jdk-headless"
+    state: present
+  when:
+    - kafka_java_install_method == 'apt'
+    - inventory_hostname == kafka_ca_node
+  register: apt_result
+  until: apt_result is succeeded or ('lock' not in apt_result.msg | default('') | lower)
+  retries: "{{ apt_lock_retries | default(60) }}"
+  delay: "{{ apt_lock_delay | default(5) }}"
+
+# --- java di sistema --------------------------------------------------------
+# Kafka non ne ha bisogno: nel service systemd c'e' JAVA_HOME. Serve a chi
+# lancia i comandi a mano (kafka-topics.sh, kafka-acls.sh) senza esportare
+# niente.
+
+- name: Leggi le alternative gia' registrate per java
+  command: update-alternatives --list java
+  register: kafka_alt_list
+  changed_when: false
+  failed_when: false
+  when: kafka_java_set_default | bool
+
+- name: Registra questa JVM in update-alternatives
+  command: >-
+    update-alternatives --install /usr/bin/java java
+    {{ kafka_java_home }}/bin/java 1
+  when:
+    - kafka_java_set_default | bool
+    - (kafka_java_home ~ '/bin/java') not in (kafka_alt_list.stdout_lines | default([]))
+
+- name: Leggi quale java e' quella di sistema
+  command: update-alternatives --query java
+  register: kafka_alt_query
+  changed_when: false
+  failed_when: false
+  when: kafka_java_set_default | bool
+
+- name: Rendi questa JVM la java di sistema
+  command: "update-alternatives --set java {{ kafka_java_home }}/bin/java"
+  when:
+    - kafka_java_set_default | bool
+    - "('Value: ' ~ kafka_java_home ~ '/bin/java') not in (kafka_alt_query.stdout | default(''))"
+
+# --- Verifica ---------------------------------------------------------------
+
+- name: Leggi la versione della JVM che usera' Kafka
+  command: "{{ kafka_java_home }}/bin/java -version"
+  register: kafka_java_version
+  changed_when: false
+
+# java -version scrive su stderr, non su stdout. La riga e' del tipo:
+#   openjdk version "17.0.12" 2024-07-16 LTS
+- name: Verifica che sia almeno la 17
+  assert:
+    that:
+      - kafka_java_major | int >= 17
+    fail_msg: >-
+      {{ inventory_hostname }}: in {{ kafka_java_home }} c'e' Java
+      {{ kafka_java_major }}. Kafka {{ kafka_version }} richiede almeno la 17:
+      con una JVM piu' vecchia il broker si ferma all'avvio con
+      UnsupportedClassVersionError.
+    success_msg: "{{ inventory_hostname }}: Java {{ kafka_java_major }} in {{ kafka_java_home }}"
+  vars:
+    kafka_java_major: >-
+      {{ kafka_java_version.stderr | regex_search('version .([0-9]+)', '\1')
+         | default(['0'], true) | first }}

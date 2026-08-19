@@ -1,0 +1,148 @@
+---
+# Quello che, se manca, fa fallire l'installazione a meta' con un messaggio che
+# parla d'altro. Meglio fermarsi qui.
+
+- name: Verifica di avere un numero dispari di nodi
+  assert:
+    that:
+      - groups[kafka_cluster_group] | default([]) | length > 0
+      - groups[kafka_cluster_group] | length % 2 == 1
+    fail_msg: >-
+      Il gruppo [{{ kafka_cluster_group }}] ha
+      {{ groups[kafka_cluster_group] | default([]) | length }} host.
+      Il quorum KRaft richiede un numero DISPARI di controller: tre e' la
+      configurazione della guida (maggioranza 2, sopravvive alla perdita di un
+      nodo). Con due nodi la maggioranza resta 2 e il cluster si ferma appena
+      ne cade uno.
+    success_msg: >-
+      {{ groups[kafka_cluster_group] | length }} nodi:
+      {{ groups[kafka_cluster_group] | join(', ') }}
+  run_once: true
+
+# Il controllo sopra conta gli host dell'inventario; questo verifica che siano
+# davvero RAGGIUNGIBILI.
+#
+# Serve perche' i tre nodi si formattano con lo STESSO cluster id e si cercano
+# a vicenda sulla 9093 per eleggere il leader. Se uno manca, gli altri due
+# partono ma restano senza il terzo votante, e la diagnosi si fa dai log invece
+# che da qui.
+- name: Verifica che tutti i nodi siano raggiungibili
+  assert:
+    that:
+      - ansible_play_hosts | length == ansible_play_hosts_all | length
+    fail_msg: >-
+      Nodi non raggiungibili:
+      {{ ansible_play_hosts_all | difference(ansible_play_hosts) | join(', ') }}.
+      Il cluster va formattato e avviato sui tre nodi insieme: sistema prima la
+      connessione, poi rilancia.
+      Se l'errore era "Host key verification failed", quelle macchine non sono
+      ancora in known_hosts: la ssh_args di ansible.cfg lo risolve, oppure
+      popolalo con ssh-keyscan.
+  run_once: true
+
+# node.id deve essere diverso su ogni nodo e coerente con
+# controller.quorum.voters: un duplicato manda il quorum in
+# "Voter key ... didn't match the receiver's replica key".
+- name: Verifica che i node.id siano tutti diversi
+  assert:
+    that:
+      - kafka_node_ids | length == kafka_node_ids | unique | length
+      - 0 not in (kafka_node_ids | map('int') | list)
+    fail_msg: >-
+      node.id duplicati o non validi: {{ kafka_node_ids | join(', ') }}.
+      Di default derivano dall'ordine del gruppo nell'inventario; se li hai
+      dichiarati a mano con kafka_node_id, devono essere interi diversi fra
+      loro e maggiori di zero.
+  vars:
+    kafka_node_ids: >-
+      {{ groups[kafka_cluster_group]
+         | map('extract', hostvars, 'kafka_node_id')
+         | map('int') | list }}
+  run_once: true
+
+- name: Verifica che ogni nodo abbia un indirizzo IP dichiarato
+  assert:
+    that:
+      - kafka_node_ip | length > 0
+      - kafka_node_ip is match('^[0-9]{1,3}(\.[0-9]{1,3}){3}$')
+    fail_msg: >-
+      {{ inventory_hostname }}: kafka_node_ip vale "{{ kafka_node_ip }}", che
+      non e' un indirizzo IPv4. listeners, advertised.listeners e
+      controller.quorum.voters devono contenere indirizzi, non nomi: dichiara
+      ansible_host nell'inventario.
+
+# La guida chiede 8 GB. Non e' un requisito bloccante — Kafka parte anche con
+# meno — ma con kafka_heap_opts a 4G su una macchina da 4 GB il broker viene
+# ucciso dall'OOM killer dopo qualche ora, che e' un guasto scomodo da capire.
+- name: Segnala se la memoria non basta per l'heap richiesto
+  debug:
+    msg: >-
+      ATTENZIONE {{ inventory_hostname }}: {{ ansible_memtotal_mb }} MB di RAM
+      con kafka_heap_opts="{{ kafka_heap_opts }}". L'heap della JVM non e' tutta
+      la memoria che serve al broker (il page cache fa il resto del lavoro):
+      lascia almeno il doppio dell'heap alla macchina, oppure abbassa
+      kafka_heap_opts in group_vars/all.yml.
+  when:
+    - kafka_heap_opts | length > 0
+    - kafka_heap_gb | int > 0
+    - ansible_memtotal_mb | int < (kafka_heap_gb | int * 2048)
+  vars:
+    # regex_search senza gruppo restituisce la stringa intera ("-Xmx4G") oppure
+    # None quando l'heap e' espresso in altro modo (-Xmx4096m) o non e' scritto:
+    # default('', true) copre il None, poi restano solo le cifre.
+    kafka_heap_gb: >-
+      {{ (kafka_heap_opts | regex_search('-Xmx[0-9]+[gG]'))
+         | default('', true) | regex_replace('[^0-9]', '') | default('0', true) }}
+
+# L'orologio sfasato fra i nodi sballa i timestamp dei record e le finestre di
+# ritenzione. Non blocca, ma va saputo.
+- name: Leggi lo stato della sincronizzazione oraria
+  command: timedatectl show -p NTPSynchronized --value
+  register: kafka_ntp
+  changed_when: false
+  failed_when: false
+
+- name: Segnala se l'orologio non e' sincronizzato
+  debug:
+    msg: >-
+      ATTENZIONE {{ inventory_hostname }}: NTP non sincronizzato. Attivalo
+      (systemd-timesyncd o chrony) prima di mandare traffico sul cluster: i
+      timestamp dei record e la ritenzione dipendono dall'orologio del broker.
+  when: kafka_ntp.stdout | trim | lower != 'yes'
+
+# --- Disco dati -------------------------------------------------------------
+# Il disco lo monta l'operatore, come per i database: qui si garantisce solo
+# che la directory ci sia. Se sopra c'e' un mount, il modulo file non lo tocca.
+
+- name: "Assicura che {{ kafka_data_dir }} esista"
+  file:
+    path: "{{ kafka_data_dir }}"
+    state: directory
+    mode: "0750"
+
+# findmnt esce diverso da zero quando il percorso non e' un mountpoint, ed e'
+# proprio l'informazione che serve, quindi non e' un errore.
+- name: "Rileva su quale filesystem sta {{ kafka_data_dir }}"
+  command: "findmnt -n -o TARGET,SOURCE,FSTYPE {{ kafka_data_dir }}"
+  register: kafka_mount
+  changed_when: false
+  failed_when: false
+
+- name: Mostra dove finiranno i dati
+  debug:
+    msg: >-
+      {{ inventory_hostname }}:
+      {{ 'disco dedicato -> ' ~ kafka_mount.stdout | trim
+         if kafka_mount.rc == 0
+         else kafka_data_dir ~ ' sta sul filesystem di sistema, nessun disco dedicato' }}
+
+- name: Pretendi un disco dedicato, se richiesto
+  assert:
+    that:
+      - kafka_mount.rc == 0
+    fail_msg: >-
+      {{ kafka_data_dir }} non e' un mountpoint su {{ inventory_hostname }} e
+      kafka_require_dedicated_disk e' true: i segmenti dei topic finirebbero
+      sulla partizione di sistema e la riempirebbero. Monta il disco, oppure
+      rilancia senza quel parametro.
+  when: kafka_require_dedicated_disk | bool

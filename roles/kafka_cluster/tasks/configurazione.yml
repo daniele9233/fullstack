@@ -1,0 +1,86 @@
+---
+# server.properties, client.properties e la unit systemd.
+#
+# no_log su tutti i task che scrivono file con password dentro: ansible.cfg ha
+# [diff] always = True, quindi senza questo il contenuto del JAAS finirebbe in
+# chiaro in ansible.log a ogni modifica. Per vedere il diff durante una
+# diagnosi: -e kafka_hide_secrets=false
+
+# regex_replace su '$' e non su '^(.+)$' con backreference: dentro uno scalare
+# YAML folded (>-) i backslash NON vengono interpretati dal parser, quindi '\\1'
+# arriverebbe al motore delle espressioni regolari come backslash-backslash-1,
+# cioe' un backslash letterale seguito da 1, e il risultato sarebbe
+# "\1:9092,\1:9092,\1:9092". La forma giusta li' sarebbe '\1' con un backslash
+# solo (come in preflight_dischi), ma qui il gruppo non serve proprio:
+# sostituire la fine della stringa aggiunge la porta in coda e basta.
+- name: Componi l'elenco dei bootstrap server
+  set_fact:
+    kafka_bootstrap_servers: >-
+      {{ groups[kafka_cluster_group]
+         | map('extract', hostvars, 'kafka_node_ip')
+         | map('regex_replace', '$', ':' ~ kafka_broker_port)
+         | join(',') }}
+
+# I nodi si parlano per indirizzo (listeners e quorum.voters contengono IP), ma
+# avere i nomi risolvibili rende leggibili i log e i comandi lanciati a mano.
+- name: Scrivi in /etc/hosts i nodi del cluster
+  lineinfile:
+    path: /etc/hosts
+    regexp: '^\S+\s+{{ item }}\s*$'
+    line: "{{ hostvars[item].kafka_node_ip }} {{ item }}"
+    state: present
+    backup: yes
+  loop: "{{ groups[kafka_cluster_group] }}"
+
+- name: Scrivi server.properties
+  template:
+    src: server.properties.j2
+    dest: "{{ kafka_server_properties }}"
+    owner: "{{ kafka_user }}"
+    group: "{{ kafka_group }}"
+    # 0640 e non 0644: dentro ci sono in chiaro le password del JAAS e quelle
+    # dei keystore. Con i permessi di default le leggerebbe qualsiasi utente
+    # della macchina.
+    mode: "0640"
+  register: kafka_config_scritta
+  no_log: "{{ kafka_hide_secrets | bool }}"
+
+- name: Scrivi client.properties per l'utente di gestione
+  template:
+    src: client.properties.j2
+    dest: "{{ kafka_client_properties }}"
+    owner: "{{ kafka_user }}"
+    group: "{{ kafka_group }}"
+    mode: "0640"
+  vars:
+    kafka_client_user: "{{ kafka_admin_user }}"
+  no_log: "{{ kafka_hide_secrets | bool }}"
+
+# Un file per ciascun altro utente SASL, accanto a quello di gestione:
+# /opt/kafka/client-appclient.properties. Serve a provare le ACL con l'utente
+# giusto senza riscrivere il JAAS a mano.
+- name: Scrivi un client.properties per ogni altro utente SASL
+  template:
+    src: client.properties.j2
+    dest: "{{ kafka_home }}/client-{{ item }}.properties"
+    owner: "{{ kafka_user }}"
+    group: "{{ kafka_group }}"
+    mode: "0640"
+  vars:
+    kafka_client_user: "{{ item }}"
+  loop: "{{ kafka_sasl_users.keys() | list | difference([kafka_admin_user]) }}"
+  no_log: "{{ kafka_hide_secrets | bool }}"
+
+- name: Scrivi la unit systemd
+  template:
+    src: kafka.service.j2
+    dest: "/etc/systemd/system/{{ kafka_service_name }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  register: kafka_unit_scritta
+
+- name: Ricarica systemd
+  systemd:
+    daemon_reload: yes
+  when: kafka_unit_scritta is changed

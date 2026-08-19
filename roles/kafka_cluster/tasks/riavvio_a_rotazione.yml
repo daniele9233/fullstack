@@ -1,0 +1,60 @@
+---
+# Un giro per nodo, incluso in ciclo da servizio.yml con run_once: le tre
+# operazioni qui sotto girano tutte su {{ kafka_nodo }} e devono restare
+# nell'ordine in cui sono. Il ciclo passa al nodo successivo solo quando questo
+# e' tornato nel quorum: e' l'unica cosa che distingue un riavvio a rotazione da
+# tre riavvii contemporanei.
+
+- name: "Riavvia Kafka su {{ kafka_nodo }}"
+  systemd:
+    name: "{{ kafka_service_name }}"
+    state: restarted
+  delegate_to: "{{ kafka_nodo }}"
+
+- name: "Attendi che la porta {{ kafka_broker_port }} risponda su {{ kafka_nodo }}"
+  wait_for:
+    host: "{{ hostvars[kafka_nodo].kafka_node_ip }}"
+    port: "{{ kafka_broker_port }}"
+    timeout: "{{ kafka_port_wait_timeout }}"
+  delegate_to: "{{ kafka_nodo }}"
+
+# La porta aperta dice solo che la JVM e' partita. Che il nodo sia tornato
+# davvero nel quorum lo dice il controller: finche' non ci e' rientrato, il
+# cluster sta girando con due votanti su tre e riavviarne un altro lo
+# fermerebbe.
+- name: "Attendi che {{ kafka_nodo }} sia rientrato nel quorum"
+  command:
+    argv:
+      - "{{ kafka_bin_dir }}/kafka-metadata-quorum.sh"
+      - --bootstrap-server
+      - "{{ kafka_bootstrap_servers }}"
+      - --command-config
+      - "{{ kafka_client_properties }}"
+      - describe
+      - --status
+  delegate_to: "{{ kafka_nodo }}"
+  environment:
+    JAVA_HOME: "{{ kafka_java_home }}"
+  register: kafka_quorum_riavvio
+  until: kafka_quorum_riavvio.rc == 0 and 'LeaderId' in (kafka_quorum_riavvio.stdout | default(''))
+  retries: "{{ kafka_quorum_retries }}"
+  delay: "{{ kafka_quorum_delay }}"
+  changed_when: false
+  failed_when: false
+
+- name: "Verifica che {{ kafka_nodo }} sia tornato nel quorum"
+  assert:
+    that:
+      - kafka_quorum_riavvio.rc == 0
+      - "'LeaderId' in (kafka_quorum_riavvio.stdout | default(''))"
+    fail_msg: >-
+      {{ kafka_nodo }} e' stato riavviato ma il quorum non risponde dopo
+      {{ kafka_quorum_retries | int * kafka_quorum_delay | int }} secondi.
+      Il giro si ferma qui, senza toccare gli altri nodi: fermarsi con due
+      broker buoni su tre e' meglio che proseguire e restare senza quorum.
+      Sul nodo: journalctl -u {{ kafka_service_name }} -n 100 --no-pager e
+      tail -n 100 {{ kafka_service_log_dir }}/server.log
+      Ultimo errore raccolto:
+      {{ (kafka_quorum_riavvio.stderr | default('')) | trim
+         | default(kafka_quorum_riavvio.stdout | default('nessun output'), true) }}
+    success_msg: "{{ kafka_nodo }}: rientrato nel quorum"

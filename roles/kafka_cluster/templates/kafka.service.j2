@@ -1,0 +1,35 @@
+{{ ansible_managed | comment }}
+[Unit]
+Description=Apache Kafka {{ kafka_version }} (KRaft, broker + controller)
+Documentation=https://kafka.apache.org/documentation/
+# After=network-online.target, non network.target: la guida ha
+# Wants=network-online.target ma ordina su network.target, e un Wants senza
+# After non impone nessun ordine. Il broker si mette in ascolto su un indirizzo
+# preciso ({{ kafka_node_ip }}) e se parte prima che quell'indirizzo esista
+# fallisce con "Cannot assign requested address".
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User={{ kafka_user }}
+Group={{ kafka_group }}
+# JAVA_HOME qui dentro e' la parte importante: vincola Kafka a questa JVM
+# qualunque sia la java di sistema, e un aggiornamento che cambia le
+# alternatives non puo' far ripartire il broker con una Java 11.
+Environment=JAVA_HOME={{ kafka_java_home }}
+Environment=LOG_DIR={{ kafka_service_log_dir }}
+{% if kafka_heap_opts | length > 0 %}
+Environment="KAFKA_HEAP_OPTS={{ kafka_heap_opts }}"
+{% endif %}
+ExecStart={{ kafka_bin_dir }}/kafka-server-start.sh {{ kafka_server_properties }}
+ExecStop={{ kafka_bin_dir }}/kafka-server-stop.sh
+Restart=on-failure
+RestartSec={{ kafka_restart_sec }}
+LimitNOFILE={{ kafka_limit_nofile }}
+# Lo spegnimento pulito scrive su disco e chiude i segmenti: interromperlo a
+# meta' costa un recupero dei log al riavvio successivo.
+TimeoutStopSec={{ kafka_timeout_stop_sec }}
+
+[Install]
+WantedBy=multi-user.target

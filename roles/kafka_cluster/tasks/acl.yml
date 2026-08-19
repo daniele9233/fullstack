@@ -1,0 +1,97 @@
+---
+# ACL con StandardAuthorizer.
+#
+# Con l'authorizer attivo un utente che non sia super user NON PUO' FARE NIENTE
+# finche' non gli si concede qualcosa, e l'errore che vede e'
+# TopicAuthorizationException. admin e' super user (super.users in
+# server.properties) ed e' esente: e' anche l'utente con cui girano questi
+# comandi.
+#
+# Spento di default (kafka_manage_acls: false): le ACL della guida parlano del
+# topic di prova test-3node. Si accende dopo aver messo in kafka_acls i topic
+# veri.
+#
+# Le ACL vivono nei metadati del cluster, non su disco locale: si applicano da
+# UN nodo solo e valgono per tutti e tre.
+
+- name: Leggi le ACL esistenti
+  command:
+    argv:
+      - "{{ kafka_bin_dir }}/kafka-acls.sh"
+      - --bootstrap-server
+      - "{{ kafka_bootstrap_servers }}"
+      - --command-config
+      - "{{ kafka_client_properties }}"
+      - --list
+  environment:
+    JAVA_HOME: "{{ kafka_java_home }}"
+  register: kafka_acl_prima
+  changed_when: false
+  run_once: true
+
+# kafka-acls.sh --add e' idempotente: riapplicare una ACL che c'e' gia' non
+# cambia niente e non da' errore. Non e' pero' possibile saperlo dal suo output,
+# che stampa sempre le stesse righe: per questo changed_when e' false e il
+# confronto vero viene fatto dopo, sull'elenco completo.
+#
+# Il comando e' una stringa e non un argv: il modulo command la divide sugli
+# spazi SENZA passare da una shell, quindi --topic '*' arriva a kafka-acls.sh
+# come asterisco letterale e non viene espanso nei nomi dei file della
+# directory corrente. Con il modulo shell servirebbero gli apici.
+- name: Applica le ACL
+  command: >-
+    {{ kafka_bin_dir }}/kafka-acls.sh
+    --bootstrap-server {{ kafka_bootstrap_servers }}
+    --command-config {{ kafka_client_properties }}
+    --add
+    --allow-principal {{ item.principal }}
+    {% for operazione in item.operations %}--operation {{ operazione }} {% endfor %}
+    {% if item.topic is defined %}--topic {{ item.topic }}{% endif %}
+    {% if item.group is defined %} --group {{ item.group }}{% endif %}
+    {% if item.cluster | default(false) %} --cluster{% endif %}
+    {% if item.transactional_id is defined %} --transactional-id {{ item.transactional_id }}{% endif %}
+  environment:
+    JAVA_HOME: "{{ kafka_java_home }}"
+  loop: "{{ kafka_acls }}"
+  loop_control:
+    label: >-
+      {{ item.principal }} -> {{ item.operations | join(',') }} su
+      {{ item.topic | default(item.group | default('cluster' if item.cluster | default(false) else '?')) }}
+  changed_when: false
+  run_once: true
+
+- name: Rileggi le ACL
+  command:
+    argv:
+      - "{{ kafka_bin_dir }}/kafka-acls.sh"
+      - --bootstrap-server
+      - "{{ kafka_bootstrap_servers }}"
+      - --command-config
+      - "{{ kafka_client_properties }}"
+      - --list
+  environment:
+    JAVA_HOME: "{{ kafka_java_home }}"
+  register: kafka_acl_dopo
+  changed_when: kafka_acl_dopo.stdout != kafka_acl_prima.stdout
+  run_once: true
+
+- name: Mostra le ACL applicate
+  debug:
+    msg: >-
+      {{ ('ACL invariate (' ~ (kafka_acls | length) ~ ' regole gia presenti)')
+         if kafka_acl_dopo.stdout == kafka_acl_prima.stdout
+         else (['ACL aggiornate:'] + kafka_acl_dopo.stdout_lines) }}
+  run_once: true
+
+# Il topic __consumer_offsets e i permessi di cluster servono ai consumer:
+# senza, il client si autentica, vede il topic e poi fallisce al primo commit
+# con GroupAuthorizationException, che sembra un problema diverso.
+- name: Ricorda che i permessi sui topic interni sono separati
+  debug:
+    msg: >-
+      Un consumer ha bisogno anche di Read/Write su __consumer_offsets e di
+      Describe sul gruppo con cui si presenta: se un client applicativo si
+      collega ma fallisce al commit degli offset, mancano quelli. In
+      group_vars/all.yml, dentro kafka_acls, ci sono gia' le righe della guida.
+  run_once: true
+  when: kafka_acls | selectattr('topic', 'defined') | selectattr('topic', 'equalto', '__consumer_offsets') | list | length == 0
