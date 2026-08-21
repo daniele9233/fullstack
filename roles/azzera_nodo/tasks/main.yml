@@ -1,0 +1,65 @@
+---
+# Ordine: prima si spegne tutto, poi si toglie. Fermare i servizi alla fine
+# vorrebbe dire cancellare configurazioni sotto ai processi che le stanno
+# usando, e ritrovarsi un glusterd vivo che riscrive /var/lib/glusterd mentre
+# lo si sta rimuovendo.
+
+- name: Pretendi la conferma esplicita
+  assert:
+    that:
+      - azzera_conferma | default('') == 'AZZERA'
+    fail_msg: |
+      Questo ruolo CANCELLA. Toglie Rancher, RKE2, PostgreSQL, Patroni, etcd,
+      GlusterFS, Ganesha, Pacemaker, nginx, haproxy, keepalived e Kafka dal
+      nodo, dati compresi.
+
+      Per lanciarlo servono due cose, e servono insieme:
+
+        --limit <host o gruppo>       su chi
+        -e azzera_conferma=AZZERA     conferma
+
+      Senza --limit "hosts: all" prende tutto l'inventario.
+    success_msg: "Conferma ricevuta: azzeramento di {{ inventory_hostname }}."
+  run_once: false
+
+# Il control node sta in [local] e da li' si lanciano i playbook: azzerarlo
+# significa segarsi il ramo su cui si e' seduti. Il controllo non e' teorico —
+# con --limit all ci finirebbe dentro.
+- name: Rifiuta di azzerare il control node
+  assert:
+    that:
+      - ansible_connection | default('ssh') != 'local'
+      - inventory_hostname not in (groups['local'] | default([]))
+    fail_msg: >-
+      {{ inventory_hostname }} e' il control node (gruppo [local]): non si
+      azzera da solo. Togli --limit all e indica gli host veri.
+
+- name: Annuncia che cosa sta per succedere
+  debug:
+    msg:
+      - "AZZERAMENTO DI {{ inventory_hostname }} ({{ ansible_host | default(inventory_hostname) }})"
+      - "Rancher/RKE2: {{ azzera_rancher }} · Database: {{ azzera_database }} · Storage: {{ azzera_storage }} · Bilanciatori: {{ azzera_bilanciatori }} · Kafka: {{ azzera_kafka }}"
+      - "Dati cancellati: {{ azzera_dati }} · Pacchetti rimossi: {{ azzera_pacchetti }}"
+
+- name: Azzera Rancher e RKE2
+  include_tasks: rancher.yml
+  when: azzera_rancher | bool
+
+- name: Azzera il database
+  include_tasks: database.yml
+  when: azzera_database | bool
+
+- name: Azzera lo storage
+  include_tasks: storage.yml
+  when: azzera_storage | bool
+
+- name: Azzera i bilanciatori
+  include_tasks: bilanciatori.yml
+  when: azzera_bilanciatori | bool
+
+- name: Azzera Kafka
+  include_tasks: kafka.yml
+  when: azzera_kafka | bool
+
+- name: Ripulisci quello che resta e fai il punto
+  include_tasks: finale.yml

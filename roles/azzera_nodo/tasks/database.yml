@@ -1,0 +1,70 @@
+---
+# PostgreSQL, Patroni ed etcd.
+#
+# L'ordine conta: patroni per primo. Patroni sorveglia PostgreSQL e lo riavvia
+# se lo trova fermo — fermare postgresql con patroni ancora vivo significa
+# vederlo tornare su da solo dopo qualche secondo.
+
+- name: Ferma i servizi del database
+  systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop: "{{ azzera_servizi_database }}"
+  failed_when: false
+
+# Patroni tiene la sua identita' di cluster dentro etcd, non solo su disco. Se
+# etcd sopravvive su un altro nodo, questo si ripresenterebbe con il vecchio
+# nome di membro e Patroni rifiuterebbe il bootstrap. La chiave si toglie
+# finche' etcd risponde ancora — dopo la purga e' tardi.
+- name: Rimuovi il nodo dal datastore Patroni in etcd
+  shell: |
+    set -o pipefail
+    etcdctl --endpoints=http://127.0.0.1:{{ etcd_client_port | default(2379) }} \
+      del --prefix "{{ patroni_namespace | default('/pg_cluster/') }}{{ patroni_scope | default('postgres') }}/members/{{ inventory_hostname }}"
+  args:
+    executable: /bin/bash
+  environment:
+    ETCDCTL_API: "3"
+  register: azzera_etcd_del
+  failed_when: false
+  changed_when: azzera_etcd_del.rc == 0
+
+- name: Rimuovi pacchetti di PostgreSQL, Patroni ed etcd
+  apt:
+    name: "{{ azzera_pacchetti_database }}"
+    state: absent
+    purge: true
+  failed_when: false
+  when: azzera_pacchetti | bool
+  register: apt_result
+  until: apt_result is succeeded or ('lock' not in apt_result.msg | default('') | lower)
+  retries: "{{ apt_lock_retries | default(60) }}"
+  delay: "{{ apt_lock_delay | default(5) }}"
+
+- name: Rimuovi configurazioni e stato del database
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ azzera_percorsi_database }}"
+
+# postgres_mount_point e' /var/lib/postgresql: la HOME dell'utente postgres e,
+# in produzione, un disco dedicato. Si svuota, non si cancella.
+- name: Svuota la directory dati di PostgreSQL
+  include_tasks: svuota.yml
+  vars:
+    svuota_percorso: "{{ postgres_mount_point | default('/var/lib/postgresql') }}"
+  when: azzera_dati | bool
+
+# L'utente postgres lo crea il pacchetto e il pacchetto non lo toglie. Lasciarlo
+# non fa danno, ma con la home cancellata e senza pacchetti e' un residuo: alla
+# prossima installazione il postinst lo ritrova e non ricrea la home con i
+# permessi giusti. Questo e' il motivo per cui 30-database.yml raccomanda di non
+# forzare owner sulla directory prima dell'installazione.
+- name: Rimuovi l'utente di sistema postgres
+  user:
+    name: postgres
+    state: absent
+    remove: false
+  failed_when: false
+  when: azzera_pacchetti | bool

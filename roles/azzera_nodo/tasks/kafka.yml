@@ -1,0 +1,64 @@
+---
+# Kafka non arriva da apt: e' un tarball scompattato in kafka_home, una unit
+# systemd scritta dal ruolo e un utente di sistema. Niente purge, quindi: si
+# ferma il servizio e si toglie tutto a mano.
+
+- name: Ferma il servizio Kafka
+  systemd:
+    name: "{{ kafka_service_name | default('kafka') }}"
+    state: stopped
+    enabled: false
+  failed_when: false
+
+- name: Rimuovi la unit systemd e i file temporanei di Kafka
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ azzera_percorsi_kafka }}"
+
+# La directory dati puo' essere un disco montato a mano: si svuota, non si
+# cancella. Dentro c'e' meta.properties, il file che lega quel disco a un
+# node.id preciso: finche' resta, il ruolo kafka_cluster si ferma se il nodo
+# viene rimesso in inventario in una posizione diversa.
+- name: Svuota la directory dati di Kafka
+  include_tasks: svuota.yml
+  vars:
+    svuota_percorso: "{{ kafka_data_dir | default('/opt/kafka/data') }}"
+  when: azzera_dati | bool
+
+- name: Rimuovi la distribuzione Kafka
+  file:
+    path: "{{ kafka_home | default('/opt/kafka') }}"
+    state: absent
+  when: azzera_dati | bool
+
+# Se kafka_data_dir sta fuori da kafka_home la directory della distribuzione se
+# n'e' andata sopra; se sta dentro (e' il default, /opt/kafka/data) la rimozione
+# ha portato via anche il mountpoint. In quel caso va ricreato, altrimenti il
+# disco resta montato su una directory che non c'e' piu'.
+- name: Ricrea il punto di mount dei dati se stava dentro alla distribuzione
+  file:
+    path: "{{ kafka_data_dir | default('/opt/kafka/data') }}"
+    state: directory
+    mode: '0755'
+  when:
+    - azzera_dati | bool
+    - (kafka_data_dir | default('/opt/kafka/data')).startswith(kafka_home | default('/opt/kafka'))
+
+- name: Rimuovi l'utente di sistema kafka
+  user:
+    name: "{{ kafka_user | default('kafka') }}"
+    state: absent
+    remove: false
+  failed_when: false
+  when: azzera_pacchetti | bool
+
+# Il JDK Zulu che il ruolo scompatta sotto /usr/lib/jvm non e' un pacchetto e
+# non se ne va da solo. Quello installato con apt (kafka_java_install_method
+# uguale ad apt) resta: e' un pacchetto normale, e potrebbe servire ad altro
+# sulla macchina.
+- name: Rimuovi il JDK Zulu scompattato dal ruolo
+  file:
+    path: "{{ kafka_jvm_base_dir | default('/usr/lib/jvm') }}/{{ kafka_zulu_release }}"
+    state: absent
+  when: kafka_zulu_release is defined

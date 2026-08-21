@@ -1,0 +1,118 @@
+---
+# Quello che resta dopo aver tolto i singoli pezzi, e il conto di come e'
+# andata. Il riepilogo non e' decorativo: e' il modo per sapere se il nodo e'
+# davvero riusabile o se serve un riavvio.
+
+- name: Ricarica systemd dopo la rimozione delle unit
+  systemd:
+    daemon_reload: true
+
+- name: Togli i pacchetti rimasti orfani
+  apt:
+    autoremove: true
+    purge: true
+  failed_when: false
+  when: azzera_pacchetti | bool
+  register: apt_result
+  until: apt_result is succeeded or ('lock' not in apt_result.msg | default('') | lower)
+  retries: "{{ apt_lock_retries | default(60) }}"
+  delay: "{{ apt_lock_delay | default(5) }}"
+
+# I ruoli scrivono in /etc/hosts i nomi dei nodi del proprio cluster
+# (postgresql_cluster, glusterfs_install, kafka_cluster) e il dominio Rancher
+# (update_hosts_file). Su un nodo riusato quelle righe puntano a macchine che
+# adesso fanno altro, ed e' il tipo di residuo che si scopre tardi e male.
+- name: Togli da /etc/hosts i nomi dei nodi dell'inventario
+  lineinfile:
+    path: /etc/hosts
+    regexp: '^\S+\s+{{ item }}\s*$'
+    state: absent
+  loop: "{{ groups['all'] | difference(groups['local'] | default([])) }}"
+  failed_when: false
+
+- name: Togli da /etc/hosts il dominio Rancher
+  lineinfile:
+    path: /etc/hosts
+    regexp: '.*\s+{{ rancher_domain | regex_escape }}(\s|$)'
+    state: absent
+  when: rancher_domain is defined
+  failed_when: false
+
+- name: Verifica che i servizi non ci siano piu'
+  shell: >-
+    systemctl list-units --all --type=service --no-legend
+    | grep -iE 'rke2|rancher|patroni|etcd|postgres|gluster|ganesha|corosync|pacemaker|pcsd|haproxy|keepalived|nginx|kafka'
+    | grep -v 'not-found'
+    || true
+  args:
+    executable: /bin/bash
+  register: azzera_servizi_rimasti
+  changed_when: false
+
+- name: Verifica che le porte siano libere
+  shell: >-
+    ss -lntup | awk '$5 ~ /:{{ item }}$/ {print "{{ item }} " $0}' || true
+  args:
+    executable: /bin/bash
+  loop: "{{ azzera_porte_da_verificare }}"
+  register: azzera_porte
+  changed_when: false
+
+- name: Verifica che le directory di stato siano sparite
+  stat:
+    path: "{{ item }}"
+  loop:
+    - /var/lib/glusterd
+    - /etc/patroni
+    - /etc/rancher/rke2
+    - /etc/ganesha
+    - /etc/corosync
+    - "{{ kafka_home | default('/opt/kafka') }}/bin"
+  register: azzera_dir_rimaste
+
+- name: Riepilogo dell'azzeramento
+  debug:
+    msg: |
+      === AZZERAMENTO DI {{ inventory_hostname }} ===
+
+      Servizi ancora presenti: {{ azzera_servizi_rimasti.stdout_lines | default([]) | length }}
+      {% for r in azzera_servizi_rimasti.stdout_lines | default([]) %}
+        {{ r.strip() }}
+      {% endfor %}
+
+      Porte ancora occupate:
+      {% set occupate = azzera_porte.results | default([]) | selectattr('stdout', 'defined')
+                          | selectattr('stdout', 'ne', '') | list %}
+      {% if occupate | length == 0 %}
+        nessuna
+      {% else %}
+      {% for p in occupate %}
+        {{ p.stdout.strip() }}
+      {% endfor %}
+        Una porta ancora occupata dopo l'azzeramento e' quasi sempre un
+        processo orfano sopravvissuto alla rimozione della sua unit. Si chiude
+        con un riavvio del nodo, oppure con -e azzera_riavvia=true.
+      {% endif %}
+
+      Directory di stato ancora presenti:
+      {% set rimaste = azzera_dir_rimaste.results | default([]) | selectattr('stat', 'defined')
+                         | selectattr('stat.exists') | list %}
+      {% if rimaste | length == 0 %}
+        nessuna
+      {% else %}
+      {% for d in rimaste %}
+        {{ d.item }}
+      {% endfor %}
+      {% endif %}
+
+      Dati cancellati: {{ azzera_dati }} · Pacchetti rimossi: {{ azzera_pacchetti }}
+      {% if not azzera_dati %}
+      ATTENZIONE: azzera_dati e' false. PGDATA, i brick e i dati Kafka sono
+      ancora sul disco: il nodo non e' vergine.
+      {% endif %}
+
+- name: Riavvia il nodo
+  reboot:
+    reboot_timeout: 600
+    msg: "Riavvio richiesto dall'azzeramento del nodo"
+  when: azzera_riavvia | bool

@@ -1,0 +1,59 @@
+---
+# AZZERAMENTO DEI NODI — riporta una macchina allo stato precedente alla prima
+# installazione, qualunque ruolo abbia avuto.
+#
+# Esiste per il laboratorio, dove gli stessi server vengono riusati per
+# installazioni diverse: il nodo che ieri era un brick Gluster oggi deve poter
+# fare il database, e i residui della vita precedente si scoprono tardi — un
+# UUID Gluster che gli altri peer rifiutano, un meta.properties di Kafka che
+# lega quel disco a un node.id, una configurazione CNI di un cluster morto che
+# blocca ogni pod in ContainerCreating.
+#
+# TOGLIE: Rancher, RKE2, kubectl, helm, PostgreSQL, Patroni, etcd, GlusterFS,
+# Ganesha, Pacemaker, Corosync, nginx, haproxy, keepalived, Kafka. Con
+# azzera_dati (default true) svuota anche PGDATA, i brick e i dati di Kafka.
+#
+# NON TOCCA i dischi: niente umount, niente mkfs, niente fstab. I punti di
+# mount restano dove sono, vuoti. In questo repository i dischi si preparano a
+# mano, e disfarli non e' compito di un playbook.
+#
+# SERVONO DUE COSE, INSIEME:
+#
+#   ansible-playbook playbooks/99-azzera.yml \
+#     --limit dbserver01 \
+#     -e azzera_conferma=AZZERA
+#
+# --limit dice su chi, azzera_conferma dice che sai cosa stai facendo. Senza
+# --limit "hosts: all" prende tutto l'inventario; senza la conferma il ruolo si
+# ferma al primo task. Il control node ([local]) e' escluso a prescindere.
+#
+# VARIANTI
+#
+#   # solo un pezzo, invece di tutto
+#   -e azzera_database=true -e azzera_rancher=false -e azzera_storage=false \
+#   -e azzera_bilanciatori=false -e azzera_kafka=false
+#
+#   # lascia i dati sul disco: toglie servizi e configurazioni, non PGDATA
+#   -e azzera_dati=false
+#
+#   # non disinstallare i pacchetti, fermati a servizi e configurazioni
+#   -e azzera_pacchetti=false
+#
+#   # riavvia alla fine, per liberare quello che resta appeso
+#   -e azzera_riavvia=true
+#
+# Prima di rilanciare un'installazione conviene guardare il riepilogo finale:
+# dice quali servizi, porte e directory sono sopravvissuti.
+
+- name: Azzera i nodi selezionati
+  hosts: all
+  become: yes
+  # I fatti servono al modulo apt e al riavvio finale.
+  gather_facts: yes
+  # Un nodo alla volta: se qualcosa va storto ci si accorge al primo, non dopo
+  # aver smontato otto macchine. Con --limit su un gruppo la differenza si
+  # sente, ed e' la differenza che serve.
+  serial: 1
+  order: inventory
+  roles:
+    - azzera_nodo

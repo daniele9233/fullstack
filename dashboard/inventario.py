@@ -19,6 +19,7 @@ giusto, le variabili di group_vars no, e chi legge lo sa dal campo 'fonte'.
 import configparser
 import json
 import os
+import re
 import subprocess
 import time
 
@@ -51,25 +52,54 @@ GRUPPI_TECNICI = {'all', 'ungrouped', 'local'}
 
 
 def _esegui(cmd, cwd, env, timeout=30):
+    """Ritorna (stdout, errore, stderr). stderr serve anche quando va bene:
+    ansible-inventory segnala i guai li' dentro senza cambiare codice di uscita.
+    """
     try:
         r = subprocess.run(cmd, capture_output=True, text=True,
                            cwd=cwd, env=env, timeout=timeout)
         if r.returncode != 0:
-            return None, ((r.stderr or r.stdout) or '').strip()[:400]
-        return r.stdout, None
+            return None, ((r.stderr or r.stdout) or '').strip()[:400], r.stderr
+        return r.stdout, None, r.stderr
     except FileNotFoundError:
-        return None, f'{cmd[0]} non trovato nel PATH'
+        return None, f'{cmd[0]} non trovato nel PATH', ''
     except subprocess.TimeoutExpired:
-        return None, f'{cmd[0]} in timeout (>{timeout}s)'
+        return None, f'{cmd[0]} in timeout (>{timeout}s)', ''
     except Exception as exc:                                # pragma: no cover
-        return None, str(exc)
+        return None, str(exc), ''
+
+
+_PARSE_FALLITO_RE = re.compile(
+    r'Failed to parse inventory(?: with .*? plugin)?:?\s*(.*)')
+
+
+def _motivo_parse_fallito(stderr):
+    """Estrae dal warning di ansible-inventory il motivo, se c'e' stato un guaio."""
+    testo = (stderr or '')
+    if 'Failed to parse inventory' not in testo:
+        return None
+    for riga in testo.splitlines():
+        m = _PARSE_FALLITO_RE.search(riga)
+        if m and m.group(1).strip():
+            return 'Ansible non riesce a leggere l\'inventario: ' + m.group(1).strip()
+    return 'Ansible non riesce a leggere l\'inventario.'
 
 
 def _da_ansible_inventory(repo_dir, env):
     """Inventario risolto da Ansible: gruppi, host e variabili di group_vars."""
-    out, err = _esegui(['ansible-inventory', '--list'], repo_dir, env)
+    out, err, stderr = _esegui(['ansible-inventory', '--list'], repo_dir, env)
     if out is None:
         return None, err
+
+    # ATTENZIONE AL CODICE DI USCITA: quando il plugin ini non riesce a leggere
+    # inventory.ini, ansible-inventory NON fallisce. Stampa un warning su stderr,
+    # ripiega su un inventario vuoto ed esce con 0. Fidandosi del solo returncode
+    # si prende quell'inventario vuoto per buono, e da li' in poi ogni playbook
+    # "funziona" senza toccare nessun host. Il messaggio e' l'unico segnale.
+    guasto = _motivo_parse_fallito(stderr)
+    if guasto:
+        return None, guasto
+
     try:
         data = json.loads(out or '{}')
     except json.JSONDecodeError as exc:
@@ -215,8 +245,8 @@ class Inventario:
         return dati
 
     def _ramo_git(self):
-        out, _ = _esegui(['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
-                         self._repo_dir, os.environ.copy(), timeout=10)
+        out, _, _ = _esegui(['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
+                            self._repo_dir, os.environ.copy(), timeout=10)
         return (out or '').strip() or None
 
     def nomi_validi(self):

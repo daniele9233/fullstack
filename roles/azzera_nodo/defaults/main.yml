@@ -1,0 +1,150 @@
+---
+# AZZERAMENTO DI UN NODO — riporta una macchina allo stato in cui era prima
+# della prima installazione, qualunque ruolo abbia avuto.
+#
+# Serve in laboratorio, dove gli stessi otto server vengono riusati per
+# installazioni diverse: il nodo che ieri era un brick Gluster oggi deve poter
+# fare il database, e i residui della vita precedente si vedono solo quando il
+# ruolo nuovo ci sbatte contro.
+#
+# NON e' clean_node_state. Quello toglie lo stato RKE2/Rancher per far ripartire
+# un join; questo toglie tutto: Rancher, RKE2, PostgreSQL, Patroni, etcd,
+# GlusterFS, Ganesha, Pacemaker, Corosync, nginx, haproxy, keepalived, Kafka.
+
+# Parola d'ordine. Il ruolo si rifiuta di partire senza:
+#   ansible-playbook playbooks/99-azzera.yml --limit dbserver01 -e azzera_conferma=AZZERA
+# Non e' burocrazia: senza --limit "hosts: all" prende tutto l'inventario, e
+# questo ruolo cancella dati.
+azzera_conferma: ""
+
+# Che cosa togliere. Tutto acceso: un nodo riusato puo' avere addosso i resti
+# di piu' installazioni diverse, e spegnere un pezzo significa lasciarli li'.
+azzera_rancher: true
+azzera_database: true
+azzera_storage: true
+azzera_bilanciatori: true
+azzera_kafka: true
+
+# I DATI. Con true svuota PGDATA, i brick Gluster e la directory dati di Kafka.
+# Le directory restano — sono punti di mount, e smontarle o riformattarle non e'
+# compito di un playbook: i dischi in questo repository si preparano a mano.
+azzera_dati: true
+
+# I PACCHETTI. Con true fa "apt purge" di quello che i ruoli hanno installato,
+# e alla fine "apt autoremove". Con false si ferma a fermare i servizi e a
+# cancellare configurazioni e dati: piu' veloce, ma il nodo non e' vergine.
+azzera_pacchetti: true
+
+# Riavvio finale. Non serve quasi mai: quello che non si libera senza reboot lo
+# segnala il riepilogo. Utile se il nodo torna a fare da server RKE2 e qualche
+# processo orfano tiene ancora la 9345.
+azzera_riavvia: false
+
+# ---------------------------------------------------------------------------
+# Elenchi. Tutto quello che i ruoli di questo repository installano.
+# ---------------------------------------------------------------------------
+
+azzera_servizi_database:
+  - patroni
+  - etcd
+  - postgresql
+  - pgbouncer
+  - percona-pgbouncer
+
+azzera_pacchetti_database:
+  - "percona-postgresql*"
+  - "postgresql*"
+  - patroni
+  - etcd
+  - percona-release
+
+azzera_percorsi_database:
+  - /etc/patroni
+  - /etc/etcd
+  - /etc/systemd/system/etcd.service.d
+  - /var/lib/etcd
+  - /etc/postgresql
+  - /var/log/postgresql
+  - /etc/apt/sources.list.d/percona-original-release.list
+  - /etc/apt/sources.list.d/percona-ppg-17-release.list
+  - /usr/bin/percona-release
+
+azzera_servizi_storage:
+  - nfs-ganesha
+  - nfs-ganesha-lock
+  - glusterd
+  - glustereventsd
+  - pacemaker
+  - corosync
+  - pcsd
+
+azzera_pacchetti_storage:
+  - glusterfs-server
+  - glusterfs-client
+  - nfs-ganesha
+  - nfs-ganesha-gluster
+  - pacemaker
+  - corosync
+  - pcs
+  - fence-agents
+  - resource-agents
+
+azzera_percorsi_storage:
+  - /var/lib/glusterd
+  - /etc/glusterfs
+  - /var/log/glusterfs
+  - /etc/ganesha
+  - /var/lib/nfs/ganesha
+  - /etc/corosync
+  - /var/lib/corosync
+  - /var/lib/pacemaker
+  - /var/lib/pcsd
+  - /etc/cluster
+
+azzera_servizi_bilanciatori:
+  - keepalived
+  - haproxy
+  - nginx
+
+azzera_pacchetti_bilanciatori:
+  - keepalived
+  - haproxy
+  - nginx
+  - nginx-common
+  - nginx-core
+
+azzera_percorsi_bilanciatori:
+  - /etc/keepalived
+  - /etc/haproxy
+  - /etc/nginx
+  - /var/lib/haproxy
+  - /var/log/nginx
+
+# Kafka non arriva da apt: e' un tarball scompattato in kafka_home, con una
+# unit systemd scritta dal ruolo e un utente di sistema dedicato.
+azzera_percorsi_kafka:
+  - "/etc/systemd/system/{{ kafka_service_name | default('kafka') }}.service"
+  - /tmp/kafka-cli
+
+# Binari e configurazioni sparse che nessun "apt purge" toglie.
+azzera_percorsi_rancher_extra:
+  - /usr/local/bin/kubectl
+  - /usr/local/bin/helm
+  - /root/.kube
+  - /var/lib/kubelet
+  - /var/log/pods
+  - /var/log/containers
+
+# Porte che devono risultare libere alla fine. Sono quelle su cui una
+# reinstallazione fallirebbe con "address already in use".
+azzera_porte_da_verificare:
+  - 80
+  - 443
+  - 2379
+  - 5432
+  - 6443
+  - 8008
+  - 9092
+  - 9093
+  - 9345
+  - 24007

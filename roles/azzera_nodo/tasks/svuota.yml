@@ -1,0 +1,25 @@
+---
+# Svuota una directory LASCIANDOLA AL SUO POSTO.
+#
+# Serve perche' i percorsi dei dati — PGDATA, i brick, /opt/kafka/data — sono
+# quasi sempre punti di mount preparati a mano: cancellare la directory
+# significherebbe cancellare il mountpoint e ritrovarsi il disco montato su
+# niente. Qui si toglie il contenuto e basta.
+#
+# Chi include questo file passa 'svuota_percorso'.
+
+- name: "Elenca il contenuto di {{ svuota_percorso }}"
+  find:
+    paths: "{{ svuota_percorso }}"
+    file_type: any
+    hidden: true
+  register: azzera_contenuto
+  failed_when: false
+
+- name: "Svuota {{ svuota_percorso }} ({{ azzera_contenuto.files | default([]) | length }} voci)"
+  file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ azzera_contenuto.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"

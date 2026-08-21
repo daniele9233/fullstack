@@ -1,0 +1,83 @@
+---
+# GlusterFS, Ganesha e il cluster Pacemaker.
+#
+# Qui l'ordine conta piu' che altrove. Pacemaker gestisce nfs-ganesha come
+# risorsa: fermare ganesha con il cluster ancora attivo significa vederlo
+# riavviare altrove o subito dopo, e in piu' il cluster puo' decidere di
+# recintare il nodo. Prima si distrugge il cluster, poi si spegne il resto.
+
+- name: Distruggi il cluster Pacemaker su questo nodo
+  command: pcs cluster destroy
+  register: azzera_pcs
+  failed_when: false
+  changed_when: azzera_pcs.rc == 0
+
+# Con glusterd ancora vivo si puo' uscire dal pool in modo pulito: il peer
+# scompare dalla vista degli altri nodi invece di restare "Disconnected".
+# Fallisce, giustamente, se il nodo ha ancora dei brick in un volume: in quel
+# caso si prosegue lo stesso e il pool va sistemato dagli altri nodi.
+- name: Elenca i volumi Gluster presenti
+  command: gluster volume list
+  register: azzera_volumi
+  failed_when: false
+  changed_when: false
+
+- name: Ferma e cancella i volumi Gluster
+  shell: |
+    gluster --mode=script volume stop {{ item }} force
+    gluster --mode=script volume delete {{ item }}
+  args:
+    executable: /bin/bash
+  loop: "{{ azzera_volumi.stdout_lines | default([]) }}"
+  register: azzera_volume_rm
+  failed_when: false
+  changed_when: azzera_volume_rm.rc | default(1) == 0
+  when:
+    - azzera_volumi.rc | default(1) == 0
+    - azzera_dati | bool
+
+- name: Ferma i servizi di storage
+  systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop: "{{ azzera_servizi_storage }}"
+  failed_when: false
+
+- name: Rimuovi pacchetti di Gluster, Ganesha e Pacemaker
+  apt:
+    name: "{{ azzera_pacchetti_storage }}"
+    state: absent
+    purge: true
+  failed_when: false
+  when: azzera_pacchetti | bool
+  register: apt_result
+  until: apt_result is succeeded or ('lock' not in apt_result.msg | default('') | lower)
+  retries: "{{ apt_lock_retries | default(60) }}"
+  delay: "{{ apt_lock_delay | default(5) }}"
+
+# /var/lib/glusterd contiene glusterd.info, cioe' l'UUID con cui il nodo si
+# presenta al pool. Finche' c'e', un nodo reinstallato torna con la vecchia
+# identita' e gli altri peer lo rifiutano.
+- name: Rimuovi configurazioni e stato di storage e cluster
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ azzera_percorsi_storage }}"
+
+- name: Svuota la directory dei brick
+  include_tasks: svuota.yml
+  vars:
+    svuota_percorso: "{{ gluster_brick_root | default('/bricks') }}"
+  when: azzera_dati | bool
+
+# L'utente hacluster resta dopo il purge di pcs, con la password che il ruolo
+# gli ha impostato. Su un nodo riusato la password viene riscritta comunque, ma
+# un utente con shell e password note che non serve a niente e' un residuo.
+- name: Rimuovi l'utente hacluster
+  user:
+    name: "{{ pcs_cluster_user | default('hacluster') }}"
+    state: absent
+    remove: false
+  failed_when: false
+  when: azzera_pacchetti | bool

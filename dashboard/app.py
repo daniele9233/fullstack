@@ -24,6 +24,7 @@ import re
 
 from inventario import Inventario
 from sonde import Raccoglitore, AREE
+import modifiche
 
 app = Flask(__name__)
 
@@ -103,9 +104,18 @@ COMANDI = {
     'reinit_postgres':       _pb(PLAYBOOK_AREA['database'], '-e', 'postgres_force_reinit=true'),
     'rigenera_certificati_kafka': _pb(PLAYBOOK_AREA['kafka'], '-e',
                                       'kafka_force_regenerate_certs=true'),
+
+    # Azzeramento completo: toglie dal nodo tutto quello che questo repository
+    # installa, qualunque ruolo abbia avuto. Vedi playbooks/99-azzera.yml.
+    'azzera_nodo':           _pb('playbooks/99-azzera.yml', '-e', 'azzera_conferma=AZZERA'),
 }
 
-DISTRUTTIVE = {'azzera_nodi', 'reinit_postgres', 'rigenera_certificati_kafka'}
+DISTRUTTIVE = {'azzera_nodi', 'reinit_postgres', 'rigenera_certificati_kafka', 'azzera_nodo'}
+
+# Azioni che senza --limit prenderebbero tutto l'inventario facendo un disastro.
+# Il playbook si protegge da solo pretendendo azzera_conferma, ma quella la
+# passa la dashboard: qui serve la seconda meta' del vincolo, cioe' "su chi".
+RICHIEDE_LIMIT = {'azzera_nodo'}
 
 # --limit accetta solo nomi presenti in inventario (vedi Inventario.nomi_validi).
 # Questa e' la prima rete: la forma. Un nome di host o gruppo Ansible non
@@ -228,6 +238,11 @@ def api_run():
     if azione not in COMANDI:
         return jsonify({'error': 'Azione non valida'}), 400
 
+    if azione in RICHIEDE_LIMIT and not limit:
+        return jsonify({'error': 'Questa operazione richiede di scegliere su quali '
+                                 'host agire: senza filtro prenderebbe tutto '
+                                 "l'inventario."}), 400
+
     if limit:
         if not _NOME_LIMIT_RE.match(limit):
             return jsonify({'error': 'Il filtro --limit contiene caratteri non ammessi'}), 400
@@ -268,6 +283,95 @@ def api_file():
         return jsonify({'error': 'Il percorso e\' una directory'}), 400
     except Exception as exc:
         return jsonify({'error': str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
+# Modifica di inventario e group_vars
+#
+# Sono gli unici file scrivibili dalla dashboard: quelli che cambiano a ogni
+# giro di laboratorio. I playbook e i ruoli restano di sola lettura.
+# ---------------------------------------------------------------------------
+def _riconvalida_inventario():
+    """Rilegge l'inventario con Ansible. Ritorna l'errore, o None se va bene.
+
+    E' il giudice vero: se ansible-inventory non riesce a caricare il file, non
+    ci riuscira' nemmeno ansible-playbook fra due minuti.
+    """
+    dati = inventario.carica(forza=True)
+    errore = dati.get('errore')
+    if not errore:
+        return None
+    # Quando ansible non e' installato l'errore c'e' sempre e non dipende dalla
+    # modifica: bloccare il salvataggio per questo vorrebbe dire non poter mai
+    # correggere l'inventario su una macchina non ancora preparata.
+    if 'non trovato nel PATH' in errore or 'timeout' in errore:
+        return None
+    return errore
+
+
+@app.route('/api/modificabili')
+def api_modificabili():
+    elenco = []
+    for rel in modifiche.elenco_modificabili(REPO_DIR):
+        percorso = os.path.join(REPO_DIR, rel)
+        try:
+            st = os.stat(percorso)
+            dimensione, modificato = st.st_size, st.st_mtime
+        except OSError:
+            dimensione, modificato = None, None
+        elenco.append({
+            'percorso': rel,
+            'dimensione': dimensione,
+            'modificato': modificato,
+            'backup': modifiche.elenco_backup(REPO_DIR, rel),
+        })
+    return jsonify({'file': elenco})
+
+
+@app.route('/api/salva', methods=['POST'])
+def api_salva():
+    dati = request.get_json(force=True, silent=True) or {}
+    rel = (dati.get('percorso') or '').strip()
+    contenuto = dati.get('contenuto')
+
+    if not isinstance(contenuto, str):
+        return jsonify({'error': "Manca il contenuto da salvare."}), 400
+
+    # Riscrivere l'inventario mentre un playbook lo sta leggendo e' il modo piu'
+    # rapido per ottenere un'esecuzione che nessuno riesce a spiegare.
+    if _job_state['status'] == 'running':
+        return jsonify({'error': "C'e' un job in esecuzione: aspetta che finisca "
+                                 'prima di modificare inventario o variabili.'}), 409
+
+    esito, errore = modifiche.salva(REPO_DIR, rel, contenuto, _riconvalida_inventario)
+    if errore:
+        return jsonify({'error': errore}), 400
+
+    # L'inventario e' cambiato: la prossima lettura dello stato deve ripartire
+    # da zero, altrimenti il cruscotto mostrerebbe host che non ci sono piu'.
+    raccoglitore.invalida()
+    return jsonify({'ok': True, 'invariato': esito['invariato'],
+                    'backup': esito['backup'],
+                    'backup_disponibili': modifiche.elenco_backup(REPO_DIR, rel)})
+
+
+@app.route('/api/ripristina', methods=['POST'])
+def api_ripristina():
+    dati = request.get_json(force=True, silent=True) or {}
+    rel = (dati.get('percorso') or '').strip()
+    nome = (dati.get('backup') or '').strip()
+
+    if _job_state['status'] == 'running':
+        return jsonify({'error': "C'e' un job in esecuzione: aspetta che finisca."}), 409
+
+    esito, errore = modifiche.ripristina(REPO_DIR, rel, nome, _riconvalida_inventario)
+    if errore:
+        return jsonify({'error': errore}), 400
+
+    raccoglitore.invalida()
+    return jsonify({'ok': True, 'invariato': esito['invariato'],
+                    'backup': esito['backup'],
+                    'backup_disponibili': modifiche.elenco_backup(REPO_DIR, rel)})
 
 
 # ---------------------------------------------------------------------------

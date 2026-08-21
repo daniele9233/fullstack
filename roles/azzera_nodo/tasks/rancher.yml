@@ -1,0 +1,29 @@
+---
+# Rancher e RKE2 hanno gia' un ruolo che li smonta bene: clean_node_state.
+# Sa che gli script ufficiali vanno lanciati prima della rimozione manuale, che
+# rke2-killall.sh va prima di rke2-uninstall.sh, e che /var/lib/rancher e' un
+# mountpoint da non cancellare. Riscriverlo qui sarebbe copiarlo peggio.
+#
+# clean_node_state_ports viene azzerato di proposito: quel ruolo fallisce se
+# trova la 9345 occupata, e in un azzeramento completo la porta puo' essere di
+# qualcosa che stiamo per togliere due task piu' sotto. Il controllo sulle porte
+# lo rifa' finale.yml, alla fine, quando ha senso.
+- name: Smonta Rancher e RKE2
+  include_role:
+    name: clean_node_state
+  vars:
+    clean_node_state_ports: []
+
+- name: Rimuovi kubectl, helm e i residui di Kubernetes
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ azzera_percorsi_rancher_extra }}"
+
+# /var/lib/rancher resta (e' il mountpoint), ma dentro non ci deve restare
+# niente: clean_node_state toglie agent/ e rke2/, non eventuali altri residui.
+- name: Svuota la directory dati di RKE2
+  include_tasks: svuota.yml
+  vars:
+    svuota_percorso: "{{ disk_mount_point | default('/var/lib/rancher') }}"
+  when: azzera_dati | bool

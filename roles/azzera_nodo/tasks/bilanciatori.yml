@@ -1,0 +1,86 @@
+---
+# keepalived, haproxy, nginx.
+#
+# keepalived per primo: e' lui che porta i VIP. Fermando prima nginx, keepalived
+# vede il controllo fallire, abbassa la priorita' e sposta il VIP sull'altro
+# nodo — un failover inutile proprio mentre stiamo smontando la macchina.
+
+- name: Ferma i servizi dei bilanciatori
+  systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop: "{{ azzera_servizi_bilanciatori }}"
+  failed_when: false
+
+# keepalived fermato di solito rilascia il VIP, ma se e' stato ucciso male
+# l'indirizzo resta appeso all'interfaccia. Da li' il nodo continua a
+# rispondere per un IP che non gli appartiene piu', e il bilanciatore vero
+# vede un duplicato sulla rete.
+- name: Rileva i VIP rimasti appesi alle interfacce
+  shell: |
+    set -o pipefail
+    for vip in {{ azzera_vip | join(' ') }}; do
+      ip -o -4 addr show | awk -v v="$vip" '$4 ~ "^"v"/" {print v" "$2" "$4}'
+    done
+  args:
+    executable: /bin/bash
+  vars:
+    azzera_vip: >-
+      {{ [vip_rancher_ip | default(''), vip_patroni_ip | default(''),
+          nfs_vip_ip | default('')] | select('!=', '') | list }}
+  register: azzera_vip_appesi
+  changed_when: false
+  failed_when: false
+
+- name: Togli i VIP rimasti appesi
+  command: "ip addr del {{ item.split()[2] }} dev {{ item.split()[1] }}"
+  loop: "{{ azzera_vip_appesi.stdout_lines | default([]) }}"
+  failed_when: false
+
+- name: Rimuovi pacchetti dei bilanciatori
+  apt:
+    name: "{{ azzera_pacchetti_bilanciatori }}"
+    state: absent
+    purge: true
+  failed_when: false
+  when: azzera_pacchetti | bool
+  register: apt_result
+  until: apt_result is succeeded or ('lock' not in apt_result.msg | default('') | lower)
+  retries: "{{ apt_lock_retries | default(60) }}"
+  delay: "{{ apt_lock_delay | default(5) }}"
+
+# I certificati stanno in /etc/nginx/cert e se ne vanno con la directory: sono
+# copie di quelli che stanno nel repository, non originali.
+- name: Rimuovi configurazioni dei bilanciatori
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ azzera_percorsi_bilanciatori }}"
+
+# keepalived e haproxy scrivono due parametri di rete in /etc/sysctl.conf (non
+# in un drop-in sotto /etc/sysctl.d): ip_nonlocal_bind, perche' nginx possa fare
+# il bind di un VIP che il nodo in quel momento non ha, e ip_forward. Su una
+# macchina che non fa piu' da bilanciatore sono permessi che non servono.
+- name: Togli i parametri di rete lasciati dai bilanciatori
+  sysctl:
+    name: "{{ item }}"
+    state: absent
+    sysctl_file: /etc/sysctl.conf
+    reload: false
+  loop:
+    - net.ipv4.ip_nonlocal_bind
+    - net.ipv4.ip_forward
+  failed_when: false
+
+# Toglierli dal file non cambia il valore gia' in uso nel kernel: "sysctl -p"
+# riapplica quello che nel file c'e' ancora, non azzera quello che e' sparito.
+# Senza questo il nodo continuerebbe a permettere il bind non locale fino al
+# primo riavvio.
+- name: Riporta a zero i valori attivi nel kernel
+  command: "sysctl -w {{ item }}=0"
+  loop:
+    - net.ipv4.ip_nonlocal_bind
+    - net.ipv4.ip_forward
+  failed_when: false
+  changed_when: true

@@ -621,6 +621,41 @@
           <div id="inv-variabili" class="p-4 text-[12px] text-fg-mute">Caricamento variabili…</div>
         </div>
 
+        <!-- ============== EDITOR ============== -->
+        <div class="card mb-4" id="editor-card">
+          <div class="px-6 py-4 border-b border-rule flex items-start justify-between gap-4 flex-wrap">
+            <div class="min-w-0">
+              <h2 class="text-[15px] font-semibold">Modifica</h2>
+              <p class="text-[12px] text-fg-mute mt-0.5">Si scrivono solo <span class="font-mono">inventory.ini</span> e i <span class="font-mono">group_vars</span>. Ogni salvataggio lascia una copia del file precedente, e se Ansible non riesce più a leggere l'inventario la modifica viene annullata da sola.</p>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <span class="text-[11px]" id="editor-stato"></span>
+              <button class="btn btn-ghost btn-sm" id="btn-editor-ricarica"><i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i>Rileggi dal disco</button>
+              <button class="btn btn-primary btn-sm" id="btn-editor-salva" disabled><i data-lucide="save" class="w-3.5 h-3.5"></i>Salva</button>
+            </div>
+          </div>
+
+          <div class="px-4 py-2 border-b border-rule flex gap-1.5 flex-wrap bg-ink-900" id="editor-tab"></div>
+
+          <div id="editor-errore" class="hidden px-6 py-3 border-b border-rule text-[12.5px]" style="background:rgba(226,85,85,.08); color:#f08c8c"></div>
+          <div id="editor-ok" class="hidden px-6 py-3 border-b border-rule text-[12.5px]" style="background:rgba(63,184,122,.08); color:#7dd9a4"></div>
+
+          <div class="p-4">
+            <textarea id="editor-testo" spellcheck="false" wrap="off"
+              class="w-full font-mono text-[12.5px] leading-[1.6] p-4 rounded-md"
+              style="background:#070a0f; border:1px solid #1f2733; color:#cdd6df; min-height:460px; resize:vertical; outline:none; white-space:pre; overflow-x:auto"></textarea>
+            <div class="flex items-center justify-between mt-2 text-[11px] text-fg-dim">
+              <span id="editor-info">—</span>
+              <span>Tab inserisce due spazi · Ctrl+S salva</span>
+            </div>
+          </div>
+
+          <div class="px-6 py-4 border-t border-rule">
+            <div class="section-label mb-2">Copie precedenti</div>
+            <div id="editor-backup" class="text-[12px] text-fg-mute">—</div>
+          </div>
+        </div>
+
         <button class="btn btn-ghost btn-sm" data-open-files="inventario"><i data-lucide="file-code-2" class="w-3.5 h-3.5"></i>Apri i file sorgente</button>
       </section>
 
@@ -753,12 +788,43 @@
         <div class="flex" style="min-height: calc(100vh - 64px);">
           <div class="flex-1 min-w-0 p-8">
             <h1 class="text-[26px] font-semibold leading-tight">Operazioni distruttive</h1>
-            <p class="text-fg-mute mt-1 mb-6 text-[14px]">Le tre cose in <span class="font-mono">fullstack</span> che cancellano dati o rompono i client. Ognuna chiede conferma scritta.</p>
+            <p class="text-fg-mute mt-1 mb-6 text-[14px]">Le operazioni che in <span class="font-mono">fullstack</span> cancellano dati o rompono i client. Ognuna chiede conferma scritta.</p>
 
             <div class="card p-5 mb-4 max-w-[680px]" data-limite-box>
               <label class="text-[12px] font-medium text-fg-mute">Limita a (facoltativo)</label>
               <select class="field mt-2 limite-sel"><option value="">tutti gli host del playbook</option></select>
-              <p class="text-[11px] text-fg-dim mt-2">Su un'operazione distruttiva conviene sempre restringere il campo a un host solo, e guardare che cosa succede prima di lanciare sugli altri.</p>
+              <p class="text-[11px] text-fg-dim mt-2">Su un'operazione distruttiva conviene sempre restringere il campo a un host solo, e guardare che cosa succede prima di lanciare sugli altri. Per <strong class="text-fg-mute">Azzera il nodo</strong> il filtro è obbligatorio: senza, l'operazione viene rifiutata.</p>
+            </div>
+
+            <!-- Azzeramento completo: la carta piu' grossa, in cima, con il bordo
+                 piu' acceso. E' quella che rimette in gioco un server intero. -->
+            <div class="card p-6 max-w-[680px] mb-4" style="border-color: rgba(226,85,85,.65); background: linear-gradient(135deg, rgba(226,85,85,.07), transparent 65%)">
+              <div class="flex items-start gap-4">
+                <div class="w-11 h-11 rounded-md flex items-center justify-center shrink-0" style="background:rgba(226,85,85,.14); border:1px solid rgba(226,85,85,.40)">
+                  <i data-lucide="bomb" class="w-5 h-5 text-bad"></i>
+                </div>
+                <div class="min-w-0">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <span class="font-semibold text-[15px]">Azzera il nodo &mdash; server come nuovo</span>
+                    <span class="badge badge-bad"><span class="dot"></span>serve il filtro</span>
+                  </div>
+                  <div class="text-[11.5px] font-mono text-fg-mute mt-1">playbooks/99-azzera.yml -e azzera_conferma=AZZERA</div>
+                  <p class="text-[12.5px] text-fg-mute mt-2">Per riusare gli stessi server in installazioni diverse. Toglie <strong class="text-fg">tutto quello che questo repository installa</strong>, qualunque ruolo il nodo abbia avuto:</p>
+                  <div class="flex flex-wrap gap-1.5 mt-3">
+                    <span class="badge badge-pend"><span class="dot"></span>Rancher · RKE2 · kubectl · helm</span>
+                    <span class="badge badge-pend"><span class="dot"></span>PostgreSQL · Patroni · etcd</span>
+                    <span class="badge badge-pend"><span class="dot"></span>GlusterFS · Ganesha · Pacemaker</span>
+                    <span class="badge badge-pend"><span class="dot"></span>nginx · haproxy · keepalived</span>
+                    <span class="badge badge-pend"><span class="dot"></span>Kafka · JDK Zulu</span>
+                  </div>
+                  <p class="text-[12.5px] text-fg-mute mt-3">Svuota anche i dati — PGDATA, i brick, la directory di Kafka — e toglie le righe che i ruoli hanno scritto in <span class="font-mono">/etc/hosts</span>. <strong class="text-fg">I dischi non li tocca</strong>: niente umount, niente mkfs, niente fstab. Restano montati e vuoti, pronti per l'installazione dopo.</p>
+                  <p class="text-[12px] text-fg-dim mt-2">Il control node è escluso a prescindere, e senza un filtro qui sotto l'operazione non parte.</p>
+                  <div class="mt-5 flex gap-2">
+                    <button class="btn btn-danger" data-conferma="azzera_nodo"><i data-lucide="bomb" class="w-4 h-4"></i>Azzera il nodo</button>
+                    <a href="#/cruscotto" class="btn btn-ghost"><i data-lucide="x" class="w-4 h-4"></i>Annulla</a>
+                  </div>
+                </div>
+              </div>
             </div>
 
             <div class="card p-6 max-w-[680px] mb-4" style="border-color: rgba(226,85,85,.35)">
@@ -979,6 +1045,7 @@ const AZIONI = {
   sintassi_tutto:        { nome:'Sintassi di site.yml',           tipo:'Controllo' },
   elenco_host:           { nome:'Grafo dell\'inventario',         tipo:'Controllo' },
 
+  azzera_nodo:                 { nome:'Azzera il nodo (tutto)',          tipo:'Distruttiva' },
   azzera_nodi:                 { nome:'Azzera i nodi RKE2',              tipo:'Distruttiva' },
   reinit_postgres:             { nome:'Reinizializza PostgreSQL',        tipo:'Distruttiva' },
   rigenera_certificati_kafka:  { nome:'Rigenera i certificati Kafka',    tipo:'Distruttiva' },
@@ -986,6 +1053,12 @@ const AZIONI = {
 
 /* Le tre conferme scritte: che cosa distruggono, e quale parola serve. */
 const CONFERME = {
+  azzera_nodo: {
+    titolo: 'Azzera completamente il nodo',
+    corpo: 'Toglie dal nodo <strong class="text-fg">tutto quello che questo repository installa</strong>: Rancher, RKE2, kubectl, helm, PostgreSQL, Patroni, etcd, GlusterFS, Ganesha, Pacemaker, Corosync, nginx, haproxy, keepalived, Kafka. Con i dati: PGDATA, i brick e la directory dati di Kafka vengono svuotati. I dischi non vengono toccati — restano montati e vuoti.',
+    parola: 'AZZERA',
+    pulsante: 'Azzera il nodo',
+  },
   azzera_nodi: {
     titolo: 'Azzera lo stato dei nodi RKE2',
     corpo: 'Esegue <span class="font-mono text-fg">clean_node_state</span> su masters, new_managers e workers: su un nodo sano <strong class="text-fg">smonta RKE2</strong> e cancella lo stato del cluster locale. Ha senso solo ripartendo da capo su macchine già usate.',
@@ -1102,7 +1175,7 @@ function rotta() {
   if (chiave === 'cruscotto')  { disegnaJob(); caricaSalute(); }
   if (chiave === 'stack')      caricaStack();
   if (chiave === 'registro')   aggiornaTerminali();
-  if (chiave === 'inventario') caricaInventario();
+  if (chiave === 'inventario') { caricaInventario(); caricaModificabili(); }
   if (chiave === 'ssh')        disegnaSsh();
   if (chiave === 'readme')     caricaDoc($('#doc-readme'));
   if (chiave === 'kafka')      caricaDoc($('#doc-kafka'));
@@ -1845,6 +1918,215 @@ function disegnaInventario(d) {
       : '<div class="text-fg-mute">Variabili non disponibili: ansible-inventory non è raggiungibile, quindi group_vars non è stato risolto.</div>';
   }
 }
+
+/* ============================================================
+   EDITOR DI INVENTARIO E VARIABILI
+
+   Si scrivono solo inventory.ini e i group_vars: sono i file che cambiano a
+   ogni giro di laboratorio. Il salvataggio passa da /api/salva, che fa la
+   copia di sicurezza, scrive, e se Ansible non riesce piu' a rileggere
+   l'inventario rimette indietro il file da solo.
+   ============================================================ */
+const editor = { file: [], corrente: null, originale: '', sporco: false };
+
+async function caricaModificabili() {
+  try {
+    const r = await fetch(API + '/api/modificabili', { cache:'no-store' });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+    editor.file = d.file || [];
+    disegnaTabEditor();
+    if (editor.file.length && !editor.corrente) await apriNellEditor(editor.file[0].percorso);
+    else if (editor.corrente) disegnaBackup();
+  } catch (e) {
+    const box = $('#editor-tab');
+    if (box) box.innerHTML = `<span class="text-[12px] text-bad px-2 py-1">Elenco file non disponibile: ${esc(e.message)}</span>`;
+  }
+}
+
+function disegnaTabEditor() {
+  const box = $('#editor-tab');
+  if (!box) return;
+  box.innerHTML = editor.file.map(f =>
+    `<button class="btn btn-ghost btn-sm${f.percorso === editor.corrente ? ' fv-on' : ''}" data-editor-file="${esc(f.percorso)}">${esc(f.percorso.split('/').pop())}</button>`
+  ).join('') || '<span class="text-[12px] text-fg-mute px-2 py-1">Nessun file modificabile.</span>';
+}
+
+async function apriNellEditor(percorso, forzaDisco) {
+  if (editor.sporco && percorso !== editor.corrente &&
+      !confirm('Ci sono modifiche non salvate: le perdi cambiando file. Procedo?')) return;
+
+  editor.corrente = percorso;
+  const area = $('#editor-testo');
+  area.value = 'Caricamento…';
+  area.disabled = true;
+  nascondiMessaggiEditor();
+  disegnaTabEditor();
+
+  // La cache del visualizzatore file non va usata qui: dopo un salvataggio o
+  // un ripristino il contenuto sul disco e' cambiato.
+  if (forzaDisco) delete cacheFile[percorso];
+  let testo;
+  try {
+    const r = await fetch(`/api/file?path=${encodeURIComponent(percorso)}`, { cache:'no-store' });
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    testo = j.content;
+    cacheFile[percorso] = testo;
+  } catch (e) {
+    area.value = '';
+    area.disabled = false;
+    mostraErroreEditor('Lettura fallita: ' + e.message);
+    return;
+  }
+
+  area.value = testo;
+  area.disabled = false;
+  editor.originale = testo;
+  segnaEditor(false);
+  disegnaBackup();
+}
+
+function segnaEditor(sporco) {
+  editor.sporco = sporco;
+  const stato = $('#editor-stato');
+  const salva = $('#btn-editor-salva');
+  if (salva) salva.disabled = !sporco;
+  if (stato) {
+    stato.textContent = sporco ? 'modifiche non salvate' : (editor.corrente ? 'allineato al disco' : '');
+    stato.className = sporco ? 'text-[11px] text-warn' : 'text-[11px] text-fg-dim';
+  }
+  const area = $('#editor-testo');
+  const info = $('#editor-info');
+  if (info && area) {
+    const righe = area.value ? area.value.split('\n').length : 0;
+    info.textContent = `${esc(editor.corrente || '—')} · ${righe} righe`;
+  }
+}
+
+function nascondiMessaggiEditor() {
+  $('#editor-errore')?.classList.add('hidden');
+  $('#editor-ok')?.classList.add('hidden');
+}
+function mostraErroreEditor(msg) {
+  const box = $('#editor-errore');
+  if (!box) return;
+  box.innerHTML = `<div class="font-medium mb-1">Non salvato</div><pre class="whitespace-pre-wrap font-mono text-[11.5px] m-0">${esc(msg)}</pre>`;
+  box.classList.remove('hidden');
+  $('#editor-ok')?.classList.add('hidden');
+}
+function mostraOkEditor(msg) {
+  const box = $('#editor-ok');
+  if (!box) return;
+  box.textContent = msg;
+  box.classList.remove('hidden');
+  $('#editor-errore')?.classList.add('hidden');
+}
+
+function disegnaBackup() {
+  const box = $('#editor-backup');
+  if (!box) return;
+  const scheda = editor.file.find(f => f.percorso === editor.corrente);
+  const copie = (scheda && scheda.backup) || [];
+  if (!copie.length) {
+    box.innerHTML = '<span class="text-fg-dim">Nessuna copia: viene creata al primo salvataggio.</span>';
+    return;
+  }
+  box.innerHTML = '<div class="border border-rule rounded-md overflow-hidden">' + copie.map(b => {
+    const quando = new Date(b.quando * 1000).toLocaleString('it-IT');
+    return `<div class="flex items-center justify-between gap-3 px-3 py-2 border-b border-rule last:border-0">
+      <span class="font-mono text-[11.5px] text-fg-mute truncate">${esc(quando)} · ${(b.dimensione/1024).toFixed(1)} KB</span>
+      <button class="btn btn-ghost btn-sm shrink-0" data-ripristina="${esc(b.nome)}"><i data-lucide="undo-2" class="w-3.5 h-3.5"></i>Ripristina</button>
+    </div>`;
+  }).join('') + '</div>';
+  icone();
+}
+
+async function salvaEditor() {
+  if (!editor.corrente || !editor.sporco) return;
+  const salva = $('#btn-editor-salva');
+  salva.disabled = true;
+  nascondiMessaggiEditor();
+  try {
+    const r = await fetch(API + '/api/salva', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ percorso: editor.corrente, contenuto: $('#editor-testo').value }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+    editor.originale = $('#editor-testo').value;
+    cacheFile[editor.corrente] = editor.originale;
+    segnaEditor(false);
+    mostraOkEditor(d.invariato ? 'Nessuna modifica da salvare.'
+                               : `Salvato. Copia del file precedente: ${d.backup}`);
+    const scheda = editor.file.find(f => f.percorso === editor.corrente);
+    if (scheda) scheda.backup = d.backup_disponibili || scheda.backup;
+    disegnaBackup();
+    // L'inventario e' cambiato: cruscotto, filtri e pagina SSH vanno rifatti.
+    await caricaInventario(true);
+    caricaSalute(true);
+  } catch (e) {
+    mostraErroreEditor(e.message);
+    salva.disabled = false;
+  }
+}
+
+async function ripristinaBackup(nome) {
+  if (!editor.corrente) return;
+  if (!confirm(`Rimettere al posto di ${editor.corrente} la copia ${nome}?`)) return;
+  nascondiMessaggiEditor();
+  try {
+    const r = await fetch(API + '/api/ripristina', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ percorso: editor.corrente, backup: nome }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+    const scheda = editor.file.find(f => f.percorso === editor.corrente);
+    if (scheda) scheda.backup = d.backup_disponibili || scheda.backup;
+    await apriNellEditor(editor.corrente, true);
+    mostraOkEditor('Copia ripristinata.');
+    await caricaInventario(true);
+    caricaSalute(true);
+  } catch (e) {
+    mostraErroreEditor(e.message);
+  }
+}
+
+$('#editor-testo')?.addEventListener('input', () => {
+  segnaEditor($('#editor-testo').value !== editor.originale);
+});
+
+// Tab dentro alla textarea deve indentare, non saltare al pulsante dopo: qui
+// si scrive YAML, dove l'indentazione e' la sintassi.
+$('#editor-testo')?.addEventListener('keydown', (e) => {
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    const a = e.target, i = a.selectionStart, f = a.selectionEnd;
+    a.value = a.value.slice(0, i) + '  ' + a.value.slice(f);
+    a.selectionStart = a.selectionEnd = i + 2;
+    segnaEditor(a.value !== editor.originale);
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); salvaEditor(); }
+});
+
+$('#btn-editor-salva')?.addEventListener('click', salvaEditor);
+$('#btn-editor-ricarica')?.addEventListener('click', () => {
+  if (editor.corrente) apriNellEditor(editor.corrente, true);
+});
+
+document.addEventListener('click', (e) => {
+  const tab = e.target.closest('[data-editor-file]');
+  if (tab) { apriNellEditor(tab.dataset.editorFile, true); return; }
+  const rip = e.target.closest('[data-ripristina]');
+  if (rip) { ripristinaBackup(rip.dataset.ripristina); return; }
+});
+
+// Chiudere la pagina con modifiche non salvate e' un modo silenzioso di
+// perderle: il browser chiede conferma.
+window.addEventListener('beforeunload', (e) => {
+  if (editor.sporco) { e.preventDefault(); e.returnValue = ''; }
+});
 
 function riempiLimiti(d) {
   const opzioni = ['<option value="">tutti gli host del playbook</option>'];
