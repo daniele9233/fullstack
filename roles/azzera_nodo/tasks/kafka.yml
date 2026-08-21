@@ -62,3 +62,36 @@
     path: "{{ kafka_jvm_base_dir | default('/usr/lib/jvm') }}/{{ kafka_zulu_release }}"
     state: absent
   when: kafka_zulu_release is defined
+
+# QUI SI ROMPE JAVA PER TUTTI SE NON SI FA ATTENZIONE.
+#
+# kafka_cluster registra la propria JVM in update-alternatives e la rende la
+# java di sistema (kafka_java_set_default, acceso di default). Quella
+# registrazione e' di MACCHINA, non dell'utente kafka: /usr/bin/java punta a
+# /etc/alternatives/java, che punta dentro alla directory appena cancellata.
+#
+# Cancellare la directory e lasciare li' il collegamento significa che "java",
+# lanciato da chiunque su quel nodo, risponde "command not found" — e il nodo
+# doveva essere pulito, non rotto.
+#
+# Non basta togliere la voce morta dall'elenco: update-alternatives lo fa gia'
+# da solo alla prima lettura, ma il gruppo resta in modo MANUALE puntato al
+# nulla e il collegamento non si ripara. Ci vuole --auto, che sceglie la
+# migliore JVM rimasta (per esempio una openjdk installata con apt, che questo
+# ruolo non tocca) oppure toglie il collegamento se non ne resta nessuna.
+- name: Verifica se il collegamento java e' rimasto appeso nel vuoto
+  shell: >-
+    if [ -L /etc/alternatives/java ] && [ ! -e /etc/alternatives/java ];
+    then echo appeso; else echo ok; fi
+  args:
+    executable: /bin/bash
+  register: azzera_java_link
+  changed_when: false
+  failed_when: false
+
+- name: Rimetti a posto il collegamento java
+  command: update-alternatives --auto java
+  when: azzera_java_link.stdout | default('ok') | trim == 'appeso'
+  register: azzera_java_auto
+  failed_when: false
+  changed_when: azzera_java_auto.rc | default(1) == 0
