@@ -34,10 +34,16 @@
     - kafka_java_install_method == 'zulu'
     - not (kafka_zulu_bin.stat.exists | default(false))
   block:
+    # root:root, non kafka: il processo Kafka deve poter LEGGERE ed ESEGUIRE la
+    # JVM, non riscriverla. Un servizio esposto sulla rete che puo' modificare
+    # i binari che eseguira' al prossimo riavvio e' un appiglio di persistenza
+    # regalato a chi lo compromette.
     - name: "Crea {{ kafka_jvm_base_dir }}"
       file:
         path: "{{ kafka_jvm_base_dir }}"
         state: directory
+        owner: root
+        group: root
         mode: "0755"
 
     - name: Copia il tarball della Zulu dal controller
@@ -81,8 +87,9 @@
         group: root
         creates: "{{ kafka_java_home }}/bin/java"
 
-    # Non servono permessi speciali per l'utente kafka: /usr/lib/jvm e'
-    # leggibile da tutti, ed e' quanto basta per eseguire la JVM.
+    # I file estratti restano di root (vedi owner/group qui sopra e
+    # nell'unarchive): 0755 basta perche' l'utente kafka legga ed esegua la
+    # JVM, e gli impedisce di modificarla.
     - name: Rimuovi il tarball della Zulu
       file:
         path: "/tmp/{{ kafka_zulu_release }}.tar.gz"

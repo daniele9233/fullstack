@@ -1,0 +1,99 @@
+---
+# Toglie le JVM che non serve piu' a nessuno: quelle di versioni precedenti, e
+# quelle rimaste in /usr/lib/jvm da quando il ruolo le metteva li'.
+#
+# PERCHE' QUI E NON IN java.yml. Quando java.yml gira, i broker stanno ancora
+# eseguendo la JVM vecchia: il riavvio a rotazione che li sposta su quella
+# nuova avviene dopo, in servizio.yml. Cancellare li' significherebbe togliere
+# il pavimento da sotto tre processi vivi — sopravvivono, perche' i file gia'
+# aperti restano validi finche' il processo non esce, ma qualunque classe
+# caricata pigramente da un jar sostituito dopo fa saltare la JVM.
+#
+# Qui invece siamo dopo: chi doveva riavviare ha riavviato, e ogni nodo sta
+# girando su kafka_java_home. Tutto il resto e' zavorra.
+
+# --- Zulu di versioni precedenti dentro a kafka_jvm_base_dir ----------------
+
+- name: Elenca le Zulu presenti in {{ kafka_jvm_base_dir }}
+  find:
+    paths: "{{ kafka_jvm_base_dir }}"
+    file_type: directory
+    patterns: "zulu*"
+    recurse: false
+  register: kafka_zulu_presenti
+  when:
+    - kafka_java_pota_vecchie | bool
+    - kafka_java_install_method == 'zulu'
+
+- name: Togli le Zulu che non sono piu' quella in uso
+  file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ kafka_zulu_presenti.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
+  when: item.path != kafka_java_home
+
+# --- Residui in /usr/lib/jvm (dove il ruolo metteva la Zulu prima) ----------
+#
+# Non basta cancellare la directory: se quella Zulu era anche la java di
+# sistema (kafka_java_set_default, che era acceso di default), /usr/bin/java
+# punta li' dentro e resterebbe appeso nel vuoto, lasciando la macchina senza
+# java per QUALUNQUE utente. La registrazione va tolta prima, e il collegamento
+# rimesso a posto dopo.
+
+- name: Elenca le Zulu rimaste in {{ kafka_jvm_legacy_dir }}
+  find:
+    paths: "{{ kafka_jvm_legacy_dir }}"
+    file_type: directory
+    patterns: "zulu*"
+    recurse: false
+  register: kafka_zulu_legacy
+  when: kafka_java_pota_vecchie | bool
+
+- name: Togli dalle alternative le Zulu di /usr/lib/jvm
+  command: "update-alternatives --remove java {{ item.path }}/bin/java"
+  loop: "{{ kafka_zulu_legacy.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: kafka_alt_rimosse
+  failed_when: false
+  changed_when: kafka_alt_rimosse.rc | default(1) == 0
+
+- name: Togli le Zulu rimaste in {{ kafka_jvm_legacy_dir }}
+  file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ kafka_zulu_legacy.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
+
+# Rete di sicurezza: --remove qui sopra copre le Zulu, ma un nodo puo' arrivare
+# qui gia' con il collegamento rotto — per esempio perche' qualcuno aveva
+# cancellato a mano una vecchia JVM. --auto sceglie la migliore rimasta (una
+# openjdk da apt, se c'e') o toglie il collegamento se non ne resta nessuna.
+- name: Verifica se /usr/bin/java e' rimasto appeso nel vuoto
+  shell: >-
+    if [ -L /etc/alternatives/java ] && [ ! -e /etc/alternatives/java ];
+    then echo appeso; else echo ok; fi
+  args:
+    executable: /bin/bash
+  register: kafka_java_link
+  changed_when: false
+  failed_when: false
+
+- name: Rimetti a posto /usr/bin/java
+  command: update-alternatives --auto java
+  when: kafka_java_link.stdout | default('ok') | trim == 'appeso'
+  register: kafka_java_auto
+  failed_when: false
+  changed_when: kafka_java_auto.rc | default(1) == 0
+
+- name: Riepilogo della potatura
+  debug:
+    msg: >-
+      {{ inventory_hostname }}: JVM in uso {{ kafka_java_home }}.
+      Rimosse {{ (kafka_zulu_presenti.files | default([])
+                  | rejectattr('path', 'eq', kafka_java_home) | list | length) }}
+      versioni precedenti e {{ kafka_zulu_legacy.files | default([]) | length }}
+      copie da {{ kafka_jvm_legacy_dir }}.

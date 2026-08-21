@@ -83,18 +83,54 @@ kafka_java_install_method: "zulu"
 kafka_zulu_release: "zulu17.52.17-ca-jdk17.0.12-linux_x64"
 kafka_zulu_url: "https://cdn.azul.com/zulu/bin/{{ kafka_zulu_release }}.tar.gz"
 kafka_zulu_local_tarball: ""
-kafka_jvm_base_dir: "/usr/lib/jvm"
+# La Zulu sta DENTRO all'albero di Kafka, non in /usr/lib/jvm: e' roba di
+# questo servizio e non della macchina, se ne va insieme a kafka_home, e non
+# puo' essere scambiata per una JVM di sistema da chi guarda il nodo.
+#
+# IL PERCORSO CONTIENE LA VERSIONE, E NON E' ESTETICA. E' l'unico rilevatore di
+# aggiornamento che il ruolo ha: kafka_java_home cambia insieme a
+# kafka_zulu_release, quindi lo stat su bin/java non trova niente e la Zulu
+# nuova viene scaricata, la unit systemd cambia e i nodi si riavviano a
+# rotazione. Con un percorso FISSO (.../jdk e basta) lo stat troverebbe sempre
+# una java gia' li', alzare kafka_zulu_release non farebbe piu' niente e il
+# playbook direbbe "gia' tutto a posto" — lo stesso inganno che
+# .ansible_kafka_version evita per la distribuzione di Kafka.
+kafka_jvm_base_dir: "{{ kafka_home }}/jdk"
+
+# Dove il ruolo METTEVA la Zulu prima. Serve solo alla migrazione: i nodi gia'
+# installati hanno li' la vecchia copia e la sua registrazione in
+# update-alternatives, e vanno ripuliti (vedi java_potatura.yml).
+kafka_jvm_legacy_dir: "/usr/lib/jvm"
+
+# Toglie le Zulu di versioni precedenti rimaste in kafka_jvm_base_dir. La
+# potatura gira DOPO il riavvio a rotazione: prima, i broker starebbero ancora
+# girando sulla JVM che si sta cancellando.
+kafka_java_pota_vecchie: true
+
 kafka_apt_java_package: "openjdk-17-jre-headless"
+# Con apt la JVM e' un pacchetto e sta dove decide apt: qui dentro non ci
+# entra, e il percorso e' stabile fra gli aggiornamenti di versione minore.
 kafka_apt_java_home: "/usr/lib/jvm/java-17-openjdk-amd64"
 kafka_java_home: >-
   {{ (kafka_jvm_base_dir ~ '/' ~ kafka_zulu_release)
      if kafka_java_install_method == 'zulu'
      else kafka_apt_java_home }}
 
-# update-alternatives: rende questa JVM la java di sistema. Kafka non ne ha
-# bisogno (JAVA_HOME e' scritto nel service systemd), serve solo a chi lancia i
-# comandi a mano.
-kafka_java_set_default: true
+# update-alternatives: renderebbe questa JVM la java DI SISTEMA, cioe'
+# /usr/bin/java per ogni utente della macchina, e per giunta in modo manuale —
+# nemmeno un aggiornamento apt se la riprenderebbe.
+#
+# Spento, adesso che la Zulu sta dentro a kafka_home: puntare /usr/bin/java
+# dentro alla directory di un'applicazione e' il contrario di confinarla, e
+# basta rimuovere quella directory per lasciare l'intera macchina senza java.
+# Kafka non ne ha comunque bisogno: JAVA_HOME e' scritto nella unit systemd.
+#
+# Chi lancia i comandi a mano prende JAVA_HOME dalla stessa fonte, come fa
+# VERIFICA-KAFKA:
+#   export JAVA_HOME=$(grep -oP 'JAVA_HOME=\K.*' /etc/systemd/system/kafka.service)
+#
+# Per tornare al comportamento di prima: -e kafka_java_set_default=true
+kafka_java_set_default: false
 
 # Heap della JVM. 4G presuppone gli 8 GB della guida: su un nodo da 4 GB
 # ABBASSALO (-Xmx2G -Xms2G), altrimenti il kernel uccide il broker.

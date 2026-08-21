@@ -53,15 +53,36 @@
   failed_when: false
   when: azzera_pacchetti | bool
 
-# Il JDK Zulu che il ruolo scompatta sotto /usr/lib/jvm non e' un pacchetto e
-# non se ne va da solo. Quello installato con apt (kafka_java_install_method
-# uguale ad apt) resta: e' un pacchetto normale, e potrebbe servire ad altro
-# sulla macchina.
-- name: Rimuovi il JDK Zulu scompattato dal ruolo
+# La Zulu non e' un pacchetto e non se ne va da sola. Da quando sta dentro a
+# kafka_home (/opt/kafka/jdk/<release>) se n'e' andata con la rimozione qui
+# sopra; ma i nodi installati prima del cambio ce l'hanno ancora in
+# /usr/lib/jvm, e li' nessuno la tocca.
+#
+# La Zulu installata con apt (kafka_java_install_method uguale ad apt) NON si
+# tocca: e' un pacchetto normale e potrebbe servire ad altro sulla macchina.
+- name: Elenca le Zulu rimaste in /usr/lib/jvm da installazioni precedenti
+  find:
+    paths: /usr/lib/jvm
+    file_type: directory
+    patterns: "zulu*"
+    recurse: false
+  register: azzera_zulu_legacy
+
+- name: Togli dalle alternative le Zulu di /usr/lib/jvm
+  command: "update-alternatives --remove java {{ item.path }}/bin/java"
+  loop: "{{ azzera_zulu_legacy.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
+  failed_when: false
+  changed_when: false
+
+- name: Rimuovi le Zulu rimaste in /usr/lib/jvm
   file:
-    path: "{{ kafka_jvm_base_dir | default('/usr/lib/jvm') }}/{{ kafka_zulu_release }}"
+    path: "{{ item.path }}"
     state: absent
-  when: kafka_zulu_release is defined
+  loop: "{{ azzera_zulu_legacy.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
 
 # QUI SI ROMPE JAVA PER TUTTI SE NON SI FA ATTENZIONE.
 #

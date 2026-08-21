@@ -66,6 +66,11 @@
 - name: Avvio del cluster
   import_tasks: servizio.yml
 
+# Dopo il riavvio a rotazione, non prima: finche' i broker non sono ripartiti
+# stanno ancora eseguendo la JVM che qui si cancella.
+- name: Potatura delle JVM non piu' in uso
+  import_tasks: java_potatura.yml
+
 - name: Verifica
   import_tasks: verifica.yml
 
