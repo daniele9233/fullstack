@@ -494,5 +494,38 @@ def api_cert():
     })
 
 
+def _porta():
+    """Porta di ascolto: 8080, o quella in DASHBOARD_PORT.
+
+    Serve quando la 8080 e' gia' occupata da qualcos'altro sul control node
+    (spesso da un'altra copia di questa stessa dashboard rimasta accesa).
+    """
+    grezza = os.environ.get('DASHBOARD_PORT', '').strip()
+    if not grezza:
+        return 8080
+    try:
+        porta = int(grezza)
+    except ValueError:
+        raise SystemExit(f"DASHBOARD_PORT='{grezza}' non e' un numero.")
+    if not 1 <= porta <= 65535:
+        raise SystemExit(f'DASHBOARD_PORT={porta} fuori intervallo (1-65535).')
+    return porta
+
+
 if __name__ == '__main__':
-    app.run(host='127.0.0.1', port=8080, debug=False, threaded=True)
+    # L'ascolto sta su localhost perche' la dashboard NON ha autenticazione e
+    # lancia playbook: chi la apre puo' installare e distruggere. Da un'altra
+    # macchina ci si arriva con un tunnel SSH, non aprendo la porta.
+    #
+    # DASHBOARD_HOST esiste per chi ha una ragione precisa per cambiarla — una
+    # rete di gestione isolata, un reverse proxy che autentica davanti. Se il
+    # valore non e' di loopback la dashboard lo dice a chiare lettere e parte
+    # lo stesso: la decisione resta di chi la avvia.
+    host = os.environ.get('DASHBOARD_HOST', '').strip() or '127.0.0.1'
+    porta = _porta()
+    if host not in ('127.0.0.1', 'localhost', '::1'):
+        print(f'\n  ATTENZIONE: ascolto su {host}:{porta}, non su localhost.')
+        print('  La dashboard non ha autenticazione e lancia playbook:')
+        print('  chiunque raggiunga questa porta puo' + "'" + ' installare e distruggere.')
+        print('  Mettila dietro a un tunnel SSH o a un proxy che autentichi.\n')
+    app.run(host=host, port=porta, debug=False, threaded=True)

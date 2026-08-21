@@ -5,8 +5,8 @@
 #   sudo systemctl enable --now fullstack-dashboard
 #   journalctl -u fullstack-dashboard -f
 #
-# Adatta User, WorkingDirectory e, se Ansible sta in un virtualenv,
-# togli il commento a ANSIBLE_VENV.
+# Adatta User e WorkingDirectory. Togli il commento a ANSIBLE_VENV se Ansible
+# sta in un virtualenv, e a DASHBOARD_PORT se la 8080 e' gia' occupata.
 
 [Unit]
 Description=Dashboard Ansible fullstack
@@ -18,6 +18,7 @@ Type=simple
 User=root
 WorkingDirectory=/root/fullstack/dashboard
 #Environment=ANSIBLE_VENV=/root/ansible-env
+#Environment=DASHBOARD_PORT=8081
 ExecStart=/usr/bin/env python3 /root/fullstack/dashboard/app.py
 Restart=on-failure
 RestartSec=5
