@@ -1,0 +1,29 @@
+LIBRERIE IN LOCALE
+
+La pagina usa tre librerie che di norma arrivano da una CDN:
+
+  Tailwind   https://cdn.tailwindcss.com
+  Lucide     https://unpkg.com/lucide@latest/dist/umd/lucide.js
+  Chart.js   https://cdn.jsdelivr.net/npm/chart.js
+
+Su una rete senza uscita verso Internet non arrivano, e la dashboard resta
+senza tema e senza icone: continua a funzionare — pulsanti, terminale, sonde —
+ma sembra rotta, e una striscia in fondo alla pagina lo dice.
+
+Per risolvere, scarica i tre file da una macchina che ha Internet e mettili
+QUI DENTRO con questi nomi esatti:
+
+  tailwind.js
+  lucide.js
+  chart.js
+
+Al prossimo caricamento la pagina li prende da /static/vendor/ e non tocca piu'
+la CDN. Il controllo lo fa app.py all'avvio della richiesta, quindi non serve
+riavviare niente: basta ricaricare.
+
+  curl -o tailwind.js https://cdn.tailwindcss.com
+  curl -o lucide.js   https://unpkg.com/lucide@latest/dist/umd/lucide.js
+  curl -o chart.js    https://cdn.jsdelivr.net/npm/chart.js
+
+Restano fuori i font (Space Grotesk e JetBrains Mono): senza CDN il browser
+ripiega sui font di sistema, che vanno benissimo.

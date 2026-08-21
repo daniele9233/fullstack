@@ -1,0 +1,26 @@
+# Unit di esempio per tenere la dashboard sempre accesa sul control node.
+#
+#   sudo cp dashboard/fullstack-dashboard.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now fullstack-dashboard
+#   journalctl -u fullstack-dashboard -f
+#
+# Adatta User, WorkingDirectory e, se Ansible sta in un virtualenv,
+# togli il commento a ANSIBLE_VENV.
+
+[Unit]
+Description=Dashboard Ansible fullstack
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/fullstack/dashboard
+#Environment=ANSIBLE_VENV=/root/ansible-env
+ExecStart=/usr/bin/env python3 /root/fullstack/dashboard/app.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
