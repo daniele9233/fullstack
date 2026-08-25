@@ -41,7 +41,7 @@
 - name: Verifica che i servizi non ci siano piu'
   shell: >-
     systemctl list-units --all --type=service --no-legend
-    | grep -iE 'rke2|rancher|patroni|etcd|postgres|gluster|ganesha|corosync|pacemaker|pcsd|haproxy|keepalived|nginx|kafka'
+    | grep -iE 'rke2|rancher|patroni|etcd|postgres|gluster|ganesha|corosync|pacemaker|pcsd|haproxy|keepalived|nginx|kafka|elasticsearch'
     | grep -v 'not-found'
     || true
   args:
@@ -68,6 +68,7 @@
     - /etc/ganesha
     - /etc/corosync
     - "{{ kafka_home | default('/opt/kafka') }}/bin"
+    - /etc/elasticsearch
   register: azzera_dir_rimaste
 
 - name: Riepilogo dell'azzeramento
@@ -107,8 +108,8 @@
 
       Dati cancellati: {{ azzera_dati }} · Pacchetti rimossi: {{ azzera_pacchetti }}
       {% if not azzera_dati %}
-      ATTENZIONE: azzera_dati e' false. PGDATA, i brick e i dati Kafka sono
-      ancora sul disco: il nodo non e' vergine.
+      ATTENZIONE: azzera_dati e' false. PGDATA, i brick, i dati Kafka e gli
+      indici Elasticsearch sono ancora sul disco: il nodo non e' vergine.
       {% endif %}
 
 - name: Riavvia il nodo

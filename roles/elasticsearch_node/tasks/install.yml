@@ -1,0 +1,306 @@
+---
+# Il pacchetto deb ufficiale di Elastic. Porta con se' la propria JVM
+# (/usr/share/elasticsearch/jdk), quindi qui non serve installare Java: e' la
+# differenza principale rispetto al ruolo di Kafka.
+#
+# Due provenienze possibili:
+#   - repo apt artifacts.elastic.co (default)
+#   - file .deb copiato dal controller, per reti chiuse (es_deb_local_path)
+
+- name: Installa i pacchetti di appoggio
+  apt:
+    name: "{{ es_utility_packages }}"
+    state: present
+    update_cache: yes
+  # Riprova SOLO se dpkg e' occupato da un altro processo (vedi apt_lock_retries
+  # in group_vars/all.yml). Qualsiasi altro errore ferma subito il task: senza
+  # questa condizione un pacchetto inesistente verrebbe ritentato 60 volte
+  # nascondendo il messaggio vero per cinque minuti.
+  register: apt_result
+  until: apt_result is succeeded or ('lock' not in apt_result.msg | default('') | lower)
+  retries: "{{ apt_lock_retries | default(60) }}"
+  delay: "{{ apt_lock_delay | default(5) }}"
+
+# --- Repository Elastic -----------------------------------------------------
+# Salta tutto se il .deb arriva dal controller: su rete chiusa aggiungere un
+# repo irraggiungibile farebbe fallire ogni "apt update" successivo, anche
+# quelli che non c'entrano con Elasticsearch.
+
+- name: Repository apt di Elastic
+  when: es_deb_local_path | length == 0
+  block:
+    - name: Verifica se la chiave del repo Elastic e' gia' installata
+      stat:
+        path: "{{ es_apt_keyring }}"
+      register: es_keyring
+
+    - name: Copia la chiave GPG di Elastic dal controller
+      copy:
+        src: "{{ es_apt_key_local_path }}"
+        dest: /tmp/GPG-KEY-elasticsearch
+        mode: "0644"
+      when:
+        - not es_keyring.stat.exists
+        - es_apt_key_local_path | length > 0
+
+    - name: Scarica la chiave GPG di Elastic
+      get_url:
+        url: "{{ es_apt_key_url }}"
+        dest: /tmp/GPG-KEY-elasticsearch
+        mode: "0644"
+        timeout: 60
+      when:
+        - not es_keyring.stat.exists
+        - es_apt_key_local_path | length == 0
+
+    # dearmor: la chiave pubblicata e' in armatura ASCII, mentre signed-by
+    # vuole un portachiavi binario. Metterci il file cosi' com'e' fa fallire
+    # "apt update" con "The following signatures couldn't be verified".
+    - name: Converti la chiave in portachiavi binario
+      command: >-
+        gpg --batch --yes --dearmor
+        -o {{ es_apt_keyring }} /tmp/GPG-KEY-elasticsearch
+      when: not es_keyring.stat.exists
+
+    - name: Proteggi il portachiavi
+      file:
+        path: "{{ es_apt_keyring }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Rimuovi la chiave in armatura ASCII
+      file:
+        path: /tmp/GPG-KEY-elasticsearch
+        state: absent
+
+    # signed-by esplicito e non apt-key: apt-key e' deprecato e la chiave
+    # finirebbe a validare QUALSIASI repository configurato sulla macchina.
+    - name: "Aggiungi il repository Elastic {{ es_major }}.x"
+      apt_repository:
+        repo: "deb [signed-by={{ es_apt_keyring }}] {{ es_apt_repo_url }} stable main"
+        filename: "{{ es_apt_repo_file }}"
+        state: present
+        update_cache: yes
+      register: apt_result
+      until: apt_result is succeeded or ('lock' not in apt_result.msg | default('') | lower)
+      retries: "{{ apt_lock_retries | default(60) }}"
+      delay: "{{ apt_lock_delay | default(5) }}"
+
+# --- Versione ---------------------------------------------------------------
+# Il repo Elastic tiene anche le versioni vecchie, quindi un pin resta valido
+# nel tempo; un errore di battitura no. La verifica sta PRIMA dell'installazione
+# per dire subito quali versioni ci sono davvero, invece di lasciare ad apt un
+# generico "version not found".
+
+- name: Leggi le versioni di Elasticsearch disponibili nel repo
+  shell: >-
+    set -o pipefail;
+    apt-cache madison {{ es_package }} | awk -F'|' '{gsub(/ /, "", $2); print $2}'
+  args:
+    executable: /bin/bash
+  register: es_available
+  changed_when: false
+  failed_when: false
+  when:
+    - es_version | length > 0
+    - es_deb_local_path | length == 0
+
+- name: Verifica che la versione richiesta esista nel repo
+  assert:
+    that:
+      - es_version in (es_available.stdout_lines | default([]))
+    fail_msg: >-
+      Elasticsearch {{ es_version }} non e' nel repo {{ es_major }}.x.
+      Prime versioni disponibili:
+      {{ (es_available.stdout_lines | default([]))[:10] | join(', ')
+         | default('nessuna: il repo non risponde o non espone il pacchetto', true) }}.
+      Correggi es_version in group_vars/all.yml, oppure lasciala vuota per
+      installare l'ultima {{ es_major }}.x.
+  when:
+    - es_version | length > 0
+    - es_deb_local_path | length == 0
+
+# --- Blocco apt -------------------------------------------------------------
+# Il hold va tolto PRIMA di installare, altrimenti un aggiornamento voluto
+# (es_version alzata) verrebbe ignorato da apt senza dire niente: il playbook
+# direbbe "ok" e sul nodo resterebbe la versione vecchia. Viene rimesso in
+# fondo, dopo l'installazione.
+
+- name: Verifica se il pacchetto e' bloccato
+  command: "apt-mark showhold {{ es_package }}"
+  register: es_hold_prima
+  changed_when: false
+  failed_when: false
+
+- name: Togli temporaneamente il blocco per poter installare
+  command: "apt-mark unhold {{ es_package }}"
+  when: es_package in (es_hold_prima.stdout_lines | default([]))
+  changed_when: false
+
+# --- Installazione ----------------------------------------------------------
+# Il pacchetto deb NON avvia il servizio: lo lascia installato e fermo. E'
+# quello che serve, perche' la configurazione e i certificati arrivano dopo e
+# il primo avvio deve trovarli gia' a posto (bootstrap.password viene letta
+# SOLO al primo avvio).
+
+- name: "Copia il pacchetto Elasticsearch dal controller"
+  copy:
+    src: "{{ es_deb_local_path }}"
+    dest: "/tmp/{{ es_deb_local_path | basename }}"
+    mode: "0644"
+  when: es_deb_local_path | length > 0
+
+- name: "Installa Elasticsearch dal pacchetto locale"
+  apt:
+    deb: "/tmp/{{ es_deb_local_path | basename }}"
+    state: present
+  when: es_deb_local_path | length > 0
+  register: es_pacchetto_locale
+  until: es_pacchetto_locale is succeeded or ('lock' not in es_pacchetto_locale.msg | default('') | lower)
+  retries: "{{ apt_lock_retries | default(60) }}"
+  delay: "{{ apt_lock_delay | default(5) }}"
+
+- name: "Installa Elasticsearch {{ es_version | default('(ultima ' ~ es_major ~ '.x)', true) }}"
+  apt:
+    name: "{{ es_package }}{{ '=' ~ es_version if es_version | length > 0 else '' }}"
+    state: present
+  when: es_deb_local_path | length == 0
+  register: es_pacchetto_repo
+  until: es_pacchetto_repo is succeeded or ('lock' not in es_pacchetto_repo.msg | default('') | lower)
+  retries: "{{ apt_lock_retries | default(60) }}"
+  delay: "{{ apt_lock_delay | default(5) }}"
+
+- name: Registra se il pacchetto e' stato installato o aggiornato adesso
+  set_fact:
+    es_pacchetto_cambiato: >-
+      {{ (es_pacchetto_locale.changed | default(false))
+         or (es_pacchetto_repo.changed | default(false)) }}
+
+- name: Rimuovi il pacchetto copiato sul nodo
+  file:
+    path: "/tmp/{{ es_deb_local_path | basename }}"
+    state: absent
+  when: es_deb_local_path | length > 0
+
+- name: Blocca il pacchetto contro gli aggiornamenti automatici
+  command: "apt-mark hold {{ es_package }}"
+  when: es_apt_hold | bool
+  changed_when: es_package not in (es_hold_prima.stdout_lines | default([]))
+
+- name: Leggi la versione installata
+  shell: >-
+    set -o pipefail;
+    dpkg-query -W -f='${Version}' {{ es_package }}
+  args:
+    executable: /bin/bash
+  register: es_versione_installata
+  changed_when: false
+
+- name: Mostra la versione installata
+  debug:
+    msg: >-
+      {{ inventory_hostname }}: Elasticsearch
+      {{ es_versione_installata.stdout | trim }}
+      {{ '(bloccata con apt-mark hold: gli aggiornamenti si fanno alzando es_version)'
+         if es_apt_hold | bool else '(non bloccata: un apt upgrade puo aggiornarla)' }}
+
+# --- Directory --------------------------------------------------------------
+# Adesso l'utente elasticsearch esiste (lo crea il pacchetto) e le directory
+# possono ricevere il proprietario giusto.
+
+- name: "Assegna {{ es_data_dir }} all'utente {{ es_user }}"
+  file:
+    path: "{{ es_data_dir }}"
+    state: directory
+    owner: "{{ es_user }}"
+    group: "{{ es_group_unix }}"
+    mode: "0750"
+
+- name: "Assegna {{ es_log_dir }} all'utente {{ es_user }}"
+  file:
+    path: "{{ es_log_dir }}"
+    state: directory
+    owner: "{{ es_user }}"
+    group: "{{ es_group_unix }}"
+    mode: "2750"
+
+# path.repo: se la directory non esiste, o esiste ma e' scrivibile solo da
+# root, la registrazione del repository di snapshot fallisce con "access
+# denied", e l'errore parla del percorso senza dire che il problema e' il
+# proprietario.
+#
+# Si creano SOLO quelle che mancano. Quelle che ci sono gia' non vengono
+# toccate, nemmeno nei permessi: sono quasi sempre share di backup condivise con
+# altri sistemi, e cambiare proprietario a una share altrui e' un danno fatto
+# per zelo. Se i permessi non bastano, il task dopo lo dice.
+- name: Verifica quali directory di path.repo esistono gia'
+  stat:
+    path: "{{ item }}"
+  register: es_repo_stat
+  loop: "{{ es_repo_dirs }}"
+
+- name: Crea le directory degli snapshot che mancano (path.repo)
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ es_user }}"
+    group: "{{ es_group_unix }}"
+    mode: "0750"
+  loop: "{{ es_repo_stat.results | rejectattr('stat.exists') | map(attribute='item') | list }}"
+  when: es_create_repo_dirs | bool
+
+- name: Segnala le directory di path.repo che l'utente elasticsearch non possiede
+  debug:
+    msg: >-
+      ATTENZIONE {{ inventory_hostname }}: {{ item.item }} esiste gia' ed e' di
+      {{ item.stat.pw_name | default('?') }}:{{ item.stat.gr_name | default('?') }}.
+      Il ruolo non tocca i permessi delle directory gia' presenti, perche' sono
+      spesso share condivise. Verifica che l'utente {{ es_user }} possa
+      scriverci, altrimenti la registrazione dello snapshot repository fallira'
+      con "access denied".
+  loop: "{{ es_repo_stat.results | selectattr('stat.exists') | list }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when:
+    - item.stat.pw_name | default('') != es_user
+    - item.stat.gr_name | default('') != es_group_unix
+
+- name: Rileva quali directory di path.repo sono su un disco a parte
+  command: "findmnt -n -o TARGET,SOURCE,FSTYPE {{ item }}"
+  register: es_repo_mount
+  changed_when: false
+  failed_when: false
+  loop: "{{ es_repo_dirs }}"
+
+# Se sono share NFS vanno montate PRIMA di registrare il repository di
+# snapshot: su una directory locale Elasticsearch accetta la registrazione
+# lo stesso e scrive gli snapshot sul disco della macchina, che e' esattamente
+# il posto da cui un backup non deve dipendere.
+- name: Mostra dove finiranno gli snapshot
+  debug:
+    msg: >-
+      {{ inventory_hostname }} path.repo {{ item.item }}:
+      {{ 'mount dedicato -> ' ~ item.stdout | trim
+         if item.rc == 0
+         else 'sul filesystem di sistema, nessun mount dedicato' }}
+  loop: "{{ es_repo_mount.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+# --- Parametri di kernel ----------------------------------------------------
+# Il pacchetto scrive gia' /usr/lib/sysctl.d/elasticsearch.conf, ma quel file
+# viene applicato al boot: su una macchina che non si riavvia, il controllo di
+# avvio ("max virtual memory areas vm.max_map_count [65530] is too low")
+# fermerebbe il nodo. Qui il valore viene applicato subito.
+#
+# reload: yes equivale al "sysctl -p" della procedura manuale; sysctl_set: yes
+# verifica che il valore sia davvero attivo adesso, non solo scritto nel file.
+- name: "Imposta vm.max_map_count a {{ es_max_map_count }}"
+  sysctl:
+    name: vm.max_map_count
+    value: "{{ es_max_map_count }}"
+    sysctl_file: /etc/sysctl.d/99-elasticsearch.conf
+    sysctl_set: yes
+    state: present
+    reload: yes

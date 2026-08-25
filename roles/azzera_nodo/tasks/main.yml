@@ -10,8 +10,8 @@
       - azzera_conferma | default('') == 'AZZERA'
     fail_msg: |
       Questo ruolo CANCELLA. Toglie Rancher, RKE2, PostgreSQL, Patroni, etcd,
-      GlusterFS, Ganesha, Pacemaker, nginx, haproxy, keepalived e Kafka dal
-      nodo, dati compresi.
+      GlusterFS, Ganesha, Pacemaker, nginx, haproxy, keepalived, Kafka ed
+      Elasticsearch dal nodo, dati compresi.
 
       Per lanciarlo servono due cose, e servono insieme:
 
@@ -38,7 +38,7 @@
   debug:
     msg:
       - "AZZERAMENTO DI {{ inventory_hostname }} ({{ ansible_host | default(inventory_hostname) }})"
-      - "Rancher/RKE2: {{ azzera_rancher }} · Database: {{ azzera_database }} · Storage: {{ azzera_storage }} · Bilanciatori: {{ azzera_bilanciatori }} · Kafka: {{ azzera_kafka }}"
+      - "Rancher/RKE2: {{ azzera_rancher }} · Database: {{ azzera_database }} · Storage: {{ azzera_storage }} · Bilanciatori: {{ azzera_bilanciatori }} · Kafka: {{ azzera_kafka }} · Elasticsearch: {{ azzera_elasticsearch }}"
       - "Dati cancellati: {{ azzera_dati }} · Pacchetti rimossi: {{ azzera_pacchetti }}"
 
 - name: Azzera Rancher e RKE2
@@ -60,6 +60,10 @@
 - name: Azzera Kafka
   include_tasks: kafka.yml
   when: azzera_kafka | bool
+
+- name: Azzera Elasticsearch
+  include_tasks: elasticsearch.yml
+  when: azzera_elasticsearch | bool
 
 - name: Ripulisci quello che resta e fai il punto
   include_tasks: finale.yml

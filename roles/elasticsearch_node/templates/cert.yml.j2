@@ -1,0 +1,21 @@
+{{ ansible_managed | comment }}
+# File "instances" letto da elasticsearch-certutil cert --in.
+#
+# E' il /root/cert.yml della procedura a mano, qui generato dall'inventario: il
+# nome dell'istanza decide sia il nome della directory prodotta dentro
+# allcert.zip ({{ es_node_name }}/{{ es_node_name }}.crt e .key) sia i percorsi
+# scritti in elasticsearch.yml, e gli indirizzi decidono il SAN.
+#
+# Un SAN che non contiene l'indirizzo su cui il nodo ascolta si vede solo
+# quando un client con verifica del nome attiva rifiuta la connessione, e
+# l'errore parla di hostname, non di certificato sbagliato.
+instances:
+  - name: "{{ es_node_name }}"
+    dns:
+{% for nome in es_cert_dns_names | unique %}
+      - "{{ nome }}"
+{% endfor %}
+    ip:
+{% for indirizzo in es_cert_ip_addresses | unique %}
+      - "{{ indirizzo }}"
+{% endfor %}

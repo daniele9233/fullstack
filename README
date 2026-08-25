@@ -75,21 +75,24 @@ I controlli che impediscono un DANNO non erano nel preflight e restano dove
 sono sempre stati, cioe' dentro ai ruoli: pacemaker_nfs_ha si ferma se un VIP
 non sta nella rete dei nodi, postgresql_cluster se il gruppo non ha tre nodi
 raggiungibili, kafka_cluster se un nodo ha gia' dei dati o un node.id diverso da
-quello che la configurazione prevede.
+quello che la configurazione prevede, elasticsearch_node se in [elastic_servers]
+c'e' piu' di un host (con discovery.type single-node sarebbero cluster separati,
+non un cluster a piu' nodi).
 
 
 I DISCHI SI MONTANO A MANO
 
 Nessun playbook crea LVM: create_disk esiste ancora in roles/ ma non viene
 invocato da nessuna parte, e i dischi dati (PostgreSQL, brick Gluster,
-/opt/kafka/data) si preparano e si montano prima di lanciare. I ruoli creano la
-directory se manca, le danno il proprietario giusto e dicono, in fase di
-esecuzione, se sotto c'e' un disco dedicato o la partizione di sistema.
+/opt/kafka/data, /opt/esdata) si preparano e si montano prima di lanciare. I
+ruoli creano la directory se manca, le danno il proprietario giusto e dicono, in
+fase di esecuzione, se sotto c'e' un disco dedicato o la partizione di sistema.
 
 Per pretendere il disco dedicato invece di scoprirlo dopo:
 
-  ansible-playbook playbooks/30-database.yml -e postgres_require_dedicated_disk=true
-  ansible-playbook playbooks/50-kafka.yml    -e kafka_require_dedicated_disk=true
+  ansible-playbook playbooks/30-database.yml      -e postgres_require_dedicated_disk=true
+  ansible-playbook playbooks/50-kafka.yml         -e kafka_require_dedicated_disk=true
+  ansible-playbook playbooks/60-elasticsearch.yml -e es_require_dedicated_disk=true
 
 
 PRODECURA DI INSTALLAZIONE
@@ -105,6 +108,7 @@ Oppure un'area alla volta, quando serve piu' controllo:
   ansible-playbook -i inventory.ini playbooks/30-database.yml
   ansible-playbook -i inventory.ini playbooks/40-storage.yml
   ansible-playbook -i inventory.ini playbooks/50-kafka.yml
+  ansible-playbook -i inventory.ini playbooks/60-elasticsearch.yml
 
 site.yml non contiene piu' i play: li importa da playbooks/ con
 import_playbook. Ogni play e' scritto una volta sola, quindi le due modalita'
@@ -713,3 +717,207 @@ In piu', la "regola d'oro del JAAS" della guida — dentro ogni blocco
 *.plain.sasl.jaas.config la password di password= deve essere identica a quella
 di user_<nome>= — qui non e' piu' una cosa da ricordare: le due vengono dalla
 stessa variabile e non possono divergere.
+
+
+
+
+ELASTICSEARCH 9, NODO SINGOLO
+
+  ansible-playbook -i inventory.ini playbooks/60-elasticsearch.yml
+
+Un nodo solo, con node.roles [master, data, ingest], sicurezza attiva e TLS su
+entrambe le porte: la 9200 delle API HTTP e la 9300 del traffico fra nodi. I
+certificati sono firmati da una CA interna generata sul nodo con
+elasticsearch-certutil, lo stesso strumento della procedura a mano.
+
+Il pacchetto e' il deb ufficiale dal repo artifacts.elastic.co, serie 9.x, e si
+porta dietro la propria JVM: qui non si installa Java, che e' la differenza
+principale rispetto al ruolo di Kafka.
+
+Le variabili stanno tutte in group_vars/all.yml, nella sezione in fondo. I
+defaults del ruolo (roles/elasticsearch_node/defaults/main.yml) sono valori di
+ripiego: group_vars ha precedenza.
+
+
+  PER ORA UN NODO SOLO, E NON E' UN DETTAGLIO DI INVENTARIO
+
+discovery.type e' single-node: il nodo si elegge master da solo e non cerca
+nessuno. Mettendo due host in [elastic_servers] non si otterrebbe un cluster a
+due nodi ma DUE CLUSTER separati, con lo stesso nome, ognuno con meta' dei
+dati — un guasto che si scopre settimane dopo. Il ruolo si ferma prima,
+dicendo quanti host ha trovato.
+
+Per un cluster vero servono discovery.seed_hosts, cluster.initial_master_nodes
+e un numero dispari di master: non c'e' ancora.
+
+
+  CHE COSA VA SISTEMATO PRIMA DI LANCIARE
+
+  inventory.ini         l'host di [elastic_servers], commentato: c'e' l'IP del
+                        file di configurazione fornito, va sostituito con quello
+                        reale. Il NOME di inventario e' node.name, e' il nome
+                        della directory dei certificati e sta nel loro SAN
+  es_cluster_name       nome del cluster (Pascale-PSN-coll)
+  es_ca_dn              il DN della CA interna: comparira' come emittente su
+                        ogni certificato di questa infrastruttura
+  es_elastic_password   password dell'utente elastic, il superuser. CAMBIALA
+  es_repo_dirs          le directory di path.repo (/backups, /backups_8): se
+                        sono share NFS vanno montate PRIMA di lanciare
+  es_version            vuota = ultima 9.x del repo. Valorizzala per fissarla:
+                        il ruolo verifica che esista e, se non c'e', elenca
+                        quelle disponibili
+  es_heap_size          vuota = dimensionamento automatico (meta' della RAM
+                        fino a circa 31 GB), che va bene quasi sempre
+
+
+  IL DISCO DATI SI MONTA A MANO
+
+path.data e' /opt/esdata. Il playbook crea la directory se non c'e', la assegna
+a elasticsearch e dice se sotto ha un disco dedicato o la partizione di
+sistema. Con es_require_dedicated_disk=true si ferma se il disco non c'e',
+invece di riempire la root con gli indici.
+
+Le directory di path.repo vengono create e assegnate, ma NON montate: su una
+directory locale gli snapshot finiscono sul disco della macchina, cioe' proprio
+il posto da cui un backup non deve dipendere. Il playbook dice, per ciascuna,
+se sotto c'e' un mount.
+
+
+  LA PASSWORD DELL'UTENTE elastic
+
+Il pacchetto, quando si installa, genera da solo una password casuale per
+elastic e la stampa UNA VOLTA SOLA durante l'apt install: dentro un playbook
+quella riga non la legge nessuno. Per questo il ruolo scrive nel keystore, prima
+del primo avvio, bootstrap.password presa da es_elastic_password, e toglie
+l'hash autogenerato dall'installazione.
+
+bootstrap.password vale SOLO alla creazione dell'indice di sicurezza, cioe' al
+primo avvio di un cluster nuovo. Su un nodo gia' avviato cambiare la variabile
+non cambia niente, e la verifica finale se ne accorge (401) dicendo che cosa
+fare:
+
+  ansible-playbook playbooks/60-elasticsearch.yml -e es_force_reset_elastic_password=true
+
+che usa elasticsearch-reset-password sul nodo vivo.
+
+
+  I CERTIFICATI
+
+Il ruolo esegue la stessa sequenza della procedura a mano, con i controlli in
+piu' che servono a renderla ripetibile:
+
+  elasticsearch-certutil ca   --days 3650 --ca-dn "<es_ca_dn>" --keysize 4096
+                              --pem --out /etc/elasticsearch/cert/ca.zip
+  unzip ca.zip
+  elasticsearch-certutil cert --in /root/cert.yml --ca-cert .../ca/ca.crt
+                              --ca-key .../ca/ca.key --pem --days 3650
+                              --keysize 4096 --out .../allcert.zip
+  unzip allcert.zip
+
+Il layout che ne esce e' quello che elasticsearch.yml si aspetta:
+
+  /etc/elasticsearch/cert/ca/ca.crt          la CA, da dare ai client
+  /etc/elasticsearch/cert/ca/ca.key          0600 root:root, non si muove
+  /etc/elasticsearch/cert/<nodo>/<nodo>.crt  certificato del nodo
+  /etc/elasticsearch/cert/<nodo>/<nodo>.key  0640 root:elasticsearch
+
+Tre differenze rispetto ai comandi battuti a mano:
+
+  - /root/cert.yml non si scrive a mano: lo genera il ruolo dall'inventario,
+    cosi' nel SAN finiscono l'indirizzo su cui il nodo ascolta davvero, il suo
+    nome, localhost e 127.0.0.1. Un SAN senza l'indirizzo giusto si scopre solo
+    quando un client con verifica del nome attiva rifiuta la connessione, e
+    l'errore parla di hostname, non di certificato sbagliato
+  - la directory cert esiste PRIMA di generarci dentro ca.zip, ed e'
+    root:elasticsearch 0750 fin da subito
+  - i due .zip vengono cancellati dopo lo scompattamento: ca.zip contiene
+    ca.key, cioe' la chiave con cui si firmano certificati validi per questo
+    cluster
+
+--pem e non -pem: con il trattino singolo il parser degli strumenti
+Elasticsearch legge "pem" come un gruppo di opzioni brevi e si ferma.
+
+Con una CA aziendale gia' pronta non si genera niente: si mette in
+es_tls_local_dir una directory DEL CONTROLLER che contiene ca.crt, <nodo>.crt e
+<nodo>.key, e il ruolo copia quei tre file.
+
+Per rigenerare tutto (DISTRUTTIVO: i client che hanno importato la vecchia CA
+smettono di collegarsi finche' non ricevono la nuova):
+
+  ansible-playbook playbooks/60-elasticsearch.yml -e es_force_regenerate_certs=true
+
+
+  CHE COSA SUCCEDE RILANCIANDO IL PLAYBOOK
+
+Niente, se non e' cambiato niente. Il ruolo e' idempotente:
+
+  - i certificati non vengono rigenerati se ci sono gia'
+  - il keystore non viene toccato dopo il primo avvio
+  - il nodo si riavvia solo se il pacchetto, elasticsearch.yml, l'heap, i
+    certificati o il drop-in della unit sono cambiati DAVVERO
+
+Il pacchetto e' tenuto fermo da apt-mark hold (es_apt_hold): con il repo
+Elastic abilitato, un "apt upgrade" qualsiasi porterebbe Elasticsearch a una
+versione nuova riavviando il nodo quando capita. Gli aggiornamenti si fanno di
+proposito, alzando es_version: il playbook toglie il blocco, aggiorna e lo
+rimette.
+
+
+  VERIFICA
+
+A fine installazione il playbook interroga /_cluster/health con l'utente
+elastic e la CA interna, e controlla la versione. Su un nodo solo lo stato
+YELLOW e' normale e non e' un guasto: un indice con una replica non ha un
+secondo nodo su cui metterla, quindi lo shard di replica resta non assegnato.
+RED invece significa che manca uno shard PRIMARIO, e li' il playbook si ferma.
+
+A mano, dal nodo:
+
+  CA=/etc/elasticsearch/cert/ca/ca.crt
+  ES=https://<indirizzo del nodo>:9200
+
+  curl --cacert $CA -u elastic:<password> "$ES/_cluster/health?pretty"
+  curl --cacert $CA -u elastic:<password> "$ES/_cat/nodes?v"
+  curl --cacert $CA -u elastic:<password> "$ES/_cat/shards?v&h=index,shard,prirep,state,unassigned.reason"
+
+L'indirizzo e' quello del nodo e non localhost: network.host e' un indirizzo
+esplicito, quindi Elasticsearch NON ascolta su 127.0.0.1 (a meno di mettere
+es_network_host: ["_site_", "_local_"]). Un client esterno ha bisogno del solo
+ca.crt da importare nel proprio truststore: la chiave privata sta sul nodo e non
+serve a chi si collega.
+
+Quando il nodo non parte, l'ordine di diagnosi e' quello che il playbook stampa
+gia' nel messaggio di errore: controlli di avvio ("bootstrap check failure":
+legandosi a un indirizzo non di loopback il nodo e' in modalita' produzione e
+quei controlli diventano bloccanti), permessi dei certificati, memoria. Il log
+completo e' in /var/log/elasticsearch/<nome del cluster>.log.
+
+
+  DIFFERENZE VOLUTE RISPETTO AL FILE DI CONFIGURAZIONE DI PARTENZA
+
+1. Niente blocco "SECURITY AUTO CONFIGURATION".
+   Il pacchetto lo appende a elasticsearch.yml durante l'installazione, con i
+   propri keystore PKCS#12 in /etc/elasticsearch/certs. Qui il file viene
+   riscritto per intero (con backup di quello del pacchetto) e i certificati
+   sono quelli della CA interna, in PEM: cosi' non restano due configurazioni
+   di sicurezza nello stesso file, una attiva e una commentata.
+
+2. node.name e transport.port scritti esplicitamente.
+   Nel file di partenza node.name e' commentato, quindi varrebbe l'hostname
+   della macchina. Qui e' il nome di inventario, lo stesso che da' il nome alla
+   directory dei certificati e che sta nel loro SAN: tenerli legati evita che
+   rinominare la macchina scolleghi le due cose.
+
+3. bootstrap.memory_lock e' una variabile e si porta dietro il resto.
+   Nel file di partenza e' commentato. Mettendo es_memory_lock a true il ruolo
+   aggiunge anche LimitMEMLOCK=infinity alla unit: senza, il nodo NON parte e
+   l'errore parla di memory locking, non del limite imposto da systemd.
+
+4. ingest.geoip.downloader.enabled a false.
+   Il downloader dei database GeoIP chiama geoip.elastic.co ogni pochi minuti:
+   su rete chiusa non ci arriva e riempie i log di errori che sembrano guasti.
+   Si riaccende con es_geoip_downloader_enabled se il nodo esce su internet.
+
+5. path.repo NON viene montato, solo creato.
+   Le directory degli snapshot nascono con il proprietario giusto, ma il mount
+   resta a carico dell'operatore, come tutti i dischi di questo repository.

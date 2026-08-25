@@ -1,0 +1,244 @@
+---
+# Valori di ripiego: group_vars/all.yml ha precedenza maggiore.
+#
+# Qui c'e' l'elenco COMPLETO, cosi' il ruolo funziona anche se qualcuno lo
+# riusa in un altro repository senza portarsi dietro group_vars. Le variabili
+# che si toccano davvero — nome del cluster, indirizzo, password, certificati,
+# heap — stanno commentate una per una in group_vars/all.yml, che e' il posto
+# da cui si lavora.
+
+# Gruppo di inventario che ospita il nodo. PER ORA UN SOLO HOST: il ruolo
+# configura discovery.type=single-node e si ferma se ne trova piu' di uno,
+# invece di installare tre nodi che non si vedrebbero fra loro.
+es_group: "elastic_servers"
+
+# --- Identita' del nodo -----------------------------------------------------
+
+es_cluster_name: "Pascale-PSN-coll"
+es_node_name: "{{ inventory_hostname }}"
+
+# master serve comunque (senza, il nodo non elegge se stesso e non parte);
+# data e ingest sono i ruoli del file di configurazione fornito.
+es_node_roles:
+  - master
+  - data
+  - ingest
+
+# L'indirizzo su cui il nodo si mette in ascolto e con cui i client lo
+# raggiungono. Deve essere un IP: network.host non accetta un nome.
+es_node_ip: "{{ ansible_host | default(ansible_default_ipv4.address | default(inventory_hostname)) }}"
+
+# Stringa (un indirizzo) oppure lista. Per ascoltare anche su 127.0.0.1:
+#   es_network_host: ["_site_", "_local_"]
+es_network_host: "{{ es_node_ip }}"
+
+es_http_port: 9200
+es_transport_port: 9300
+
+# single-node = il nodo si elegge master da solo e non cerca nessuno. E' la
+# ragione per cui NON va scritto cluster.initial_master_nodes: con
+# discovery.type=single-node Elasticsearch rifiuta di partire se lo trova.
+es_discovery_type: "single-node"
+
+# --- Versione e provenienza del pacchetto -----------------------------------
+
+es_major: "9"
+# Vuota = ultima 9.x disponibile nel repo. Valorizzala (es. "9.1.3") per
+# fissarla e rendere le installazioni ripetibili: il ruolo verifica che esista
+# davvero prima di installare e, se non c'e', elenca quelle disponibili.
+es_version: ""
+
+es_package: "elasticsearch"
+es_apt_repo_url: "https://artifacts.elastic.co/packages/{{ es_major }}.x/apt"
+es_apt_repo_file: "elastic-{{ es_major }}.x"
+es_apt_key_url: "https://artifacts.elastic.co/GPG-KEY-elasticsearch"
+es_apt_keyring: "/usr/share/keyrings/elasticsearch-keyring.gpg"
+
+# Rete chiusa: percorsi SUL CONTROLLER. Con es_deb_local_path valorizzato non
+# viene contattato artifacts.elastic.co e il repo non viene nemmeno aggiunto.
+#   es_deb_local_path: "{{ repo_dir }}/files/elasticsearch-9.1.3-amd64.deb"
+es_deb_local_path: ""
+es_apt_key_local_path: ""
+
+# apt-mark hold sul pacchetto. Con il repo Elastic abilitato, un "apt upgrade"
+# qualsiasi — o unattended-upgrades — porterebbe Elasticsearch a una versione
+# nuova e riavvierebbe il nodo quando capita. Gli aggiornamenti di Elasticsearch
+# si fanno di proposito, non per effetto collaterale: si alza es_version e si
+# rilancia il playbook, che toglie il blocco, aggiorna e lo rimette.
+es_apt_hold: true
+
+es_utility_packages:
+  - apt-transport-https
+  - ca-certificates
+  - curl
+  - gnupg
+  # elasticsearch-certutil scrive un file .zip e basta: senza unzip i
+  # certificati resterebbero dentro l'archivio.
+  - unzip
+
+# --- Percorsi ---------------------------------------------------------------
+
+es_home: "/usr/share/elasticsearch"
+es_bin_dir: "{{ es_home }}/bin"
+es_conf_dir: "/etc/elasticsearch"
+
+# path.data. Qui va montato il disco dedicato, A MANO come per i database, per
+# i brick Gluster e per Kafka: il ruolo crea la directory se non c'e', la
+# assegna a elasticsearch e dice se sotto ha un disco dedicato o la partizione
+# di sistema.
+es_data_dir: "/opt/esdata"
+es_log_dir: "/var/log/elasticsearch"
+
+# true = il ruolo si ferma se es_data_dir non e' un mountpoint, invece di
+# riempire la partizione di sistema con gli indici. Da mettere a true in
+# produzione.
+es_require_dedicated_disk: false
+
+# path.repo: le directory in cui Elasticsearch puo' registrare un repository di
+# snapshot di tipo "fs". Devono esistere ed essere scrivibili dall'utente
+# elasticsearch. Se sono share NFS, vanno montate PRIMA di lanciare: il ruolo
+# crea la directory se manca, ma non monta niente.
+es_repo_dirs:
+  - /backups
+  - /backups_8
+es_create_repo_dirs: true
+
+es_user: "elasticsearch"
+es_group_unix: "elasticsearch"
+es_service_name: "elasticsearch"
+
+# --- Memoria ----------------------------------------------------------------
+
+# Heap della JVM, scritta in jvm.options.d/heap.options.
+#
+# VUOTA (default) = dimensionamento automatico di Elasticsearch, che prende
+# meta' della RAM fino a un tetto di circa 31 GB. E' la scelta giusta quasi
+# sempre. Valorizzandola (es. "8g") si scrivono -Xms e -Xmx a quel valore:
+# devono essere UGUALI, e non si supera il 50% della RAM ne' i 31 GB, oltre i
+# quali la JVM perde i puntatori compressi e l'heap piu' grande rende di meno.
+es_heap_size: ""
+
+# bootstrap.memory_lock: impedisce al kernel di mandare l'heap in swap. Con
+# true il ruolo aggiunge anche LimitMEMLOCK=infinity alla unit, altrimenti il
+# nodo non parte ("memory locking requested but memory not locked").
+es_memory_lock: false
+
+# Elasticsearch mappa in memoria gli indici e ne apre molti: 262144 e' il
+# minimo che il controllo di avvio pretende in produzione. Il pacchetto deb lo
+# imposta gia', questo lo rende esplicito e lo applica subito.
+es_max_map_count: 262144
+
+# --- Sicurezza e TLS --------------------------------------------------------
+
+es_security_enabled: true
+
+# Layout dei certificati, lo stesso della procedura a mano:
+#   {{ es_cert_dir }}/ca/ca.crt          CA interna (e ca.key accanto)
+#   {{ es_cert_dir }}/<nodo>/<nodo>.crt  certificato del nodo
+#   {{ es_cert_dir }}/<nodo>/<nodo>.key  chiave privata del nodo
+es_cert_dir: "{{ es_conf_dir }}/cert"
+es_ca_dir: "{{ es_cert_dir }}/ca"
+es_ca_crt: "{{ es_ca_dir }}/ca.crt"
+es_ca_key: "{{ es_ca_dir }}/ca.key"
+es_node_cert_dir: "{{ es_cert_dir }}/{{ es_node_name }}"
+es_node_crt: "{{ es_node_cert_dir }}/{{ es_node_name }}.crt"
+es_node_key: "{{ es_node_cert_dir }}/{{ es_node_name }}.key"
+
+# elasticsearch-certutil produce archivi .zip: questi sono i due file di
+# transito, cancellati appena scompattati (ca.zip contiene anche ca.key).
+es_ca_zip: "{{ es_cert_dir }}/ca.zip"
+es_certs_zip: "{{ es_cert_dir }}/allcert.zip"
+
+# Il file "instances" che elasticsearch-certutil legge per sapere quali nomi e
+# quali indirizzi mettere nel SAN. E' lo stesso /root/cert.yml della procedura a
+# mano, qui generato dall'inventario.
+es_cert_instances_file: "/root/cert.yml"
+
+es_ca_dn: "CN=PASCALE PSN COLL"
+es_cert_validity_days: 3650
+es_cert_key_size: 4096
+
+# Nomi e indirizzi che finiscono nel SAN del certificato del nodo. localhost e
+# 127.0.0.1 servono a chi collauda dalla macchina stessa: senza, "curl
+# https://localhost:9200" fallisce la verifica del certificato anche quando
+# tutto e' a posto.
+es_cert_dns_names:
+  - "{{ es_node_name }}"
+  - "{{ inventory_hostname }}"
+  - "localhost"
+es_cert_ip_addresses:
+  - "{{ es_node_ip }}"
+  - "127.0.0.1"
+
+# CA aziendale invece di quella generata qui: directory SUL CONTROLLER che
+# contiene ca.crt, <nodo>.crt e <nodo>.key gia' pronti. Valorizzandola, il
+# ruolo copia quei tre file e non genera niente.
+es_tls_local_dir: ""
+
+es_transport_ssl_enabled: true
+es_http_ssl_enabled: true
+
+# certificate = si verifica che il certificato sia firmato dalla CA, non che il
+# nome corrisponda. E' quello che serve fra nodi identificati per IP. Con "full"
+# si verifica anche il nome: i certificati generati qui hanno IP e nome nel SAN,
+# quindi si puo' alzare senza rigenerarli.
+es_transport_ssl_verification_mode: "certificate"
+
+# Rigenera CA e certificato del nodo anche se ci sono gia'. DISTRUTTIVO: i
+# client che hanno importato la vecchia CA smettono di collegarsi finche' non
+# ricevono la nuova.
+es_force_regenerate_certs: false
+
+# --- Utente elastic ---------------------------------------------------------
+
+# Password dell'utente "elastic" (il superuser). CAMBIALA.
+#
+# Viene scritta nel keystore come bootstrap.password PRIMA del primo avvio, che
+# e' l'unico momento in cui Elasticsearch la legge: da li' in poi le password
+# stanno nell'indice di sicurezza e questa variabile serve solo ai controlli.
+# Per cambiarla su un nodo gia' avviato:
+#   ansible-playbook playbooks/60-elasticsearch.yml -e es_force_reset_elastic_password=true
+es_elastic_password: "CambiaMiSubito-elastic"
+es_force_reset_elastic_password: false
+
+# --- Impostazioni varie -----------------------------------------------------
+
+# true (default di Elasticsearch) = "DELETE /*" e gli altri caratteri jolly sono
+# rifiutati. Metterlo a false vuol dire poter cancellare tutti gli indici con
+# una battitura sbagliata.
+es_action_destructive_requires_name: true
+
+# Il downloader dei database GeoIP chiama geoip.elastic.co ogni pochi minuti.
+# Su una rete chiusa non ci arriva e riempie i log di errori che sembrano
+# guasti: qui e' spento. Mettilo a true se il nodo esce su internet e i
+# processori geoip servono davvero.
+es_geoip_downloader_enabled: false
+
+# Righe aggiuntive per elasticsearch.yml che qui non hanno una variabile
+# propria:  es_extra_settings: { "indices.query.bool.max_clause_count": 4096 }
+es_extra_settings: {}
+
+# --- Avvio, attese, verifica ------------------------------------------------
+
+# Indirizzo con cui il ruolo (e chi collauda a mano) interroga il nodo. https
+# solo se la sicurezza e il TLS sull'HTTP sono accesi davvero: cosi' spegnendo
+# es_http_ssl_enabled la verifica continua a funzionare invece di fallire
+# l'handshake.
+es_url: >-
+  {{ 'https' if (es_security_enabled | bool and es_http_ssl_enabled | bool) else 'http' }}://{{ es_node_ip }}:{{ es_http_port }}
+
+es_port_wait_timeout: 300
+es_health_retries: 30
+es_health_delay: 10
+
+# Stati accettati dalla verifica finale. Su un nodo singolo gli indici con
+# repliche restano yellow per costruzione (la replica non ha un altro nodo su
+# cui stare), quindi pretendere green significherebbe fallire a ogni run.
+es_health_accepted:
+  - green
+  - yellow
+
+# ansible.cfg ha [diff] always = True: senza questo il diff dei file che
+# contengono password finirebbe in chiaro dentro ansible.log. Metterlo a false
+# serve solo per capire perche' un task fallisce.
+es_hide_secrets: true

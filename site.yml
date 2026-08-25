@@ -11,6 +11,7 @@
 #   ansible-playbook playbooks/30-database.yml
 #   ansible-playbook playbooks/40-storage.yml
 #   ansible-playbook playbooks/50-kafka.yml
+#   ansible-playbook playbooks/60-elasticsearch.yml
 #
 # La preparazione dei nodi (host_prep) e il disco dati (create_disk) non sono
 # piu' due play su "all": ogni playbook prepara i propri host. Il risultato per
@@ -42,3 +43,7 @@
 # fondo perche' e' l'ultimo arrivato, non perche' debba aspettare qualcosa. Con
 # il gruppo [kafka_servers] vuoto il play viene saltato senza rumore.
 - import_playbook: playbooks/50-kafka.yml
+
+# Elasticsearch, come Kafka, e' indipendente da tutto il resto: nodo singolo,
+# gruppo [elastic_servers]. Vuoto il gruppo, il play viene saltato senza rumore.
+- import_playbook: playbooks/60-elasticsearch.yml

@@ -1,0 +1,147 @@
+---
+# Quello che, se manca, fa fallire l'installazione a meta' con un messaggio che
+# parla d'altro. Meglio fermarsi qui.
+
+# PER ORA UN SOLO NODO. Con due o piu' host in [elastic_servers] questo ruolo
+# installerebbe altrettanti nodi con discovery.type=single-node, cioe' N cluster
+# separati che si chiamano tutti allo stesso modo e non si vedono fra loro: un
+# guasto che si scopre settimane dopo, quando meta' dei dati e' su un nodo e
+# meta' sull'altro.
+- name: Verifica di avere un solo nodo nel gruppo
+  assert:
+    that:
+      - groups[es_group] | default([]) | length == 1
+    fail_msg: >-
+      Il gruppo [{{ es_group }}] ha
+      {{ groups[es_group] | default([]) | length }} host.
+      Questo ruolo installa Elasticsearch SINGLE NODE
+      (discovery.type={{ es_discovery_type }}): su piu' host produrrebbe
+      altrettanti cluster separati con lo stesso nome, non un cluster a piu'
+      nodi. Per un cluster vero servono discovery.seed_hosts,
+      cluster.initial_master_nodes e un numero dispari di master: non c'e'
+      ancora.
+    success_msg: >-
+      Nodo singolo: {{ groups[es_group] | first }}
+  run_once: true
+
+- name: Verifica che il nodo abbia un indirizzo IP dichiarato
+  assert:
+    that:
+      - es_node_ip | length > 0
+      - es_node_ip is match('^[0-9]{1,3}(\.[0-9]{1,3}){3}$')
+    fail_msg: >-
+      {{ inventory_hostname }}: es_node_ip vale "{{ es_node_ip }}", che non e'
+      un indirizzo IPv4. network.host vuole un indirizzo, non un nome, e lo
+      stesso indirizzo finisce nel SAN del certificato: dichiara ansible_host
+      nell'inventario.
+
+# Il pacchetto e' lo stesso per tutte le distribuzioni deb, quindi su una
+# Ubuntu diversa da quella prevista funziona lo stesso. Vale pero' saperlo:
+# questo repository e' provato su Ubuntu, non su Debian ne' su RHEL.
+- name: Segnala se la distribuzione non e' quella prevista
+  debug:
+    msg: >-
+      ATTENZIONE {{ inventory_hostname }}: la distribuzione rilevata e'
+      {{ ansible_distribution }} {{ ansible_distribution_version }}. Il ruolo e'
+      scritto per Ubuntu (26.04 o successive) e usa apt: su una distribuzione
+      diversa i pacchetti e i percorsi non tornano.
+  when: ansible_distribution | default('') != 'Ubuntu'
+
+# --- Memoria ----------------------------------------------------------------
+
+- name: Segnala se l'heap richiesta e' sproporzionata alla memoria
+  debug:
+    msg: >-
+      ATTENZIONE {{ inventory_hostname }}: {{ ansible_memtotal_mb }} MB di RAM
+      con es_heap_size="{{ es_heap_size }}". L'heap non deve superare META' della
+      memoria della macchina: il resto serve al page cache, da cui Elasticsearch
+      legge gli indici, e a Lucene fuori dall'heap. Abbassa es_heap_size in
+      group_vars/all.yml, oppure lasciala vuota e lascia decidere a
+      Elasticsearch.
+  when:
+    - es_heap_size | length > 0
+    - es_heap_gb | int > 0
+    - ansible_memtotal_mb | int < (es_heap_gb | int * 2048)
+  vars:
+    # regex_search senza gruppo restituisce la stringa intera ("8g") oppure
+    # None quando l'heap e' espressa in altro modo (8192m): default('', true)
+    # copre il None, poi restano solo le cifre.
+    es_heap_gb: >-
+      {{ (es_heap_size | regex_search('^[0-9]+[gG]$'))
+         | default('', true) | regex_replace('[^0-9]', '') | default('0', true) }}
+
+# Oltre i 31 GB circa la JVM smette di usare i puntatori compressi: l'heap piu'
+# grande contiene MENO oggetti di una da 31 GB. E' l'errore di dimensionamento
+# piu' comune su macchine grandi.
+- name: Segnala se l'heap supera la soglia dei puntatori compressi
+  debug:
+    msg: >-
+      ATTENZIONE {{ inventory_hostname }}: es_heap_size="{{ es_heap_size }}"
+      supera i 31 GB. Sopra quella soglia la JVM perde i puntatori compressi e
+      un heap piu' grande rende MENO di uno da 31 GB. Se la macchina ha molta
+      memoria, lasciala al page cache.
+  when:
+    - es_heap_size | regex_search('^[0-9]+[gG]$') is not none
+    - (es_heap_size | regex_replace('[^0-9]', '') | int) > 31
+
+# L'orologio sfasato sballa i timestamp dei documenti e le finestre delle
+# query: non blocca l'installazione, ma va saputo prima di indicizzare.
+- name: Leggi lo stato della sincronizzazione oraria
+  command: timedatectl show -p NTPSynchronized --value
+  register: es_ntp
+  changed_when: false
+  failed_when: false
+
+- name: Segnala se l'orologio non e' sincronizzato
+  debug:
+    msg: >-
+      ATTENZIONE {{ inventory_hostname }}: NTP non sincronizzato. Attivalo
+      (systemd-timesyncd o chrony) prima di indicizzare: i campi @timestamp e le
+      query per intervallo dipendono dall'orologio della macchina.
+  when: es_ntp.stdout | trim | lower != 'yes'
+
+# --- Disco dati -------------------------------------------------------------
+# A MANO c'e' solo il MOUNT: il disco lo prepara e lo monta l'operatore, come
+# per i database, per i brick Gluster e per Kafka.
+#
+# La DIRECTORY invece la crea il ruolo se non c'e' — qui e poi in install.yml,
+# dove le viene dato il proprietario giusto (l'utente elasticsearch a questo
+# punto non esiste ancora, lo crea il pacchetto). Serve in entrambi i casi:
+# senza disco dedicato e' l'unica cosa che la crea, e con il disco dedicato il
+# mount ha bisogno lo stesso che il punto di innesto esista.
+#
+# Se sopra c'e' gia' un mount, il modulo file non lo tocca: vede una directory
+# presente e non cambia niente.
+
+- name: "Crea {{ es_data_dir }} se non c'e'"
+  file:
+    path: "{{ es_data_dir }}"
+    state: directory
+    mode: "0750"
+
+# findmnt esce diverso da zero quando il percorso non e' un mountpoint, ed e'
+# proprio l'informazione che serve, quindi non e' un errore.
+- name: "Rileva su quale filesystem sta {{ es_data_dir }}"
+  command: "findmnt -n -o TARGET,SOURCE,FSTYPE {{ es_data_dir }}"
+  register: es_mount
+  changed_when: false
+  failed_when: false
+
+- name: Mostra dove finiranno gli indici
+  debug:
+    msg: >-
+      {{ inventory_hostname }}:
+      {{ 'disco dedicato -> ' ~ es_mount.stdout | trim
+         if es_mount.rc == 0
+         else es_data_dir ~ ' sta sul filesystem di sistema, nessun disco dedicato' }}
+
+- name: Pretendi un disco dedicato, se richiesto
+  assert:
+    that:
+      - es_mount.rc == 0
+    fail_msg: >-
+      {{ es_data_dir }} non e' un mountpoint su {{ inventory_hostname }} e
+      es_require_dedicated_disk e' true: gli indici finirebbero sulla partizione
+      di sistema e la riempirebbero. Monta il disco, oppure rilancia senza quel
+      parametro.
+  when: es_require_dedicated_disk | bool

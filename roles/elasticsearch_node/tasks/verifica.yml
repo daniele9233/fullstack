@@ -1,0 +1,148 @@
+---
+# Verifica in sola lettura: il nodo risponde, la sicurezza e' attiva, la
+# password di elastic e' quella dichiarata, il cluster e' in uno stato
+# accettabile.
+#
+# Su un nodo solo "yellow" e' normale e non e' un guasto: un indice con una
+# replica non ha un secondo nodo su cui metterla, quindi lo shard di replica
+# resta non assegnato. Pretendere "green" farebbe fallire il playbook a ogni
+# esecuzione (vedi es_health_accepted).
+
+# --- Cambio password su richiesta esplicita ---------------------------------
+# bootstrap.password vale solo alla creazione dell'indice di sicurezza: su un
+# nodo gia' avviato la password si cambia cosi'.
+
+- name: Reimposta la password dell'utente elastic (richiesto esplicitamente)
+  command:
+    argv:
+      - "{{ es_bin_dir }}/elasticsearch-reset-password"
+      - --username
+      - elastic
+      - --interactive
+      - --batch
+      - --url
+      - "{{ es_url }}"
+    # Due volte: lo strumento chiede la password e poi la conferma.
+    stdin: "{{ es_elastic_password }}\n{{ es_elastic_password }}"
+  environment:
+    ES_PATH_CONF: "{{ es_conf_dir }}"
+  register: es_reset_password
+  until: es_reset_password.rc == 0
+  retries: 10
+  delay: 6
+  when: es_force_reset_elastic_password | bool
+  no_log: "{{ es_hide_secrets | bool }}"
+
+# --- Stato del cluster ------------------------------------------------------
+
+- name: Interroga lo stato del cluster
+  uri:
+    url: "{{ es_url }}/_cluster/health"
+    method: GET
+    user: "{{ 'elastic' if es_security_enabled | bool else omit }}"
+    password: "{{ es_elastic_password if es_security_enabled | bool else omit }}"
+    force_basic_auth: "{{ es_security_enabled | bool }}"
+    # La CA interna, non quella di sistema: senza, la verifica del certificato
+    # fallisce e l'errore ("certificate verify failed") sembra un problema del
+    # certificato invece che del truststore usato per controllarlo.
+    ca_path: "{{ es_ca_crt if (es_security_enabled | bool and es_http_ssl_enabled | bool) else omit }}"
+    return_content: yes
+    status_code: [200]
+  register: es_health
+  # Il 401 interrompe subito: il nodo sta benissimo, e' la password a non
+  # tornare, e riprovare per cinque minuti la stessa password sbagliata non
+  # cambia niente. Tutto il resto (nodo che sta ancora aprendo gli indici,
+  # cluster non ancora pronto) si riprova.
+  until: >-
+    ((es_health.status | default(0)) == 200
+     and ((es_health.json | default({})).status | default('')) in es_health_accepted)
+    or (es_health.status | default(0)) == 401
+  retries: "{{ es_health_retries }}"
+  delay: "{{ es_health_delay }}"
+  failed_when: false
+  changed_when: false
+
+# I due errori che si vedono davvero al primo avvio, ciascuno con la propria
+# diagnosi: password non allineata e nodo che non risponde.
+
+# 401 e' un caso a se': il nodo sta benissimo, e' la password a non tornare.
+- name: Verifica che la password di elastic sia quella dichiarata
+  assert:
+    that:
+      - (es_health.status | default(0)) != 401
+    fail_msg: >-
+      {{ inventory_hostname }}: il nodo risponde ma rifiuta l'utente elastic
+      con la password di es_elastic_password. Succede quando il cluster era
+      gia' stato avviato prima di questo playbook: bootstrap.password vale SOLO
+      alla creazione dell'indice di sicurezza, e dopo le password stanno
+      nell'indice. Per riallinearla:
+      ansible-playbook playbooks/60-elasticsearch.yml -e es_force_reset_elastic_password=true
+
+- name: Verifica che il nodo risponda
+  assert:
+    that:
+      - (es_health.status | default(0)) == 200
+    fail_msg: >-
+      {{ inventory_hostname }}: {{ es_url }}/_cluster/health ha risposto
+      "{{ es_health.status | default('nessuna risposta') }}" dopo
+      {{ es_health_retries | int * es_health_delay | int }} secondi.
+      Il nodo ascolta su {{ es_node_ip }}:{{ es_http_port }} e non su
+      localhost, perche' network.host e' un indirizzo esplicito. Se il
+      messaggio parla di certificato, la CA con cui si verifica e'
+      {{ es_ca_crt }} e deve essere quella che ha firmato {{ es_node_crt }};
+      se parla di connessione rifiutata, il servizio e' partito e poi morto:
+      journalctl -u {{ es_service_name }} -n 50 e
+      {{ es_log_dir }}/{{ es_cluster_name }}.log.
+      Risposta: {{ es_health.msg | default(es_health.content | default('')) }}
+
+- name: Verifica che lo stato del cluster sia accettabile
+  assert:
+    that:
+      - ((es_health.json | default({})).status | default('')) in es_health_accepted
+    fail_msg: >-
+      Il cluster {{ es_cluster_name }} e' in stato
+      "{{ (es_health.json | default({})).status | default('sconosciuto') }}".
+      red significa che almeno uno shard PRIMARIO non e' assegnato: i dati di
+      quell'indice non sono leggibili. Guarda quali con
+      curl --cacert {{ es_ca_crt }} -u elastic:<password>
+      "{{ es_url }}/_cat/shards?v&h=index,shard,prirep,state,unassigned.reason"
+      e i log in {{ es_log_dir }}/{{ es_cluster_name }}.log.
+    success_msg: >-
+      Cluster {{ es_cluster_name }} in stato
+      {{ (es_health.json | default({})).status }} con
+      {{ (es_health.json | default({})).number_of_nodes | default('?') }} nodo/i
+      e {{ (es_health.json | default({})).active_shards | default(0) }} shard attivi
+      {{ '(yellow e normale su un nodo solo: le repliche non hanno un secondo nodo su cui stare)'
+         if (es_health.json | default({})).status | default('') == 'yellow' else '' }}
+
+# --- Versione ---------------------------------------------------------------
+
+- name: Interroga la versione del nodo
+  uri:
+    url: "{{ es_url }}/"
+    method: GET
+    user: "{{ 'elastic' if es_security_enabled | bool else omit }}"
+    password: "{{ es_elastic_password if es_security_enabled | bool else omit }}"
+    force_basic_auth: "{{ es_security_enabled | bool }}"
+    ca_path: "{{ es_ca_crt if (es_security_enabled | bool and es_http_ssl_enabled | bool) else omit }}"
+    return_content: yes
+  register: es_root
+  changed_when: false
+  failed_when: false
+
+- name: Verifica che sia davvero la versione richiesta
+  assert:
+    that:
+      - ((es_root.json | default({})).version | default({})).number | default('') is match('^' ~ es_major ~ '\.')
+    fail_msg: >-
+      Il nodo risponde con la versione
+      {{ ((es_root.json | default({})).version | default({})).number | default('sconosciuta') }},
+      mentre il ruolo e' scritto per la serie {{ es_major }}.x. Se hai
+      installato di proposito un'altra serie, allinea es_major (e verifica il
+      file di configurazione: fra major diverse cambiano impostazioni).
+    success_msg: >-
+      Elasticsearch
+      {{ ((es_root.json | default({})).version | default({})).number }} su
+      {{ inventory_hostname }}, cluster {{ es_cluster_name }},
+      sicurezza {{ 'attiva' if es_security_enabled | bool else 'DISATTIVATA' }},
+      HTTP {{ 'in TLS' if es_http_ssl_enabled | bool else 'in chiaro' }}

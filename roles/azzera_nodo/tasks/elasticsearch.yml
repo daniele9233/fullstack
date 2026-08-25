@@ -1,0 +1,69 @@
+---
+# Elasticsearch arriva da apt, quindi qui si puo' fare purge davvero. Restano
+# fuori dal pacchetto tre cose, e sono proprio quelle che fanno fallire una
+# reinstallazione se sopravvivono:
+#
+#   - i certificati in /etc/elasticsearch/cert, con dentro la CA interna
+#   - il keystore, che contiene bootstrap.password
+#   - la directory dati, dove sta l'identita' del nodo: rimettendola in piedi
+#     con una CA nuova, il nodo ripartirebbe con l'indice di sicurezza vecchio
+#     e la password nuova non varrebbe niente
+
+- name: Ferma il servizio Elasticsearch
+  systemd:
+    name: "{{ es_service_name | default('elasticsearch') }}"
+    state: stopped
+    enabled: false
+  failed_when: false
+
+# Il pacchetto e' tenuto da apt-mark hold dal ruolo di installazione: senza
+# toglierlo, il purge qui sotto non fa niente e non dice perche'.
+- name: Togli il blocco apt dal pacchetto Elasticsearch
+  command: "apt-mark unhold {{ es_package | default('elasticsearch') }}"
+  failed_when: false
+  changed_when: false
+
+- name: Rimuovi il pacchetto Elasticsearch
+  apt:
+    name: "{{ azzera_pacchetti_elasticsearch }}"
+    state: absent
+    purge: true
+  failed_when: false
+  when: azzera_pacchetti | bool
+  register: apt_result
+  until: apt_result is succeeded or ('lock' not in apt_result.msg | default('') | lower)
+  retries: "{{ apt_lock_retries | default(60) }}"
+  delay: "{{ apt_lock_delay | default(5) }}"
+
+- name: Rimuovi configurazioni, certificati e repository di Elasticsearch
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ azzera_percorsi_elasticsearch }}"
+
+# La directory dati puo' essere un disco montato a mano: si svuota, non si
+# cancella. Dentro c'e' l'identita' del nodo (node.lock, _state) e gli indici.
+- name: Svuota la directory dati di Elasticsearch
+  include_tasks: svuota.yml
+  vars:
+    svuota_percorso: "{{ es_data_dir | default('/opt/esdata') }}"
+  when: azzera_dati | bool
+
+# Gli snapshot NON si toccano: path.repo punta quasi sempre a una share di
+# backup condivisa con altri, e cancellarla insieme al nodo vorrebbe dire
+# buttare via i backup nel momento esatto in cui potrebbero servire.
+- name: Ricorda che gli snapshot restano dove sono
+  debug:
+    msg: >-
+      {{ inventory_hostname }}: le directory di path.repo
+      ({{ es_repo_dirs | default(['/backups']) | join(', ') }}) NON sono state
+      toccate. Contengono gli snapshot e possono essere condivise: se vanno
+      svuotate, si fa a mano e sapendo cosa si cancella.
+
+- name: Rimuovi l'utente di sistema elasticsearch
+  user:
+    name: "{{ es_user | default('elasticsearch') }}"
+    state: absent
+    remove: false
+  failed_when: false
+  when: azzera_pacchetti | bool

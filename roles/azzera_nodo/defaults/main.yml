@@ -9,7 +9,8 @@
 #
 # NON e' clean_node_state. Quello toglie lo stato RKE2/Rancher per far ripartire
 # un join; questo toglie tutto: Rancher, RKE2, PostgreSQL, Patroni, etcd,
-# GlusterFS, Ganesha, Pacemaker, Corosync, nginx, haproxy, keepalived, Kafka.
+# GlusterFS, Ganesha, Pacemaker, Corosync, nginx, haproxy, keepalived, Kafka,
+# Elasticsearch.
 
 # Parola d'ordine. Il ruolo si rifiuta di partire senza:
 #   ansible-playbook playbooks/99-azzera.yml --limit dbserver01 -e azzera_conferma=AZZERA
@@ -24,6 +25,7 @@ azzera_database: true
 azzera_storage: true
 azzera_bilanciatori: true
 azzera_kafka: true
+azzera_elasticsearch: true
 
 # I DATI. Con true svuota PGDATA, i brick Gluster e la directory dati di Kafka.
 # Le directory restano — sono punti di mount, e smontarle o riformattarle non e'
@@ -126,6 +128,24 @@ azzera_percorsi_kafka:
   - "/etc/systemd/system/{{ kafka_service_name | default('kafka') }}.service"
   - /tmp/kafka-cli
 
+# Elasticsearch arriva da apt, ma il purge non tocca quello che il ruolo ha
+# messo dentro /etc/elasticsearch dopo l'installazione (certificati, keystore)
+# ne' il repository apt di Elastic.
+azzera_pacchetti_elasticsearch:
+  - elasticsearch
+
+azzera_percorsi_elasticsearch:
+  - /etc/elasticsearch
+  - /var/log/elasticsearch
+  - /usr/share/elasticsearch
+  - "/etc/systemd/system/{{ es_service_name | default('elasticsearch') }}.service.d"
+  - /etc/sysctl.d/99-elasticsearch.conf
+  - "/etc/apt/sources.list.d/{{ es_apt_repo_file | default('elastic-9.x') }}.list"
+  - /usr/share/keyrings/elasticsearch-keyring.gpg
+  # Il file "instances" di elasticsearch-certutil: contiene solo nomi e
+  # indirizzi, ma e' roba scritta dal playbook e non della macchina.
+  - "{{ es_cert_instances_file | default('/root/cert.yml') }}"
+
 # Binari e configurazioni sparse che nessun "apt purge" toglie.
 azzera_percorsi_rancher_extra:
   - /usr/local/bin/kubectl
@@ -146,5 +166,7 @@ azzera_porte_da_verificare:
   - 8008
   - 9092
   - 9093
+  - 9200
+  - 9300
   - 9345
   - 24007

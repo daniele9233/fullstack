@@ -1,0 +1,97 @@
+---
+# Avvio del nodo.
+#
+# Un nodo solo, quindi niente riavvio a rotazione come in Kafka: qui il riavvio
+# e' un fermo servizio e basta, e va fatto soltanto quando serve davvero.
+# Nemmeno un handler: gli handler girano a fine play, mentre la verifica che
+# viene dopo deve interrogare il nodo GIA' riavviato, altrimenti collauda la
+# configurazione vecchia e dice che va tutto bene.
+
+- name: Verifica se Elasticsearch e' gia' in esecuzione
+  command: "systemctl is-active {{ es_service_name }}"
+  register: es_is_active
+  changed_when: false
+  failed_when: false
+
+- name: Determina che cosa fare
+  set_fact:
+    es_gia_attivo: "{{ (es_is_active.stdout | trim) == 'active' }}"
+    # Che cosa rende superato il processo gia' in esecuzione: il pacchetto
+    # aggiornato, elasticsearch.yml diverso, l'heap cambiata, i certificati
+    # sostituiti (la JVM li legge una volta sola, all'avvio), il drop-in della
+    # unit aggiunto o tolto.
+    es_da_riavviare: >-
+      {{ (es_pacchetto_cambiato | default(false) | bool)
+         or (es_config_scritta.changed | default(false))
+         or (es_heap_scritta.changed | default(false))
+         or (es_heap_rimossa.changed | default(false))
+         or (es_certificati_cambiati | default(false) | bool)
+         or (es_permessi_certificati.changed | default(false))
+         or (es_unit_scritta.changed | default(false))
+         or (es_unit_rimossa.changed | default(false)) }}
+
+- name: Abilita l'avvio automatico di Elasticsearch
+  systemd:
+    name: "{{ es_service_name }}"
+    enabled: yes
+
+- name: Mostra che cosa sta per succedere
+  debug:
+    msg: >-
+      {{ inventory_hostname }}:
+      {{ 'primo avvio del nodo' if not es_gia_attivo | bool
+         else ('riavvio: qualcosa e cambiato davvero' if es_da_riavviare | bool
+               else 'nessun riavvio necessario, configurazione e certificati sono gia quelli attesi') }}
+
+- name: Avvia il nodo
+  systemd:
+    name: "{{ es_service_name }}"
+    state: started
+  when: not es_gia_attivo | bool
+
+- name: Riavvia il nodo per applicare le modifiche
+  systemd:
+    name: "{{ es_service_name }}"
+    state: restarted
+  when:
+    - es_gia_attivo | bool
+    - es_da_riavviare | bool
+
+# --- Attesa -----------------------------------------------------------------
+# La porta HTTP si apre quando il nodo ha finito di ripristinare gli indici, e
+# su una directory dati grande puo' volerci qualche minuto. Il rescue trasforma
+# il "Timeout when waiting for 10.50.10.132:9200" in qualcosa che dice dove
+# guardare.
+
+- name: Attesa della porta HTTP
+  block:
+    - name: "Attendi che la porta {{ es_http_port }} risponda"
+      wait_for:
+        host: "{{ es_node_ip }}"
+        port: "{{ es_http_port }}"
+        timeout: "{{ es_port_wait_timeout }}"
+  rescue:
+    - name: Raccogli lo stato del servizio
+      command: "journalctl -u {{ es_service_name }} -n 40 --no-pager"
+      register: es_journal
+      changed_when: false
+      failed_when: false
+
+    - name: Spiega perche' il nodo non risponde
+      fail:
+        msg: >-
+          {{ inventory_hostname }}: la porta {{ es_http_port }} non si e' aperta
+          entro {{ es_port_wait_timeout }} secondi. In ordine di probabilita':
+          (1) un controllo di avvio non superato — legandosi a
+          {{ es_node_ip }} il nodo e' in modalita' produzione e i bootstrap
+          check diventano bloccanti: cerca "bootstrap check failure" nel log;
+          (2) i certificati — se compare "failed to load SSL configuration" o
+          "Permission denied", il servizio non riesce a leggere
+          {{ es_node_key }} (deve essere root:{{ es_group_unix }} 0640);
+          (3) la memoria — un heap piu' grande della RAM disponibile fa fallire
+          l'avvio della JVM prima ancora di Elasticsearch, e con
+          bootstrap.memory_lock a true serve LimitMEMLOCK=infinity nella unit,
+          che il ruolo scrive solo se es_memory_lock e' true.
+          Log completo: {{ es_log_dir }}/{{ es_cluster_name }}.log
+          Ultime righe del journal:
+          {{ es_journal.stdout | default('journal non leggibile') }}

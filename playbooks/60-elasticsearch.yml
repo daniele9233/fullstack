@@ -1,0 +1,69 @@
+---
+# ELASTICSEARCH 9: nodo singolo con sicurezza attiva e TLS, sul gruppo
+# [elastic_servers].
+#
+# Eseguibile da solo:
+#   ansible-playbook playbooks/60-elasticsearch.yml
+#
+# PER ORA UN SOLO NODO: discovery.type=single-node. Il ruolo si ferma se il
+# gruppo ne contiene piu' di uno, invece di installare N cluster separati che si
+# chiamano tutti allo stesso modo e non si vedono fra loro.
+#
+# Niente create_disk: il disco dati si monta a mano su es_data_dir
+# (/opt/esdata), come per i database, per i brick Gluster e per Kafka. Il ruolo
+# crea la directory, la assegna all'utente elasticsearch e dice in chiaro se
+# sotto c'e' un disco dedicato o la partizione di sistema. Con
+# es_require_dedicated_disk=true si ferma se il disco non c'e'.
+#
+# Niente update_hosts_file: il ruolo si scrive da solo la voce di /etc/hosts per
+# il proprio nodo, e il dominio Rancher qui non serve a nessuno. Per la stessa
+# ragione questo playbook non ha bisogno che gli altri gruppi siano popolati.
+#
+# VARIANTI UTILI
+#
+#   # pretende il disco dedicato invece di scoprire dopo che gli indici sono
+#   # finiti sulla partizione di sistema
+#   ansible-playbook playbooks/60-elasticsearch.yml -e es_require_dedicated_disk=true
+#
+#   # riallinea la password dell'utente elastic su un nodo GIA' avviato:
+#   # bootstrap.password vale solo alla creazione dell'indice di sicurezza
+#   ansible-playbook playbooks/60-elasticsearch.yml -e es_force_reset_elastic_password=true
+#
+#   # rigenera CA e certificato del nodo. DISTRUTTIVO: i client che hanno
+#   # importato la vecchia CA smettono di collegarsi finche' non ricevono la nuova
+#   ansible-playbook playbooks/60-elasticsearch.yml -e es_force_regenerate_certs=true
+#
+#   # mostra i diff dei file di configurazione, password comprese: solo per
+#   # capire perche' un task fallisce, e non su un terminale registrato
+#   ansible-playbook playbooks/60-elasticsearch.yml -e es_hide_secrets=false
+
+- name: Prepara il nodo Elasticsearch
+  hosts: elastic_servers
+  become: yes
+  gather_facts: no
+  roles:
+    - role: host_prep
+
+
+# gather_facts: yes serve per la memoria (controllo sull'heap della JVM) e per
+# la distribuzione rilevata.
+- name: Elasticsearch {{ es_major | default('9') }} single node
+  hosts: elastic_servers
+  become: yes
+  gather_facts: yes
+  roles:
+    - elasticsearch_node
+  post_tasks:
+    - name: Riepilogo Elasticsearch
+      debug:
+        msg:
+          - "Nodo: {{ inventory_hostname }} ({{ es_node_ip }}), cluster {{ es_cluster_name }}"
+          - "Versione: {{ es_versione_installata.stdout | default('?') | trim }} — ruoli {{ es_node_roles | join(', ') }}"
+          - "Discovery: {{ es_discovery_type }} (nodo singolo, si elegge master da solo)"
+          - "API: {{ es_url }} — utente elastic, password in es_elastic_password"
+          - "Dati in {{ es_data_dir }} (disco montato a mano), log in {{ es_log_dir }}"
+          - "Snapshot consentiti in: {{ es_repo_dirs | join(', ') | default('nessuna directory dichiarata', true) }}"
+          - "CA interna: {{ es_ca_crt }} — e' il file che i client devono importare per fidarsi del nodo"
+          - "Certificato del nodo: {{ es_node_crt }} (chiave: {{ es_node_key }}, scadenza fra {{ es_cert_validity_days }} giorni dalla generazione)"
+          - "Prova da riga di comando: curl --cacert {{ es_ca_crt }} -u elastic:<password> {{ es_url }}/_cluster/health?pretty"
+          - "Stato degli shard: curl --cacert {{ es_ca_crt }} -u elastic:<password> '{{ es_url }}/_cat/shards?v'"

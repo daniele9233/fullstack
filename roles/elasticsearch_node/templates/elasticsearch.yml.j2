@@ -1,0 +1,98 @@
+{{ ansible_managed | comment }}
+# Ruolo elasticsearch_node. Le modifiche fatte a mano qui vengono sovrascritte
+# al prossimo run: si cambia group_vars/all.yml.
+#
+# Il file del pacchetto — quello con il blocco "BEGIN SECURITY AUTO
+# CONFIGURATION" e i keystore PKCS#12 in /etc/elasticsearch/certs — e' stato
+# salvato accanto con estensione .<data>~ dal modulo template. Qui la sicurezza
+# e' configurata a mano, con la CA interna e i certificati in PEM.
+
+# ---------------------------------- Cluster ---------------------------------
+cluster.name: {{ es_cluster_name }}
+
+# ------------------------------------ Node ----------------------------------
+# node.name e' il nome di inventario, lo stesso che da' il nome alla directory
+# dei certificati e che sta nel loro SAN. Tenerli legati evita che rinominare
+# la macchina scolleghi le due cose.
+node.name: {{ es_node_name }}
+node.roles: [ {{ es_node_roles | join(', ') }} ]
+
+# ----------------------------------- Paths ----------------------------------
+# Qui sotto va montato il disco dedicato. La directory la crea il playbook, il
+# mount no: i dischi in questo repository si preparano a mano.
+path.data: {{ es_data_dir }}
+path.logs: {{ es_log_dir }}
+{% if es_repo_dirs | length > 0 %}
+# Le uniche directory in cui e' consentito registrare un repository di
+# snapshot. Devono esistere ed essere scrivibili dall'utente elasticsearch.
+path.repo: {{ es_repo_dirs | to_json }}
+{% endif %}
+
+# ----------------------------------- Memory ---------------------------------
+{% if es_memory_lock | bool %}
+# Con true la unit systemd ha anche LimitMEMLOCK=infinity (lo scrive il ruolo):
+# senza, il nodo non parte e l'errore parla di memory locking, non del limite.
+{% endif %}
+bootstrap.memory_lock: {{ es_memory_lock | bool | lower }}
+
+# ---------------------------------- Network ---------------------------------
+# Un indirizzo esplicito, non localhost: e' quello con cui i client raggiungono
+# il nodo e quello che sta nel SAN del certificato.
+#
+# ATTENZIONE: legandosi a un indirizzo non di loopback, Elasticsearch passa in
+# "modalita' produzione" e i controlli di avvio diventano bloccanti (heap,
+# vm.max_map_count, descrittori di file). Il ruolo li soddisfa gia' tutti.
+network.host: {{ es_network_host | to_json if es_network_host is not string else es_network_host }}
+http.port: {{ es_http_port }}
+transport.port: {{ es_transport_port }}
+
+# --------------------------------- Discovery --------------------------------
+# single-node: il nodo si elegge master da solo e non cerca nessun altro.
+# Per questo NON c'e' cluster.initial_master_nodes: messo insieme a
+# discovery.type=single-node, Elasticsearch si rifiuta di partire.
+discovery.type: {{ es_discovery_type }}
+
+# ---------------------------------- Various ---------------------------------
+# true = "DELETE /*" e gli altri caratteri jolly sono rifiutati.
+action.destructive_requires_name: {{ es_action_destructive_requires_name | bool | lower }}
+{% if not es_geoip_downloader_enabled | bool %}
+# Spento: su rete chiusa il downloader dei database GeoIP non raggiunge
+# geoip.elastic.co e riempie i log di errori che sembrano guasti.
+{% endif %}
+ingest.geoip.downloader.enabled: {{ es_geoip_downloader_enabled | bool | lower }}
+
+# --------------------------------- Sicurezza --------------------------------
+xpack.security.enabled: {{ es_security_enabled | bool | lower }}
+{% if es_security_enabled | bool %}
+
+# Cifratura fra nodi (porta {{ es_transport_port }}). Su un nodo solo non c'e'
+# traffico fra nodi da proteggere, ma resta acceso: il giorno in cui il cluster
+# cresce, i certificati e la configurazione ci sono gia'.
+xpack.security.transport.ssl.enabled: {{ es_transport_ssl_enabled | bool | lower }}
+{% if es_transport_ssl_enabled | bool %}
+# certificate = si verifica che il certificato sia firmato dalla CA, non che il
+# nome corrisponda. "full" verifica anche il nome: i certificati generati dal
+# ruolo hanno IP e nome nel SAN, quindi si puo' alzare senza rigenerarli.
+xpack.security.transport.ssl.verification_mode: {{ es_transport_ssl_verification_mode }}
+xpack.security.transport.ssl.key: {{ es_node_key }}
+xpack.security.transport.ssl.certificate: {{ es_node_crt }}
+xpack.security.transport.ssl.certificate_authorities: [ "{{ es_ca_crt }}" ]
+{% endif %}
+
+# Cifratura delle API HTTP (porta {{ es_http_port }}): e' quella che vedono
+# Kibana, Logstash, gli agent e chiunque usi curl. Da qui in poi l'indirizzo e'
+# https://, e i client hanno bisogno di {{ es_ca_crt }} nel proprio truststore.
+xpack.security.http.ssl.enabled: {{ es_http_ssl_enabled | bool | lower }}
+{% if es_http_ssl_enabled | bool %}
+xpack.security.http.ssl.key: {{ es_node_key }}
+xpack.security.http.ssl.certificate: {{ es_node_crt }}
+xpack.security.http.ssl.certificate_authorities: [ "{{ es_ca_crt }}" ]
+{% endif %}
+{% endif %}
+{% if es_extra_settings %}
+
+# ------------------------ Aggiunte da es_extra_settings ---------------------
+{% for chiave, valore in es_extra_settings.items() %}
+{{ chiave }}: {{ valore }}
+{% endfor %}
+{% endif %}

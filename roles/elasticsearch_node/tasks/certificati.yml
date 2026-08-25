@@ -1,0 +1,250 @@
+---
+# CA interna e certificato del nodo, con elasticsearch-certutil (lo stesso
+# strumento della procedura a mano, e' dentro al pacchetto).
+#
+# Layout, identico a quello che i percorsi di elasticsearch.yml si aspettano:
+#
+#   {{ es_cert_dir }}/ca/ca.crt              CA interna, e' quella che i client
+#   {{ es_cert_dir }}/ca/ca.key              devono importare per fidarsi
+#   {{ es_cert_dir }}/<nodo>/<nodo>.crt      certificato del nodo
+#   {{ es_cert_dir }}/<nodo>/<nodo>.key      chiave privata del nodo
+#
+# IDEMPOTENZA: ogni passo ha il suo "creates". Un run successivo non rigenera
+# niente, quindi i certificati gia' distribuiti restano validi e i client non
+# devono aggiornare la CA. Per rifare tutto da capo serve
+# es_force_regenerate_certs=true, che e' DISTRUTTIVO: cambia la CA, e ogni
+# client che ha importato la vecchia smette di collegarsi.
+
+- name: Cancella i certificati esistenti (richiesto esplicitamente)
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ es_ca_dir }}"
+    - "{{ es_node_cert_dir }}"
+  when: es_force_regenerate_certs | bool
+
+# root:elasticsearch e non elasticsearch:elasticsearch. La chiave privata la
+# deve LEGGERE il servizio, non riscrivere: il proprietario resta root, il
+# gruppo elasticsearch legge. E' la stessa impostazione che il pacchetto usa per
+# /etc/elasticsearch.
+- name: "Crea {{ es_cert_dir }}"
+  file:
+    path: "{{ es_cert_dir }}"
+    state: directory
+    owner: root
+    group: "{{ es_group_unix }}"
+    mode: "0750"
+
+# --- CA aziendale gia' pronta -----------------------------------------------
+# Con es_tls_local_dir valorizzata non si genera niente: si copiano i tre file
+# dal controller. Serve dove la CA e' quella dell'ente e i certificati li
+# emette qualcun altro.
+
+- name: Certificati forniti dal controller
+  when: es_tls_local_dir | length > 0
+  block:
+    - name: Crea le directory dei certificati forniti
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: "{{ es_group_unix }}"
+        mode: "0750"
+      loop:
+        - "{{ es_ca_dir }}"
+        - "{{ es_node_cert_dir }}"
+
+    - name: Copia CA e certificato del nodo dal controller
+      copy:
+        src: "{{ es_tls_local_dir }}/{{ item.src }}"
+        dest: "{{ item.dest }}"
+        owner: root
+        group: "{{ es_group_unix }}"
+        mode: "{{ item.mode }}"
+      loop:
+        # ca.crt e' pubblico: e' quello che i client devono importare.
+        - { src: "ca.crt", dest: "{{ es_ca_crt }}", mode: "0644" }
+        - { src: "{{ es_node_name }}.crt", dest: "{{ es_node_crt }}", mode: "0644" }
+        - { src: "{{ es_node_name }}.key", dest: "{{ es_node_key }}", mode: "0640" }
+      loop_control:
+        label: "{{ item.dest }}"
+      register: es_certificati_copiati
+
+# --- CA e certificato generati sul nodo -------------------------------------
+
+- name: Certificati generati con elasticsearch-certutil
+  when: es_tls_local_dir | length == 0
+  block:
+    # Un archivio rimasto da un tentativo interrotto farebbe fallire certutil
+    # con "output file already exists", e il messaggio non direbbe che basta
+    # cancellarlo. Si tolgono prima di generare, non dopo: dopo ci pensa il
+    # blocco "always" in fondo.
+    - name: Rimuovi eventuali archivi rimasti da un tentativo precedente
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ es_ca_zip }}"
+        - "{{ es_certs_zip }}"
+
+    # --pem e non -pem: con il trattino singolo joptsimple, il parser degli
+    # strumenti Elasticsearch, legge "pem" come un gruppo di opzioni brevi
+    # (-p -e -m) e si ferma su "unrecognized option". La forma lunga e' quella
+    # documentata e non ha ambiguita'.
+    #
+    # stdin con due righe vuote: certutil chiede la password della chiave della
+    # CA quando non gliela si passa. Vuota = chiave non cifrata, che e' quello
+    # che serve, perche' in elasticsearch.yml non c'e' nessuna passphrase da
+    # dichiarare. Se non chiede niente, le due righe non danno fastidio.
+    - name: Genera la CA interna
+      command:
+        argv:
+          - "{{ es_bin_dir }}/elasticsearch-certutil"
+          - ca
+          - --days
+          - "{{ es_cert_validity_days }}"
+          - --ca-dn
+          - "{{ es_ca_dn }}"
+          - --keysize
+          - "{{ es_cert_key_size }}"
+          - --pem
+          - --out
+          - "{{ es_ca_zip }}"
+        creates: "{{ es_ca_crt }}"
+        stdin: "\n\n"
+      register: es_ca_generata
+
+    - name: Scompatta la CA
+      unarchive:
+        src: "{{ es_ca_zip }}"
+        dest: "{{ es_cert_dir }}"
+        remote_src: yes
+        creates: "{{ es_ca_crt }}"
+
+    # I nomi e gli indirizzi del SAN. E' il /root/cert.yml della procedura a
+    # mano, qui generato dall'inventario invece che scritto a mano: cosi' il
+    # certificato non puo' finire con un indirizzo diverso da quello su cui il
+    # nodo si mette davvero in ascolto.
+    - name: Scrivi il file instances per certutil
+      template:
+        src: cert.yml.j2
+        dest: "{{ es_cert_instances_file }}"
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Genera il certificato del nodo firmato dalla CA
+      command:
+        argv:
+          - "{{ es_bin_dir }}/elasticsearch-certutil"
+          - cert
+          - --in
+          - "{{ es_cert_instances_file }}"
+          - --out
+          - "{{ es_certs_zip }}"
+          - --ca-cert
+          - "{{ es_ca_crt }}"
+          - --ca-key
+          - "{{ es_ca_key }}"
+          - --pem
+          - --days
+          - "{{ es_cert_validity_days }}"
+          - --keysize
+          - "{{ es_cert_key_size }}"
+        creates: "{{ es_node_crt }}"
+        stdin: "\n\n"
+      register: es_cert_generato
+
+    - name: Scompatta il certificato del nodo
+      unarchive:
+        src: "{{ es_certs_zip }}"
+        dest: "{{ es_cert_dir }}"
+        remote_src: yes
+        creates: "{{ es_node_crt }}"
+
+  always:
+    # Gli archivi non restano sul nodo: ca.zip contiene ca.key, cioe' la chiave
+    # con cui si possono firmare certificati validi per questo cluster. Quello
+    # che serve e' gia' scompattato in ca/ e in <nodo>/.
+    - name: Rimuovi gli archivi dei certificati
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ es_ca_zip }}"
+        - "{{ es_certs_zip }}"
+
+# --- Permessi ---------------------------------------------------------------
+# certutil gira come root e lascia tutto a root:root 0600: cosi' com'e' il
+# servizio non riuscirebbe a leggere la propria chiave e il nodo non
+# partirebbe ("failed to load SSL configuration ... Permission denied").
+
+- name: Verifica che i certificati ci siano tutti
+  stat:
+    path: "{{ item }}"
+  register: es_cert_presenti
+  loop:
+    - "{{ es_ca_crt }}"
+    - "{{ es_node_crt }}"
+    - "{{ es_node_key }}"
+
+- name: Fermati se manca un certificato
+  assert:
+    that:
+      - es_cert_presenti.results | rejectattr('stat.exists') | list | length == 0
+    fail_msg: >-
+      Mancano dei certificati su {{ inventory_hostname }}:
+      {{ es_cert_presenti.results | rejectattr('stat.exists')
+         | map(attribute='item') | join(', ') }}.
+      Se hai valorizzato es_tls_local_dir, quella directory sul controller deve
+      contenere ca.crt, {{ es_node_name }}.crt e {{ es_node_name }}.key con
+      esattamente questi nomi (il nome del nodo e' es_node_name, di default il
+      nome di inventario). Altrimenti guarda l'esito di elasticsearch-certutil.
+
+- name: Assegna le directory dei certificati
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: "{{ es_group_unix }}"
+    mode: "0750"
+    recurse: no
+  loop:
+    - "{{ es_cert_dir }}"
+    - "{{ es_ca_dir }}"
+    - "{{ es_node_cert_dir }}"
+
+- name: Assegna i file dei certificati
+  file:
+    path: "{{ item.path }}"
+    owner: root
+    group: "{{ es_group_unix }}"
+    mode: "{{ item.mode }}"
+  loop:
+    # 0644 sui certificati pubblici: ca.crt e' il file che si porta via chi
+    # deve fidarsi di questo nodo, e cosi' lo si copia senza sudo.
+    - { path: "{{ es_ca_crt }}", mode: "0644" }
+    - { path: "{{ es_node_crt }}", mode: "0644" }
+    # 0640 sulle chiavi private: le legge il servizio, nessun altro.
+    - { path: "{{ es_node_key }}", mode: "0640" }
+  loop_control:
+    label: "{{ item.path }}"
+  register: es_permessi_certificati
+
+- name: Proteggi la chiave della CA
+  file:
+    path: "{{ es_ca_key }}"
+    owner: root
+    group: root
+    mode: "0600"
+  failed_when: false
+
+# Serve a servizio.yml per decidere se riavviare: la JVM legge i certificati
+# una volta sola, all'avvio.
+- name: Registra se i certificati sono cambiati
+  set_fact:
+    es_certificati_cambiati: >-
+      {{ (es_ca_generata.changed | default(false))
+         or (es_cert_generato.changed | default(false))
+         or (es_certificati_copiati.changed | default(false)) }}

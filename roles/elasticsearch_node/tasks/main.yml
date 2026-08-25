@@ -1,0 +1,68 @@
+---
+# Elasticsearch 9 SINGLE NODE su Ubuntu, con sicurezza attiva e TLS su
+# entrambe le porte (9200 HTTP, 9300 transport), certificati firmati da una CA
+# interna generata con elasticsearch-certutil.
+#
+# Automatizza la procedura a mano:
+#
+#   elasticsearch-certutil ca --days 3650 --ca-dn "CN=..." --keysize 4096 -pem \
+#     --out /etc/elasticsearch/cert/ca.zip
+#   cd /etc/elasticsearch/cert && unzip ca.zip
+#   elasticsearch-certutil cert --in /root/cert.yml --out .../allcert.zip \
+#     --ca-cert .../ca/ca.crt --ca-key .../ca/ca.key --pem --days 3650 --keysize 4096
+#   unzip allcert.zip
+#   systemctl enable --now elasticsearch
+#
+# Il ruolo e' IDEMPOTENTE. Rilanciarlo su un nodo attivo:
+#   - non rigenera i certificati se ci sono gia' (serve
+#     es_force_regenerate_certs=true, che e' distruttivo per i client)
+#   - non tocca il keystore ne' la password di elastic dopo il primo avvio:
+#     bootstrap.password vale SOLO alla creazione dell'indice di sicurezza
+#   - riavvia il nodo solo se configurazione, certificati, heap o unit sono
+#     cambiati davvero
+#
+# --- DIFFERENZE VOLUTE RISPETTO AL FILE DI CONFIGURAZIONE FORNITO -----------
+#
+# 1. Niente blocco "SECURITY AUTO CONFIGURATION".
+#    Il pacchetto deb, quando si installa, genera da solo una CA, due keystore
+#    PKCS#12 in /etc/elasticsearch/certs e appende quel blocco a
+#    elasticsearch.yml. Qui la configurazione viene riscritta per intero (con
+#    backup del file del pacchetto) e i certificati sono quelli della CA
+#    interna, in PEM: il blocco autogenerato non esiste piu' invece di restare
+#    commentato a meta' file, dove il prossimo che legge non sa piu' quale
+#    delle due configurazioni e' attiva.
+#
+# 2. node.name e transport.port scritti esplicitamente.
+#    Nel file fornito node.name e' commentato, quindi Elasticsearch userebbe
+#    l'hostname della macchina. Qui e' il nome di inventario: e' lo stesso nome
+#    che finisce nel SAN del certificato e nel percorso dei certificati, e
+#    tenerli legati evita che rinominare la macchina scolleghi le due cose.
+#
+# 3. La password di elastic non e' quella stampata dall'installazione.
+#    Il pacchetto ne genera una casuale e la stampa una volta sola durante
+#    l'apt install: in un playbook quella riga non la legge nessuno. Qui la
+#    password e' es_elastic_password, scritta nel keystore come
+#    bootstrap.password prima del primo avvio.
+#
+# 4. bootstrap.memory_lock e' una variabile, e se acceso porta con se' il resto.
+#    Nel file fornito e' commentato. Mettendolo a true qui, il ruolo aggiunge
+#    anche LimitMEMLOCK=infinity alla unit systemd: senza, il nodo NON parte e
+#    l'errore parla di memory locking, non del limite di systemd.
+
+- name: Controlli preliminari
+  import_tasks: controlli.yml
+
+- name: Installazione del pacchetto Elasticsearch
+  import_tasks: install.yml
+
+- name: Certificati TLS
+  import_tasks: certificati.yml
+
+- name: Configurazione (elasticsearch.yml, heap, keystore, unit)
+  import_tasks: configurazione.yml
+
+- name: Avvio del nodo
+  import_tasks: servizio.yml
+
+- name: Verifica
+  import_tasks: verifica.yml
