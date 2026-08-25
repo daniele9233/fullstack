@@ -7,19 +7,90 @@
 #   - repo apt artifacts.elastic.co (default)
 #   - file .deb copiato dal controller, per reti chiuse (es_deb_local_path)
 
-- name: Installa i pacchetti di appoggio
-  apt:
-    name: "{{ es_utility_packages }}"
-    state: present
-    update_cache: yes
-  # Riprova SOLO se dpkg e' occupato da un altro processo (vedi apt_lock_retries
-  # in group_vars/all.yml). Qualsiasi altro errore ferma subito il task: senza
-  # questa condizione un pacchetto inesistente verrebbe ritentato 60 volte
-  # nascondendo il messaggio vero per cinque minuti.
-  register: apt_result
-  until: apt_result is succeeded or ('lock' not in apt_result.msg | default('') | lower)
-  retries: "{{ apt_lock_retries | default(60) }}"
-  delay: "{{ apt_lock_delay | default(5) }}"
+# block/rescue e non un apt task e basta, per una ragione precisa: quando
+# "apt-get update" fallisce, il modulo apt riprova cinque volte per conto suo e
+# poi si ferma con
+#
+#   Failed to update apt cache after 5 retries:
+#
+# cioe' con il messaggio VUOTO. L'errore vero (rete, DNS, proxy, un repository
+# che risponde 404) resta dentro apt-get e non arriva mai a chi guarda il
+# playbook. Il rescue lo va a prendere e lo stampa.
+- name: Pacchetti di appoggio
+  block:
+    - name: Installa i pacchetti di appoggio
+      apt:
+        name: "{{ es_utility_packages }}"
+        state: present
+        update_cache: "{{ es_apt_update_cache | bool }}"
+      # Riprova SOLO se dpkg e' occupato da un altro processo (vedi
+      # apt_lock_retries in group_vars/all.yml). Qualsiasi altro errore ferma
+      # subito il task: senza questa condizione un pacchetto inesistente
+      # verrebbe ritentato 60 volte nascondendo il messaggio vero per cinque
+      # minuti.
+      register: apt_result
+      until: apt_result is succeeded or ('lock' not in apt_result.msg | default('') | lower)
+      retries: "{{ apt_lock_retries | default(60) }}"
+      delay: "{{ apt_lock_delay | default(5) }}"
+
+  rescue:
+    - name: Leggi l'errore vero di apt-get update
+      command: apt-get update
+      register: es_apt_update
+      changed_when: false
+      failed_when: false
+
+    # Se gli strumenti ci sono gia' — nodo su rete chiusa, immagine
+    # preconfezionata, mirror interno gia' usato a mano — il cache update non
+    # serviva a niente e fermare qui il playbook sarebbe un capriccio.
+    - name: Verifica se gli strumenti che servono ci sono lo stesso
+      shell: |
+        mancanti=""
+        for c in unzip gpg curl; do
+          command -v "$c" >/dev/null 2>&1 || mancanti="$mancanti $c"
+        done
+        [ -z "$mancanti" ] || { echo "$mancanti"; exit 1; }
+      args:
+        executable: /bin/bash
+      register: es_strumenti
+      changed_when: false
+      failed_when: false
+
+    - name: Prosegui senza aggiornare la cache di apt
+      debug:
+        msg: >-
+          ATTENZIONE {{ inventory_hostname }}: "apt-get update" non riesce, ma
+          unzip, gpg e curl sono gia' installati e il ruolo prosegue. Se anche
+          Elasticsearch arriva da un .deb locale (es_deb_local_path) non serve
+          altro; altrimenti l'installazione del pacchetto fallira' subito dopo,
+          perche' il repository Elastic si raggiunge con lo stesso apt che qui
+          non funziona. Per non ritentare a ogni run: es_apt_update_cache=false.
+          Errore di apt: {{ (es_apt_update.stderr | default('')) | trim
+                            | default(es_apt_update.stdout | default('') | trim, true) }}
+      when: es_strumenti.rc == 0
+
+    - name: Spiega perche' apt non funziona su questo nodo
+      fail:
+        msg: >-
+          {{ inventory_hostname }}: "apt-get update" fallisce e mancano
+          {{ es_strumenti.stdout | default('') | trim }}, quindi il ruolo non
+          puo' proseguire. Il messaggio vuoto del modulo apt
+          ("Failed to update apt cache after 5 retries") non e' un guasto del
+          playbook: e' apt che non riesce a leggere i propri repository. Le
+          cause, in ordine di frequenza:
+          (1) il nodo non esce in rete, o esce solo via proxy — in quel caso
+          serve /etc/apt/apt.conf.d/95proxy con Acquire::http::Proxy;
+          (2) DNS che non risolve archive.ubuntu.com;
+          (3) un repository di terze parti gia' configurato che risponde 404 e
+          fa fallire l'intero update: si trovano con
+          "grep -r . /etc/apt/sources.list.d/";
+          (4) l'orologio troppo indietro, che fa scadere la verifica delle firme.
+          Da provare a mano sul nodo: apt-get update
+          Errore raccolto adesso:
+          {{ (es_apt_update.stderr | default('')) | trim
+             | default(es_apt_update.stdout | default('') | trim, true)
+             | default('nessun output: apt e uscito senza dire niente', true) }}
+      when: es_strumenti.rc != 0
 
 # --- Repository Elastic -----------------------------------------------------
 # Salta tutto se il .deb arriva dal controller: su rete chiusa aggiungere un

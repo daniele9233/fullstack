@@ -67,6 +67,14 @@ es_apt_key_local_path: ""
 # rilancia il playbook, che toglie il blocco, aggiorna e lo rimette.
 es_apt_hold: true
 
+# Aggiornamento della cache di apt prima di installare i pacchetti di appoggio.
+#
+# A false su un nodo dove "apt-get update" non puo' funzionare — rete chiusa
+# senza mirror interno, macchina con i pacchetti gia' dentro all'immagine — e
+# dove Elasticsearch arriva da es_deb_local_path. Il ruolo si ferma comunque
+# con un messaggio leggibile se gli strumenti che gli servono non ci sono.
+es_apt_update_cache: true
+
 es_utility_packages:
   - apt-transport-https
   - ca-certificates
