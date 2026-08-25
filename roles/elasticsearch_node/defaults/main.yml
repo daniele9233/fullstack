@@ -222,6 +222,26 @@ es_force_regenerate_certs: false
 es_elastic_password: "CambiaMiSubito-elastic"
 es_force_reset_elastic_password: false
 
+# Password dell'utente integrato kibana_system. CAMBIALA.
+#
+# Non serve a entrare nella console web (quello e' l'utente elastic): la usa il
+# processo Kibana per parlare con Elasticsearch, e finisce in kibana.yml sotto
+# elasticsearch.username / elasticsearch.password.
+#
+# A differenza di elastic, che nasce con bootstrap.password, questa viene
+# impostata a cluster acceso e solo se non e' gia' quella dichiarata.
+es_kibana_system_password: "CambiaMiSubito-kibana"
+es_manage_kibana_system: true
+
+# Il file delle credenziali sul nodo, nello stesso posto e nello stesso formato
+# della procedura a mano (elasticsearch-reset-password --auto -b >> ...).
+#
+# E' una COPIA di quello che sta in group_vars, non l'originale: viene riscritto
+# a ogni esecuzione, cancellarlo non fa perdere l'accesso e modificarlo a mano
+# non cambia niente sul cluster. 0600 root:root.
+es_credentials_file: "{{ es_cert_dir }}/elk_credentials.txt"
+es_write_credentials_file: true
+
 # --- Impostazioni varie -----------------------------------------------------
 
 # true (default di Elasticsearch) = "DELETE /*" e gli altri caratteri jolly sono

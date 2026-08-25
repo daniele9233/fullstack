@@ -977,6 +977,34 @@ es_tls_local_dir: ""
 #   ansible-playbook playbooks/60-elasticsearch.yml -e es_force_reset_elastic_password=true
 es_elastic_password: "CambiaMiSubito-elastic"
 
+# Password dell'utente integrato kibana_system. CAMBIALA.
+#
+# Non e' la password con cui si entra nella console web — quella e' di elastic,
+# perche' l'autenticazione la fa Elasticsearch — ma quella che il processo
+# Kibana usa per parlare con Elasticsearch, e che va in kibana.yml sotto
+# elasticsearch.username / elasticsearch.password.
+#
+# Viene impostata a cluster acceso, e solo se non e' gia' quella dichiarata:
+# per gli utenti integrati bootstrap.password non vale, vale solo per elastic.
+es_kibana_system_password: "CambiaMiSubito-kibana"
+es_manage_kibana_system: true
+
+# Copia delle credenziali sul nodo, nello stesso percorso e nello stesso
+# formato della procedura a mano:
+#
+#   /etc/elasticsearch/cert/elk_credentials.txt, 0600 root:root
+#   Password for the [elastic] user successfully reset.
+#   New value: ...
+#   Password for the [kibana_system] user successfully reset.
+#   New value: ...
+#
+# Differenza rispetto al "elasticsearch-reset-password --auto -b >> file" della
+# procedura: le password non sono generate a caso e conoscibili solo da li',
+# ma vengono da qui sopra. Il file e' una COPIA — si riscrive a ogni
+# esecuzione, cancellarlo non fa perdere l'accesso, modificarlo a mano non
+# cambia niente sul cluster.
+es_write_credentials_file: true
+
 # --- Impostazioni varie -----------------------------------------------------
 # true (default di Elasticsearch) = "DELETE /*" e gli altri caratteri jolly
 # sono rifiutati.

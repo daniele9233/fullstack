@@ -1,0 +1,109 @@
+---
+# /etc/elasticsearch/cert/elk_credentials.txt, nel formato che produce la
+# procedura a mano:
+#
+#   elasticsearch-reset-password --auto -b -u elastic        >> elk_credentials.txt
+#   elasticsearch-reset-password --auto -b -u kibana_system  >> elk_credentials.txt
+#
+# Il contenuto e' identico riga per riga, cosi' chi legge quel file — una
+# persona o un grep "New value" — non si accorge della differenza. Cambia da
+# dove vengono le password: non piu' generate a caso e conoscibili SOLO da li',
+# ma prese da group_vars/all.yml. Il file diventa una copia, non l'originale, e
+# perderlo non significa piu' perdere l'accesso al cluster.
+#
+# Gira DOPO la verifica, e non e' un dettaglio di ordine: a quel punto e' gia'
+# accertato che es_elastic_password sia davvero la password del nodo (la
+# verifica interroga _cluster/health con quell'utente). Scrivendolo prima, un
+# elk_credentials.txt con dentro una password sbagliata sarebbe peggio di
+# nessun file.
+
+# --- kibana_system ----------------------------------------------------------
+# E' un utente INTEGRATO: esiste gia' dentro Elasticsearch, non si crea, gli si
+# assegna una password. Non serve a entrare nella console web — quello e'
+# l'utente elastic — ma al processo Kibana per parlare con Elasticsearch, e
+# finisce in kibana.yml sotto elasticsearch.username / elasticsearch.password.
+#
+# bootstrap.password vale solo per elastic: la password di kibana_system va
+# impostata a cluster acceso, e qui si fa con l'API invece che con
+# elasticsearch-reset-password, per due motivi: e' la stessa strada per tutti
+# gli utenti integrati che serviranno in futuro (logstash_system, beats_system),
+# e permette di CONTROLLARE PRIMA se la password e' gia' quella giusta, invece
+# di riassegnarla a ogni esecuzione.
+
+- name: Verifica se kibana_system ha gia' la password dichiarata
+  uri:
+    url: "{{ es_url }}/_security/_authenticate"
+    method: GET
+    user: kibana_system
+    password: "{{ es_kibana_system_password }}"
+    force_basic_auth: yes
+    ca_path: "{{ es_ca_crt if (es_security_enabled | bool and es_http_ssl_enabled | bool) else omit }}"
+    # 401 non e' un errore da fermare il playbook: e' la risposta che dice
+    # "la password non e' questa", cioe' esattamente quello che si sta
+    # chiedendo.
+    status_code: [200, 401]
+  register: es_kibana_auth
+  changed_when: false
+  failed_when: false
+  when: es_manage_kibana_system | bool
+
+- name: Imposta la password di kibana_system
+  uri:
+    url: "{{ es_url }}/_security/user/kibana_system/_password"
+    method: POST
+    user: elastic
+    password: "{{ es_elastic_password }}"
+    force_basic_auth: yes
+    ca_path: "{{ es_ca_crt if (es_security_enabled | bool and es_http_ssl_enabled | bool) else omit }}"
+    body_format: json
+    body:
+      password: "{{ es_kibana_system_password }}"
+    status_code: [200]
+  register: es_kibana_impostata
+  when:
+    - es_manage_kibana_system | bool
+    - (es_kibana_auth.status | default(0)) != 200
+  # ansible.cfg ha [diff] always = True e il corpo della richiesta contiene la
+  # password in chiaro. Per vedere cosa risponde: -e es_hide_secrets=false
+  no_log: "{{ es_hide_secrets | bool }}"
+
+- name: Mostra lo stato di kibana_system
+  debug:
+    msg: >-
+      {{ inventory_hostname }}: kibana_system
+      {{ 'aveva gia la password di es_kibana_system_password'
+         if (es_kibana_auth.status | default(0)) == 200
+         else 'password impostata adesso da es_kibana_system_password' }}
+  when: es_manage_kibana_system | bool
+
+# --- Il file ----------------------------------------------------------------
+
+- name: "Scrivi {{ es_credentials_file }}"
+  copy:
+    content: |
+      Password for the [elastic] user successfully reset.
+      New value: {{ es_elastic_password }}
+      {% if es_manage_kibana_system | bool %}
+      Password for the [kibana_system] user successfully reset.
+      New value: {{ es_kibana_system_password }}
+      {% endif %}
+    dest: "{{ es_credentials_file }}"
+    # 0600 root:root. La directory che lo contiene e' root:elasticsearch 0750,
+    # quindi il servizio ci passa attraverso per leggere i certificati, ma
+    # questo file lo legge solo root.
+    owner: root
+    group: root
+    mode: "0600"
+  register: es_credenziali_scritte
+  no_log: "{{ es_hide_secrets | bool }}"
+  when: es_write_credentials_file | bool
+
+- name: Ricorda dove sono finite le credenziali
+  debug:
+    msg: >-
+      {{ inventory_hostname }}: credenziali in {{ es_credentials_file }}
+      (0600 root:root). E' una COPIA: la fonte restano
+      es_elastic_password e es_kibana_system_password in group_vars/all.yml, e
+      il file viene riscritto da li' a ogni esecuzione. Cancellarlo non fa
+      perdere l'accesso, modificarlo a mano non cambia le password sul cluster.
+  when: es_write_credentials_file | bool

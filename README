@@ -801,6 +801,62 @@ fare:
 che usa elasticsearch-reset-password sul nodo vivo.
 
 
+  IL FILE elk_credentials.txt
+
+La procedura a mano genera le password a caso e le raccoglie appendendo
+l'output dello strumento:
+
+  elasticsearch-reset-password --auto -b -u elastic       >> elk_credentials.txt
+  elasticsearch-reset-password --auto -b -u kibana_system >> elk_credentials.txt
+
+Il ruolo scrive lo stesso file, nello stesso posto e con lo stesso contenuto
+riga per riga:
+
+  /etc/elasticsearch/cert/elk_credentials.txt        0600 root:root
+
+  Password for the [elastic] user successfully reset.
+  New value: ...
+  Password for the [kibana_system] user successfully reset.
+  New value: ...
+
+Chi legge quel file, o ci fa sopra un grep "New value", non vede differenza.
+Cambia da dove vengono le password: non generate a caso e conoscibili SOLO da
+li', ma prese da es_elastic_password e es_kibana_system_password in
+group_vars/all.yml. Il file diventa una COPIA, non l'originale — si riscrive a
+ogni esecuzione, cancellarlo non fa perdere l'accesso al cluster, e
+modificarlo a mano non cambia niente sulle password vere.
+
+Viene scritto DOPO la verifica, e l'ordine conta: a quel punto il playbook ha
+gia' interrogato /_cluster/health con l'utente elastic, quindi e' accertato che
+la password in group_vars sia davvero quella del nodo. Un elk_credentials.txt
+con dentro una password sbagliata sarebbe peggio di nessun file.
+
+Per non scriverlo affatto: es_write_credentials_file a false.
+
+
+  L'UTENTE kibana_system
+
+Le password in gioco sono due e si confondono facilmente:
+
+  elastic         e' con questo che si entra nella console web di Kibana:
+                  l'autenticazione la fa Elasticsearch, non Kibana
+  kibana_system   NON serve a entrare da nessuna parte. La usa il processo
+                  Kibana per parlare con Elasticsearch, e va in kibana.yml
+                  sotto elasticsearch.username / elasticsearch.password
+
+kibana_system e' un utente INTEGRATO: esiste gia' dentro Elasticsearch, non si
+crea, gli si assegna una password. bootstrap.password non vale per lui — vale
+solo per elastic — quindi il ruolo gliela imposta a cluster acceso, con l'API
+_security, e solo se non e' gia' quella dichiarata: prima prova ad autenticarsi
+come kibana_system con la password di es_kibana_system_password, e se passa non
+tocca niente.
+
+Kibana in se' NON e' installato da questo repository: non c'e' un ruolo. Qui si
+prepara solo l'utente che gli servira'. Con es_manage_kibana_system a false non
+viene toccato nemmeno quello, e il file delle credenziali riporta il solo
+elastic.
+
+
   I CERTIFICATI
 
 Il ruolo esegue la stessa sequenza della procedura a mano, con i controlli in

@@ -61,6 +61,8 @@
           - "Versione: {{ es_versione_installata.stdout | default('?') | trim }} — ruoli {{ es_node_roles | join(', ') }}"
           - "Discovery: {{ es_discovery_type }} (nodo singolo, si elegge master da solo)"
           - "API: {{ es_url }} — utente elastic, password in es_elastic_password"
+          - "Credenziali sul nodo: {{ es_credentials_file }} (0600 root:root) — copia di quelle in group_vars"
+          - "kibana_system: {{ 'password allineata a es_kibana_system_password (serve a kibana.yml, non alla console web)' if es_manage_kibana_system | bool else 'non gestito' }}"
           - "Dati in {{ es_data_dir }} (disco montato a mano), log in {{ es_log_dir }}"
           - "Snapshot consentiti in: {{ es_repo_dirs | join(', ') | default('nessuna directory dichiarata', true) }}"
           - "CA interna: {{ es_ca_crt }} — e' il file che i client devono importare per fidarsi del nodo"
