@@ -52,7 +52,20 @@ es_package: "elasticsearch"
 es_apt_repo_url: "https://artifacts.elastic.co/packages/{{ es_major }}.x/apt"
 es_apt_repo_file: "elastic-{{ es_major }}.x"
 es_apt_key_url: "https://artifacts.elastic.co/GPG-KEY-elasticsearch"
+
+# Portachiavi con cui apt verifica le firme del repo Elastic, nelle due forme
+# che apt accetta:
+#
+#   .gpg  binario, prodotto da "gpg --dearmor". E' la forma preferita, ed e'
+#         quella che il ruolo installa quando gpg c'e' sul nodo.
+#   .asc  la chiave come la pubblica Elastic, in armatura ASCII. Non richiede
+#         gpg, e serve come ripiego: su un nodo con apt rotto gnupg non si puo'
+#         installare, e senza alternativa il ruolo resterebbe in un giro chiuso.
+#
+# La scelta e' appiccicosa: se ne esiste gia' uno valido, si usa quello e il
+# file del repository non cambia a ogni esecuzione.
 es_apt_keyring: "/usr/share/keyrings/elasticsearch-keyring.gpg"
+es_apt_keyring_asc: "/usr/share/keyrings/elasticsearch-keyring.asc"
 
 # Rete chiusa: percorsi SUL CONTROLLER. Con es_deb_local_path valorizzato non
 # viene contattato artifacts.elastic.co e il repo non viene nemmeno aggiunto.

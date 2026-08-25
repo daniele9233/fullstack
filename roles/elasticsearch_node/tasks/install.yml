@@ -6,53 +6,302 @@
 # Due provenienze possibili:
 #   - repo apt artifacts.elastic.co (default)
 #   - file .deb copiato dal controller, per reti chiuse (es_deb_local_path)
-
-# --- Repository orfano ------------------------------------------------------
-# Va PRIMA di qualsiasi apt, e il motivo e' che senza questo il ruolo non si
-# rialza da solo.
 #
-# Un repository dichiarato con signed-by che punta a un portachiavi INESISTENTE
-# non fa fallire se stesso: fa fallire l'INTERO "apt-get update", quindi anche
-# archive.ubuntu.com, quindi anche l'installazione di unzip. Il nodo resta senza
-# apt, e il primo task del ruolo muore prima di arrivare alla parte che
-# ricostruirebbe il portachiavi. E' la situazione che si crea quando il file del
-# repository viene scritto (a mano, seguendo la documentazione di Elastic, o da
-# un run interrotto a meta') e la chiave no.
+# --- L'ORDINE DI QUESTO FILE NON E' CASUALE --------------------------------
 #
-# Qui si toglie il file del repository: la parte piu' sotto lo riscrive dopo
-# aver messo a posto la chiave.
+# Prima la CHIAVE, poi il file del REPOSITORY, poi "apt-get update", e solo
+# alla fine i pacchetti. Al contrario — pacchetti per primi, come verrebbe
+# naturale — il ruolo non si rialza da un nodo in cui apt e' gia' rotto, ed e'
+# la situazione piu' comune quando si e' provato a installare Elasticsearch a
+# mano prima di automatizzarlo:
+#
+#   un repository dichiarato con signed-by verso un portachiavi che NON esiste
+#   non fa fallire se stesso, fa fallire l'INTERO "apt-get update", archivio
+#   Ubuntu compreso. Da quel momento sul nodo non si installa piu' niente,
+#   nemmeno unzip.
+#
+# Se il primo task del ruolo fosse "installa unzip", morirebbe li' a ogni
+# esecuzione, senza mai arrivare alla parte che ricostruisce il portachiavi:
+# l'unico modo di uscirne sarebbe metterci le mani a mano. Mettendo la chiave
+# per prima — e la chiave non ha bisogno di apt, solo di scaricare un file — il
+# ruolo ripara il nodo da solo e poi tira dritto.
 
-- name: Verifica se il portachiavi di Elastic c'e'
-  stat:
-    path: "{{ es_apt_keyring }}"
-  register: es_keyring_prima
+# ===========================================================================
+# 1. CHIAVE E REPOSITORY DI ELASTIC
+# ===========================================================================
+# Tutto questo blocco NON usa apt: gira anche su un nodo con apt rotto, che e'
+# esattamente quello che deve fare.
+#
+# Salta del tutto se il .deb arriva dal controller: su rete chiusa aggiungere un
+# repository irraggiungibile farebbe fallire ogni "apt update" successivo, anche
+# quelli che con Elasticsearch non c'entrano.
 
-- name: Verifica se il repository di Elastic e' gia' configurato
-  stat:
-    path: "/etc/apt/sources.list.d/{{ es_apt_repo_file }}.list"
-  register: es_repo_prima
+- name: Chiave e repository apt di Elastic
+  when: es_deb_local_path | length == 0
+  block:
+    # Il portachiavi puo' stare in due forme, e la differenza conta solo qui:
+    #   .gpg  portachiavi binario, prodotto da "gpg --dearmor". E' la forma
+    #         che qualsiasi versione di apt accetta.
+    #   .asc  la chiave cosi' come la pubblica Elastic, in armatura ASCII. apt
+    #         la accetta da anni, e non richiede gpg installato.
+    # Si preferisce la prima quando gpg c'e', e si ripiega sulla seconda quando
+    # non c'e': su un nodo con apt rotto, gnupg non si puo' installare, e senza
+    # questa alternativa il ruolo resterebbe bloccato in un giro chiuso.
+    - name: Verifica se gpg e' disponibile sul nodo
+      command: gpg --version
+      register: es_gpg
+      changed_when: false
+      failed_when: false
 
-- name: Togli il repository Elastic rimasto senza portachiavi
+    - name: Verifica quali portachiavi di Elastic ci sono gia'
+      stat:
+        path: "{{ item }}"
+      register: es_keyring_stat
+      loop:
+        - "{{ es_apt_keyring }}"
+        - "{{ es_apt_keyring_asc }}"
+
+    # Un portachiavi c'e' ma e' VUOTO conta come non presente: sono zero byte
+    # quando un download interrotto o un proxy che risponde una pagina di errore
+    # hanno lasciato il file a meta'. apt in quel caso dice "the public key is
+    # not available", che manda a cercare la chiave sbagliata.
+    #
+    # La scelta e' APPICCICOSA: se un portachiavi valido c'e' gia', si usa
+    # quello, qualunque delle due forme sia. Cosi' il file del repository non
+    # cambia a ogni esecuzione solo perche' nel frattempo e' stato installato
+    # gnupg.
+    - name: Scegli il portachiavi da usare
+      set_fact:
+        es_keyring_path: >-
+          {{ (es_keyring_stat.results
+              | selectattr('stat.exists')
+              | selectattr('stat.size', 'gt', 0)
+              | map(attribute='item') | list | first)
+             | default(es_apt_keyring if es_gpg.rc == 0 else es_apt_keyring_asc, true) }}
+        es_keyring_gia_valido: >-
+          {{ (es_keyring_stat.results
+              | selectattr('stat.exists')
+              | selectattr('stat.size', 'gt', 0)
+              | list | length) > 0 }}
+
+    - name: Mostra quale portachiavi verra' usato
+      debug:
+        msg: >-
+          {{ inventory_hostname }}: {{ es_keyring_path }}
+          {{ 'gia presente, non viene riscritto'
+             if es_keyring_gia_valido | bool
+             else ('da installare in forma binaria (gpg disponibile)'
+                   if es_gpg.rc == 0
+                   else 'da installare in armatura ASCII (gpg non disponibile sul nodo)') }}
+
+    # /usr/share/keyrings NON esiste su tutte le installazioni: la porta il
+    # pacchetto che ci mette dentro un portachiavi, e su una Ubuntu minimale
+    # nessuno l'ha fatto. gpg non la crea da solo e si ferma con
+    # "can't open '/usr/share/keyrings/...': No such file or directory", che a
+    # leggerlo sembra un problema della chiave e non della directory.
+    - name: "Crea {{ es_keyring_path | dirname }} se non c'e'"
+      file:
+        path: "{{ es_keyring_path | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Installazione della chiave pubblica di Elastic
+      when: not es_keyring_gia_valido | bool
+      block:
+        - name: Copia la chiave di Elastic dal controller
+          copy:
+            src: "{{ es_apt_key_local_path }}"
+            dest: /tmp/GPG-KEY-elasticsearch
+            mode: "0644"
+          when: es_apt_key_local_path | length > 0
+
+        # get_url e non curl: curl potrebbe non essere installato, ed e' uno
+        # dei pacchetti che senza apt non si possono aggiungere.
+        - name: Scarica la chiave di Elastic
+          get_url:
+            url: "{{ es_apt_key_url }}"
+            dest: /tmp/GPG-KEY-elasticsearch
+            mode: "0644"
+            timeout: 60
+          when: es_apt_key_local_path | length == 0
+
+        - name: Leggi quello che e' stato scaricato
+          slurp:
+            src: /tmp/GPG-KEY-elasticsearch
+          register: es_chiave_scaricata
+
+        # Un proxy che intercetta il traffico risponde con una pagina HTML di
+        # errore e get_url la salva come se fosse la chiave: il file c'e', ha
+        # una dimensione plausibile, e apt fallisce dicendo che la firma non si
+        # verifica. Meglio accorgersene qui.
+        - name: Verifica che sia davvero una chiave OpenPGP
+          assert:
+            that:
+              - "'BEGIN PGP PUBLIC KEY BLOCK' in (es_chiave_scaricata.content | b64decode)"
+            fail_msg: >-
+              {{ inventory_hostname }}: quello che e' arrivato da
+              {{ es_apt_key_url }} non e' una chiave OpenPGP in armatura ASCII.
+              Di solito e' un proxy che ha risposto una pagina di errore al
+              posto del file. Prime righe:
+              {{ (es_chiave_scaricata.content | b64decode).split('\n')[:3] | join(' / ') }}
+              Su rete chiusa, scarica la chiave altrove e mettila sul controller
+              valorizzando es_apt_key_local_path.
+            success_msg: "chiave OpenPGP valida"
+
+        # dearmor: signed-by con un file binario e' la forma che funziona
+        # ovunque. Senza gpg si copia la chiave in armatura ASCII come .asc, che
+        # apt accetta lo stesso.
+        - name: Converti la chiave in portachiavi binario
+          command: >-
+            gpg --batch --yes --dearmor
+            -o {{ es_keyring_path }} /tmp/GPG-KEY-elasticsearch
+          when: es_gpg.rc == 0
+
+        - name: Installa la chiave in armatura ASCII
+          copy:
+            src: /tmp/GPG-KEY-elasticsearch
+            dest: "{{ es_keyring_path }}"
+            remote_src: yes
+            owner: root
+            group: root
+            mode: "0644"
+          when: es_gpg.rc != 0
+
+      always:
+        - name: Rimuovi la copia temporanea della chiave
+          file:
+            path: /tmp/GPG-KEY-elasticsearch
+            state: absent
+
+    # 0644 e non i permessi che lascia gpg. "gpg --dearmor" scrive con la umask
+    # di root, cioe' 0600, e apt scarica gli indici come utente _apt dopo aver
+    # lasciato i privilegi: un portachiavi leggibile solo da root diventa "the
+    # following signatures couldn't be verified because the public key is not
+    # available", che parla della chiave e non dei permessi.
+    - name: Rendi il portachiavi leggibile ad apt
+      file:
+        path: "{{ es_keyring_path }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Verifica che il portachiavi sia a posto
+      stat:
+        path: "{{ es_keyring_path }}"
+      register: es_keyring_finale
+
+    - name: Fermati se il portachiavi non c'e'
+      assert:
+        that:
+          - es_keyring_finale.stat.exists
+          - es_keyring_finale.stat.size > 0
+        fail_msg: >-
+          {{ inventory_hostname }}: {{ es_keyring_path }} non e' stato creato.
+          Senza portachiavi il file del repository non viene scritto — un
+          signed-by verso un file inesistente romperebbe tutto "apt-get update",
+          non solo il repository di Elastic.
+
+    # copy con content, e non apt_repository, per tre motivi:
+    #   - il signed-by contiene per costruzione il portachiavi appena
+    #     installato: non possono divergere
+    #   - apt_repository con update_cache aggiornerebbe la cache DENTRO il task
+    #     che scrive il file, e un errore di rete si presenterebbe come un
+    #     errore di scrittura del repository
+    #   - il file resta leggibile e prevedibile, con dentro scritto chi lo ha
+    #     messo li'
+    #
+    # signed-by esplicito e non apt-key: apt-key e' deprecato e la chiave
+    # finirebbe a validare QUALSIASI repository configurato sulla macchina.
+    - name: "Scrivi il repository Elastic {{ es_major }}.x"
+      copy:
+        content: |
+          # Scritto dal ruolo elasticsearch_node. Le modifiche fatte a mano qui
+          # vengono sovrascritte al prossimo run.
+          deb [signed-by={{ es_keyring_path }}] {{ es_apt_repo_url }} stable main
+        dest: "/etc/apt/sources.list.d/{{ es_apt_repo_file }}.list"
+        owner: root
+        group: root
+        mode: "0644"
+      register: es_repo_scritto
+
+  rescue:
+    # Se la chiave non si e' potuta installare, il file del repository non deve
+    # restare: un signed-by orfano rompe apt per tutto il resto della macchina,
+    # e il nodo verrebbe lasciato peggio di come lo si e' trovato.
+    - name: Togli il repository Elastic per non lasciare apt rotto
+      file:
+        path: "/etc/apt/sources.list.d/{{ es_apt_repo_file }}.list"
+        state: absent
+
+    - name: Spiega perche' il repository di Elastic non e' stato configurato
+      fail:
+        msg: >-
+          {{ inventory_hostname }}: non e' stato possibile installare la chiave
+          pubblica di Elastic, quindi il repository non e' stato scritto (un
+          signed-by verso un portachiavi mancante romperebbe apt per l'intera
+          macchina, archivio Ubuntu compreso). Il nodo resta come prima.
+          Se {{ es_apt_key_url }} non e' raggiungibile da qui, ci sono due
+          strade, entrambe in group_vars/all.yml:
+          es_apt_key_local_path con la chiave scaricata altrove e messa sul
+          controller, oppure es_deb_local_path con il .deb di Elasticsearch, che
+          fa saltare del tutto repository e chiave.
+
+# --- Repository altrui rimasti senza portachiavi ----------------------------
+# Il nostro adesso e' a posto, ma ne basta UN ALTRO rotto — un elastic-8.x.list
+# di un'installazione precedente, un repository di terze parti — per far fallire
+# "apt-get update" e con lui tutto quello che viene dopo. Si guarda prima di
+# provarci, cosi' il motivo si legge qui e non dentro un messaggio di apt.
+
+- name: Cerca repository che puntano a un portachiavi inesistente
+  shell: |
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/*; do
+      [ -f "$f" ] || continue
+      # -E e il quantificatore +: senza, la forma deb822 "Signed-By: /path"
+      # produce una corrispondenza vuota (dopo i due punti c'e' uno spazio) e il
+      # controllo segnalerebbe un percorso inesistente "" su ogni file.
+      grep -hEio 'signed-by[=: ]+[^] ]+' "$f" 2>/dev/null \
+        | sed -E 's/^signed-by[=: ]+//I' \
+        | while read -r k; do
+            [ -n "$k" ] && [ ! -e "$k" ] && echo "$f|$k"
+          done
+    done
+  args:
+    executable: /bin/bash
+  register: es_repo_rotti
+  changed_when: false
+  failed_when: false
+
+# Solo i repository di Elastic: sono roba di questo ruolo e toglierli e' un
+# ripristino, non un'intromissione. Di quelli altrui il ruolo non decide, li
+# segnala e basta.
+- name: Togli i repository Elastic rimasti senza portachiavi
   file:
-    path: "/etc/apt/sources.list.d/{{ es_apt_repo_file }}.list"
+    path: "{{ item.split('|')[0] }}"
     state: absent
-  when:
-    - es_repo_prima.stat.exists
-    - not es_keyring_prima.stat.exists
-  register: es_repo_orfano
+  loop: "{{ es_repo_rotti.stdout_lines | default([]) }}"
+  loop_control:
+    label: "{{ item.split('|')[0] }}"
+  when: (item.split('|')[0] | basename) is search('elastic')
 
-- name: Spiega che il repository orfano e' stato tolto
+- name: Segnala i repository altrui che romperanno apt
   debug:
     msg: >-
-      {{ inventory_hostname }}:
-      /etc/apt/sources.list.d/{{ es_apt_repo_file }}.list esisteva ma
-      {{ es_apt_keyring }} no. Un repository con signed-by che punta a un
-      portachiavi mancante fa fallire TUTTO "apt-get update", non solo se
-      stesso: il file e' stato rimosso e viene riscritto piu' sotto insieme
-      alla chiave.
-  when: es_repo_orfano is changed
+      ATTENZIONE {{ inventory_hostname }}: {{ item.split('|')[0] }} dichiara
+      signed-by={{ item.split('|')[1] }}, che non esiste. Un solo repository in
+      questo stato fa fallire TUTTO "apt-get update", archivio Ubuntu compreso.
+      Non e' roba di questo ruolo e non viene toccata: o si crea quel
+      portachiavi, o si toglie quel file.
+  loop: "{{ es_repo_rotti.stdout_lines | default([]) }}"
+  loop_control:
+    label: "{{ item.split('|')[0] }}"
+  when: not ((item.split('|')[0] | basename) is search('elastic'))
 
-# block/rescue e non un apt task e basta, per una ragione precisa: quando
+# ===========================================================================
+# 2. AGGIORNAMENTO DELLA CACHE DI APT
+# ===========================================================================
+# Esplicito, e non nascosto dentro update_cache di un task apt: quando
 # "apt-get update" fallisce, il modulo apt riprova cinque volte per conto suo e
 # poi si ferma con
 #
@@ -60,202 +309,117 @@
 #
 # cioe' con il messaggio VUOTO. L'errore vero (rete, DNS, proxy, un repository
 # che risponde 404) resta dentro apt-get e non arriva mai a chi guarda il
-# playbook. Il rescue lo va a prendere e lo stampa.
-- name: Pacchetti di appoggio
-  block:
-    - name: Installa i pacchetti di appoggio
-      apt:
-        name: "{{ es_utility_packages }}"
-        state: present
-        update_cache: "{{ es_apt_update_cache | bool }}"
-      # Riprova SOLO se dpkg e' occupato da un altro processo (vedi
-      # apt_lock_retries in group_vars/all.yml). Qualsiasi altro errore ferma
-      # subito il task: senza questa condizione un pacchetto inesistente
-      # verrebbe ritentato 60 volte nascondendo il messaggio vero per cinque
-      # minuti.
-      register: apt_result
-      until: apt_result is succeeded or ('lock' not in apt_result.msg | default('') | lower)
-      retries: "{{ apt_lock_retries | default(60) }}"
-      delay: "{{ apt_lock_delay | default(5) }}"
+# playbook. Qui il comando e' nostro, e l'output anche.
 
-  rescue:
-    - name: Leggi l'errore vero di apt-get update
-      command: apt-get update
-      register: es_apt_update
-      changed_when: false
-      failed_when: false
+#
+# I tentativi li fa il ciclo dentro la shell e non "until/retries" di Ansible:
+# esaurendo i retries, Ansible stampa comunque un "[ERROR]: Task failed" anche
+# con failed_when a false, e sarebbe la prima cosa che si legge a schermo
+# proprio nel punto in cui il ruolo sta cercando di spiegare con calma cosa non
+# va. Cosi' invece il task resta "ok", l'esito sta in rc, e a parlare sono i
+# task dopo. I tentativi servono al lock di dpkg, che a inizio playbook e'
+# quasi sempre occupato da unattended-upgrades.
+- name: Aggiorna la cache di apt
+  shell: |
+    rc=1
+    for tentativo in 1 2 3; do
+      if apt-get update; then rc=0; break; fi
+      sleep {{ apt_lock_delay | default(5) }}
+    done
+    exit $rc
+  args:
+    executable: /bin/bash
+  register: es_apt_update
+  changed_when: false
+  failed_when: false
+  when: es_apt_update_cache | bool
 
-    # La causa piu' frequente, e quella che il messaggio di apt spiega peggio:
-    # un repository qualsiasi — non per forza quello di Elastic — dichiarato con
-    # signed-by verso un portachiavi che non c'e'. Fa cadere l'update di tutti
-    # gli altri, compreso l'archivio Ubuntu.
-    - name: Cerca repository che puntano a un portachiavi inesistente
-      shell: |
-        for f in /etc/apt/sources.list /etc/apt/sources.list.d/*; do
-          [ -f "$f" ] || continue
-          # -E e il quantificatore +: senza, la forma deb822 "Signed-By: /path"
-          # produce una corrispondenza vuota (dopo i due punti c'e' uno spazio)
-          # e il controllo finirebbe per segnalare un percorso inesistente ""
-          # su ogni file.
-          grep -hEio 'signed-by[=: ]+[^] ]+' "$f" 2>/dev/null \
-            | sed -E 's/^signed-by[=: ]+//I' \
-            | while read -r k; do
-                [ -n "$k" ] && [ ! -e "$k" ] && echo "$f -> $k (MANCA)"
-              done
-        done
-      args:
-        executable: /bin/bash
-      register: es_keyring_mancanti
-      changed_when: false
-      failed_when: false
+- name: Verifica se gli strumenti che servono ci sono lo stesso
+  shell: |
+    mancanti=""
+    for c in unzip gpg; do
+      command -v "$c" >/dev/null 2>&1 || mancanti="$mancanti $c"
+    done
+    [ -z "$mancanti" ] || { echo "$mancanti"; exit 1; }
+  args:
+    executable: /bin/bash
+  register: es_strumenti
+  changed_when: false
+  failed_when: false
+  when: es_apt_update.rc | default(0) != 0
 
-    # Se gli strumenti ci sono gia' — nodo su rete chiusa, immagine
-    # preconfezionata, mirror interno gia' usato a mano — il cache update non
-    # serviva a niente e fermare qui il playbook sarebbe un capriccio.
-    - name: Verifica se gli strumenti che servono ci sono lo stesso
-      shell: |
-        mancanti=""
-        for c in unzip gpg curl; do
-          command -v "$c" >/dev/null 2>&1 || mancanti="$mancanti $c"
-        done
-        [ -z "$mancanti" ] || { echo "$mancanti"; exit 1; }
-      args:
-        executable: /bin/bash
-      register: es_strumenti
-      changed_when: false
-      failed_when: false
+# Se gli strumenti ci sono gia' — nodo su rete chiusa, immagine
+# preconfezionata, mirror interno — la cache non serviva e fermare qui il
+# playbook sarebbe un capriccio.
+- name: Prosegui senza aver aggiornato la cache di apt
+  debug:
+    msg: >-
+      ATTENZIONE {{ inventory_hostname }}: "apt-get update" non riesce, ma unzip
+      e gpg ci sono e il ruolo prosegue. Se anche Elasticsearch arriva da un
+      .deb locale (es_deb_local_path) non serve altro; altrimenti
+      l'installazione del pacchetto fallira' subito dopo, perche' il repository
+      Elastic si raggiunge con lo stesso apt che qui non funziona.
+      Per non ritentare a ogni run: es_apt_update_cache=false.
+      Errore di apt:
+      {{ (es_apt_update.stderr | default('')) | trim
+         | default(es_apt_update.stdout | default('') | trim, true) }}
+  when:
+    - es_apt_update.rc | default(0) != 0
+    - es_strumenti.rc | default(1) == 0
 
-    - name: Prosegui senza aggiornare la cache di apt
-      debug:
-        msg: >-
-          ATTENZIONE {{ inventory_hostname }}: "apt-get update" non riesce, ma
-          unzip, gpg e curl sono gia' installati e il ruolo prosegue. Se anche
-          Elasticsearch arriva da un .deb locale (es_deb_local_path) non serve
-          altro; altrimenti l'installazione del pacchetto fallira' subito dopo,
-          perche' il repository Elastic si raggiunge con lo stesso apt che qui
-          non funziona. Per non ritentare a ogni run: es_apt_update_cache=false.
-          Errore di apt: {{ (es_apt_update.stderr | default('')) | trim
-                            | default(es_apt_update.stdout | default('') | trim, true) }}
-      when: es_strumenti.rc == 0
+- name: Spiega perche' apt non funziona su questo nodo
+  fail:
+    msg: >-
+      {{ inventory_hostname }}: "apt-get update" fallisce e mancano
+      {{ es_strumenti.stdout | default('') | trim }}, quindi il ruolo non puo'
+      proseguire. Le cause, in ordine di frequenza:
+      (1) un repository dichiarato con signed-by verso un portachiavi che NON
+      esiste: apt esce 100 e fa fallire l'intero update, archivio Ubuntu
+      compreso. Da riconoscere dal messaggio, che pero' NON dice che manca un
+      file: dice "The following signatures couldn't be verified because the
+      public key is not available: NO_PUBKEY ...", e manda a cercare la chiave
+      sbagliata.
+      {{ ('QUI E QUESTO: ' ~ (es_repo_rotti.stdout_lines | default([]) | join(', ')))
+         if (es_repo_rotti.stdout_lines | default([]) | length > 0)
+         else 'Non e questo il caso: nessun portachiavi mancante trovato.' }}
+      (2) il nodo non esce in rete, o esce solo via proxy — in quel caso serve
+      /etc/apt/apt.conf.d/95proxy con Acquire::http::Proxy;
+      (3) DNS che non risolve archive.ubuntu.com;
+      (4) un repository di terze parti che risponde 404: si trovano con
+      "grep -r . /etc/apt/sources.list.d/";
+      (5) l'orologio troppo indietro, che fa scadere la verifica delle firme.
+      Da provare a mano sul nodo: apt-get update
+      Errore raccolto adesso:
+      {{ (es_apt_update.stderr | default('')) | trim
+         | default(es_apt_update.stdout | default('') | trim, true)
+         | default('nessun output: apt e uscito senza dire niente', true) }}
+  when:
+    - es_apt_update.rc | default(0) != 0
+    - es_strumenti.rc | default(1) != 0
 
-    - name: Spiega perche' apt non funziona su questo nodo
-      fail:
-        msg: >-
-          {{ inventory_hostname }}: "apt-get update" fallisce e mancano
-          {{ es_strumenti.stdout | default('') | trim }}, quindi il ruolo non
-          puo' proseguire. Il messaggio vuoto del modulo apt
-          ("Failed to update apt cache after 5 retries") non e' un guasto del
-          playbook: e' apt che non riesce a leggere i propri repository. Le
-          cause, in ordine di frequenza:
-          (1) un repository dichiarato con signed-by verso un portachiavi che
-          NON esiste: fa fallire l'intero update, archivio Ubuntu compreso.
-          {{ ('QUI E QUESTO: ' ~ (es_keyring_mancanti.stdout | trim))
-             if (es_keyring_mancanti.stdout | default('') | trim | length > 0)
-             else 'Non sembra questo il caso: nessun portachiavi mancante trovato.' }}
-          Si rimedia creando la directory e il portachiavi, per esempio:
-          mkdir -p {{ es_apt_keyring | dirname }} &&
-          curl -fsSL {{ es_apt_key_url }} | gpg --dearmor -o {{ es_apt_keyring }} &&
-          chmod 644 {{ es_apt_keyring }}
-          — oppure togliendo il file del repository che lo cita, che poi il
-          playbook riscrive;
-          (2) il nodo non esce in rete, o esce solo via proxy — in quel caso
-          serve /etc/apt/apt.conf.d/95proxy con Acquire::http::Proxy;
-          (3) DNS che non risolve archive.ubuntu.com;
-          (4) un repository di terze parti che risponde 404: si trovano con
-          "grep -r . /etc/apt/sources.list.d/";
-          (5) l'orologio troppo indietro, che fa scadere la verifica delle firme.
-          Da provare a mano sul nodo: apt-get update
-          Errore raccolto adesso:
-          {{ (es_apt_update.stderr | default('')) | trim
-             | default(es_apt_update.stdout | default('') | trim, true)
-             | default('nessun output: apt e uscito senza dire niente', true) }}
-      when: es_strumenti.rc != 0
+# ===========================================================================
+# 3. PACCHETTI DI APPOGGIO
+# ===========================================================================
+# update_cache: no — la cache l'ha appena aggiornata il task qui sopra, che sa
+# anche dire perche' non ci e' riuscito.
 
-# --- Repository Elastic -----------------------------------------------------
-# Salta tutto se il .deb arriva dal controller: su rete chiusa aggiungere un
-# repo irraggiungibile farebbe fallire ogni "apt update" successivo, anche
-# quelli che non c'entrano con Elasticsearch.
+- name: Installa i pacchetti di appoggio
+  apt:
+    name: "{{ es_utility_packages }}"
+    state: present
+    update_cache: no
+  # Riprova SOLO se dpkg e' occupato da un altro processo (vedi apt_lock_retries
+  # in group_vars/all.yml). Qualsiasi altro errore ferma subito il task: senza
+  # questa condizione un pacchetto inesistente verrebbe ritentato 60 volte
+  # nascondendo il messaggio vero per cinque minuti.
+  register: apt_result
+  until: apt_result is succeeded or ('lock' not in apt_result.msg | default('') | lower)
+  retries: "{{ apt_lock_retries | default(60) }}"
+  delay: "{{ apt_lock_delay | default(5) }}"
 
-- name: Repository apt di Elastic
-  when: es_deb_local_path | length == 0
-  block:
-    - name: Verifica se la chiave del repo Elastic e' gia' installata
-      stat:
-        path: "{{ es_apt_keyring }}"
-      register: es_keyring
-
-    - name: Copia la chiave GPG di Elastic dal controller
-      copy:
-        src: "{{ es_apt_key_local_path }}"
-        dest: /tmp/GPG-KEY-elasticsearch
-        mode: "0644"
-      when:
-        - not es_keyring.stat.exists
-        - es_apt_key_local_path | length > 0
-
-    - name: Scarica la chiave GPG di Elastic
-      get_url:
-        url: "{{ es_apt_key_url }}"
-        dest: /tmp/GPG-KEY-elasticsearch
-        mode: "0644"
-        timeout: 60
-      when:
-        - not es_keyring.stat.exists
-        - es_apt_key_local_path | length == 0
-
-    # /usr/share/keyrings NON esiste su tutte le installazioni: su una Ubuntu
-    # minimale la porta il pacchetto che ci mette dentro un portachiavi, e se
-    # nessuno l'ha fatto la directory non c'e'. gpg non la crea da solo e si
-    # ferma con "can't open '/usr/share/keyrings/...': No such file or
-    # directory", che a leggerlo sembra un problema della chiave.
-    - name: "Crea {{ es_apt_keyring | dirname }} se non c'e'"
-      file:
-        path: "{{ es_apt_keyring | dirname }}"
-        state: directory
-        owner: root
-        group: root
-        mode: "0755"
-
-    # dearmor: la chiave pubblicata e' in armatura ASCII, mentre signed-by
-    # vuole un portachiavi binario. Metterci il file cosi' com'e' fa fallire
-    # "apt update" con "The following signatures couldn't be verified".
-    - name: Converti la chiave in portachiavi binario
-      command: >-
-        gpg --batch --yes --dearmor
-        -o {{ es_apt_keyring }} /tmp/GPG-KEY-elasticsearch
-      when: not es_keyring.stat.exists
-
-    # 0644 e non i permessi che lascia gpg. "gpg --dearmor" scrive con la umask
-    # di root, cioe' 0600, e apt scarica gli indici come utente _apt dopo aver
-    # lasciato i privilegi: un portachiavi che solo root puo' leggere lo manda
-    # in "The following signatures couldn't be verified because the public key
-    # is not available", che parla della chiave e non dei permessi.
-    - name: Proteggi il portachiavi
-      file:
-        path: "{{ es_apt_keyring }}"
-        owner: root
-        group: root
-        mode: "0644"
-
-    - name: Rimuovi la chiave in armatura ASCII
-      file:
-        path: /tmp/GPG-KEY-elasticsearch
-        state: absent
-
-    # signed-by esplicito e non apt-key: apt-key e' deprecato e la chiave
-    # finirebbe a validare QUALSIASI repository configurato sulla macchina.
-    - name: "Aggiungi il repository Elastic {{ es_major }}.x"
-      apt_repository:
-        repo: "deb [signed-by={{ es_apt_keyring }}] {{ es_apt_repo_url }} stable main"
-        filename: "{{ es_apt_repo_file }}"
-        state: present
-        update_cache: yes
-      register: apt_result
-      until: apt_result is succeeded or ('lock' not in apt_result.msg | default('') | lower)
-      retries: "{{ apt_lock_retries | default(60) }}"
-      delay: "{{ apt_lock_delay | default(5) }}"
-
-# --- Versione ---------------------------------------------------------------
+# ===========================================================================
+# 4. VERSIONE E PACCHETTO ELASTICSEARCH
+# ===========================================================================
 # Il repo Elastic tiene anche le versioni vecchie, quindi un pin resta valido
 # nel tempo; un errore di battitura no. La verifica sta PRIMA dell'installazione
 # per dire subito quali versioni ci sono davvero, invece di lasciare ad apt un

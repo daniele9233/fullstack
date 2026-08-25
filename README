@@ -881,22 +881,52 @@ dichiarato con signed-by verso un portachiavi che non c'e':
 
   deb [signed-by=/usr/share/keyrings/elasticsearch-keyring.gpg] ...
 
-Un signed-by che punta al vuoto NON fa fallire solo quel repository: fa fallire
-l'INTERO apt-get update, archivio Ubuntu compreso. Da li' sul nodo non si
-installa piu' niente, nemmeno unzip, e l'installazione si pianta al primo task
-apt del ruolo — che con Elasticsearch non c'entra ancora niente.
+Un signed-by che punta al vuoto NON fa fallire solo quel repository: apt esce
+100 e fa fallire l'INTERO apt-get update, archivio Ubuntu compreso. Da li' sul
+nodo non si installa piu' niente, nemmeno unzip.
 
-Due cose che il ruolo fa apposta per questo:
+E il messaggio non dice che manca un file. Dice:
+
+  The following signatures couldn't be verified because the public key is not
+  available: NO_PUBKEY 8AA3C5C848B518AB
+
+che manda a cercare la chiave sbagliata: la chiave non e' scaduta ne' cambiata,
+semplicemente il file che apt doveva leggere non c'e'.
+
+L'ORDINE DEI TASK DEL RUOLO NASCE DA QUI. Prima la chiave, poi il file del
+repository, poi apt-get update, e solo alla fine i pacchetti. Al contrario —
+pacchetti per primi, come verrebbe naturale — su un nodo con apt gia' rotto il
+ruolo morirebbe al primo task senza mai arrivare alla parte che ricostruisce il
+portachiavi: l'unico modo di uscirne sarebbe metterci le mani a mano, a ogni
+esecuzione. La chiave non ha bisogno di apt, solo di scaricare un file, quindi
+puo' stare prima e riparare il nodo.
+
+Le altre cose che il ruolo fa apposta:
 
   - /usr/share/keyrings viene creata se non c'e'. Su una Ubuntu minimale quella
     directory la porta il pacchetto che ci mette dentro un portachiavi, e se
     nessuno l'ha fatto non esiste: gpg non la crea da solo e si ferma con
     "can't open ...: No such file or directory", che sembra un problema della
     chiave e non della directory
-  - se il file del repository Elastic c'e' ma il portachiavi no, il file viene
-    RIMOSSO prima di toccare apt, e riscritto piu' avanti insieme alla chiave.
-    Senza, il ruolo non si rialzerebbe mai da solo: ogni run morirebbe al primo
-    task apt, prima di arrivare alla parte che ricostruisce il portachiavi
+  - se gpg non c'e' sul nodo — e con apt rotto non si puo' installare — la
+    chiave viene messa in armatura ASCII come .asc invece che convertita in
+    binario con "gpg --dearmor". apt accetta tutte e due le forme, e cosi' il
+    ruolo non resta chiuso nel giro "per riparare apt mi serve gnupg, per
+    installare gnupg mi serve apt"
+  - la scelta del portachiavi e' APPICCICOSA: se ne esiste gia' uno valido,
+    quello si usa, in qualunque delle due forme sia. Il file del repository non
+    cambia a ogni esecuzione solo perche' nel frattempo e' comparso gnupg
+  - un portachiavi di zero byte, lasciato da un download interrotto, conta come
+    assente e viene rifatto
+  - quello che si scarica viene controllato PRIMA di installarlo: se un proxy
+    risponde una pagina HTML di errore al posto della chiave, il ruolo lo dice
+    li', invece di lasciare che apt fallisca dopo parlando di firme
+  - i file di repository Elastic rimasti senza portachiavi vengono rimossi
+    prima di toccare apt (sono roba di questo ruolo); quelli di altri vengono
+    solo segnalati, con il percorso del portachiavi che manca
+  - se la chiave non si riesce proprio a installare, il file del repository NON
+    viene scritto e il nodo resta come prima: meglio niente Elasticsearch che
+    un nodo con apt rotto
 
 Il portachiavi finisce a 0644 e non con i permessi che lascia gpg (0600 con la
 umask di root): apt scarica gli indici come utente _apt, dopo aver lasciato i
