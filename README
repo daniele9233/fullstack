@@ -863,6 +863,72 @@ proposito, alzando es_version: il playbook toglie il blocco, aggiorna e lo
 rimette.
 
 
+  QUANDO APT NON FUNZIONA SUL NODO
+
+Il modulo apt di Ansible, se "apt-get update" fallisce, riprova cinque volte da
+solo e poi si ferma con il messaggio VUOTO:
+
+  Failed to update apt cache after 5 retries:
+
+L'errore vero resta dentro apt-get. Il ruolo lo va a prendere da solo: quando
+quel task fallisce, il rescue esegue "apt-get update", stampa il messaggio e
+elenca le cause. Se unzip, gpg e curl sono gia' installati prosegue lo stesso,
+avvisando; se mancano si ferma.
+
+La causa che si riconosce peggio, e che capita per prima installando
+Elasticsearch a mano seguendo la documentazione di Elastic, e' un repository
+dichiarato con signed-by verso un portachiavi che non c'e':
+
+  deb [signed-by=/usr/share/keyrings/elasticsearch-keyring.gpg] ...
+
+Un signed-by che punta al vuoto NON fa fallire solo quel repository: fa fallire
+l'INTERO apt-get update, archivio Ubuntu compreso. Da li' sul nodo non si
+installa piu' niente, nemmeno unzip, e l'installazione si pianta al primo task
+apt del ruolo — che con Elasticsearch non c'entra ancora niente.
+
+Due cose che il ruolo fa apposta per questo:
+
+  - /usr/share/keyrings viene creata se non c'e'. Su una Ubuntu minimale quella
+    directory la porta il pacchetto che ci mette dentro un portachiavi, e se
+    nessuno l'ha fatto non esiste: gpg non la crea da solo e si ferma con
+    "can't open ...: No such file or directory", che sembra un problema della
+    chiave e non della directory
+  - se il file del repository Elastic c'e' ma il portachiavi no, il file viene
+    RIMOSSO prima di toccare apt, e riscritto piu' avanti insieme alla chiave.
+    Senza, il ruolo non si rialzerebbe mai da solo: ogni run morirebbe al primo
+    task apt, prima di arrivare alla parte che ricostruisce il portachiavi
+
+Il portachiavi finisce a 0644 e non con i permessi che lascia gpg (0600 con la
+umask di root): apt scarica gli indici come utente _apt, dopo aver lasciato i
+privilegi, e un portachiavi leggibile solo da root diventa "the public key is
+not available", che parla della chiave e non dei permessi.
+
+A mano, la riparazione e' questa:
+
+  mkdir -p /usr/share/keyrings
+  curl -fsSL https://artifacts.elastic.co/GPG-KEY-elasticsearch \
+    | gpg --dearmor -o /usr/share/keyrings/elasticsearch-keyring.gpg
+  chmod 644 /usr/share/keyrings/elasticsearch-keyring.gpg
+  apt-get update
+
+Per trovare tutti i repository che puntano a un portachiavi mancante:
+
+  for f in /etc/apt/sources.list /etc/apt/sources.list.d/*; do
+    [ -f "$f" ] || continue
+    grep -hEio 'signed-by[=: ]+[^] ]+' "$f" | sed -E 's/^signed-by[=: ]+//I' |
+      while read -r k; do [ -e "$k" ] || echo "$f -> $k MANCA"; done
+  done
+
+Le altre cause, in ordine: nodo senza uscita in rete o dietro proxy (serve
+/etc/apt/apt.conf.d/95proxy con Acquire::http::Proxy), DNS che non risolve
+archive.ubuntu.com, un repository di terze parti che risponde 404, l'orologio
+indietro che fa scadere la verifica delle firme.
+
+Su un nodo dove "apt-get update" non puo' proprio funzionare — rete chiusa
+senza mirror interno, con unzip, gpg e curl gia' dentro all'immagine — si mette
+es_apt_update_cache a false e si fa arrivare Elasticsearch da es_deb_local_path.
+
+
   VERIFICA
 
 A fine installazione il playbook interroga /_cluster/health con l'utente

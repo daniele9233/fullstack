@@ -7,6 +7,51 @@
 #   - repo apt artifacts.elastic.co (default)
 #   - file .deb copiato dal controller, per reti chiuse (es_deb_local_path)
 
+# --- Repository orfano ------------------------------------------------------
+# Va PRIMA di qualsiasi apt, e il motivo e' che senza questo il ruolo non si
+# rialza da solo.
+#
+# Un repository dichiarato con signed-by che punta a un portachiavi INESISTENTE
+# non fa fallire se stesso: fa fallire l'INTERO "apt-get update", quindi anche
+# archive.ubuntu.com, quindi anche l'installazione di unzip. Il nodo resta senza
+# apt, e il primo task del ruolo muore prima di arrivare alla parte che
+# ricostruirebbe il portachiavi. E' la situazione che si crea quando il file del
+# repository viene scritto (a mano, seguendo la documentazione di Elastic, o da
+# un run interrotto a meta') e la chiave no.
+#
+# Qui si toglie il file del repository: la parte piu' sotto lo riscrive dopo
+# aver messo a posto la chiave.
+
+- name: Verifica se il portachiavi di Elastic c'e'
+  stat:
+    path: "{{ es_apt_keyring }}"
+  register: es_keyring_prima
+
+- name: Verifica se il repository di Elastic e' gia' configurato
+  stat:
+    path: "/etc/apt/sources.list.d/{{ es_apt_repo_file }}.list"
+  register: es_repo_prima
+
+- name: Togli il repository Elastic rimasto senza portachiavi
+  file:
+    path: "/etc/apt/sources.list.d/{{ es_apt_repo_file }}.list"
+    state: absent
+  when:
+    - es_repo_prima.stat.exists
+    - not es_keyring_prima.stat.exists
+  register: es_repo_orfano
+
+- name: Spiega che il repository orfano e' stato tolto
+  debug:
+    msg: >-
+      {{ inventory_hostname }}:
+      /etc/apt/sources.list.d/{{ es_apt_repo_file }}.list esisteva ma
+      {{ es_apt_keyring }} no. Un repository con signed-by che punta a un
+      portachiavi mancante fa fallire TUTTO "apt-get update", non solo se
+      stesso: il file e' stato rimosso e viene riscritto piu' sotto insieme
+      alla chiave.
+  when: es_repo_orfano is changed
+
 # block/rescue e non un apt task e basta, per una ragione precisa: quando
 # "apt-get update" fallisce, il modulo apt riprova cinque volte per conto suo e
 # poi si ferma con
@@ -37,6 +82,30 @@
     - name: Leggi l'errore vero di apt-get update
       command: apt-get update
       register: es_apt_update
+      changed_when: false
+      failed_when: false
+
+    # La causa piu' frequente, e quella che il messaggio di apt spiega peggio:
+    # un repository qualsiasi — non per forza quello di Elastic — dichiarato con
+    # signed-by verso un portachiavi che non c'e'. Fa cadere l'update di tutti
+    # gli altri, compreso l'archivio Ubuntu.
+    - name: Cerca repository che puntano a un portachiavi inesistente
+      shell: |
+        for f in /etc/apt/sources.list /etc/apt/sources.list.d/*; do
+          [ -f "$f" ] || continue
+          # -E e il quantificatore +: senza, la forma deb822 "Signed-By: /path"
+          # produce una corrispondenza vuota (dopo i due punti c'e' uno spazio)
+          # e il controllo finirebbe per segnalare un percorso inesistente ""
+          # su ogni file.
+          grep -hEio 'signed-by[=: ]+[^] ]+' "$f" 2>/dev/null \
+            | sed -E 's/^signed-by[=: ]+//I' \
+            | while read -r k; do
+                [ -n "$k" ] && [ ! -e "$k" ] && echo "$f -> $k (MANCA)"
+              done
+        done
+      args:
+        executable: /bin/bash
+      register: es_keyring_mancanti
       changed_when: false
       failed_when: false
 
@@ -78,13 +147,23 @@
           ("Failed to update apt cache after 5 retries") non e' un guasto del
           playbook: e' apt che non riesce a leggere i propri repository. Le
           cause, in ordine di frequenza:
-          (1) il nodo non esce in rete, o esce solo via proxy — in quel caso
+          (1) un repository dichiarato con signed-by verso un portachiavi che
+          NON esiste: fa fallire l'intero update, archivio Ubuntu compreso.
+          {{ ('QUI E QUESTO: ' ~ (es_keyring_mancanti.stdout | trim))
+             if (es_keyring_mancanti.stdout | default('') | trim | length > 0)
+             else 'Non sembra questo il caso: nessun portachiavi mancante trovato.' }}
+          Si rimedia creando la directory e il portachiavi, per esempio:
+          mkdir -p {{ es_apt_keyring | dirname }} &&
+          curl -fsSL {{ es_apt_key_url }} | gpg --dearmor -o {{ es_apt_keyring }} &&
+          chmod 644 {{ es_apt_keyring }}
+          — oppure togliendo il file del repository che lo cita, che poi il
+          playbook riscrive;
+          (2) il nodo non esce in rete, o esce solo via proxy — in quel caso
           serve /etc/apt/apt.conf.d/95proxy con Acquire::http::Proxy;
-          (2) DNS che non risolve archive.ubuntu.com;
-          (3) un repository di terze parti gia' configurato che risponde 404 e
-          fa fallire l'intero update: si trovano con
+          (3) DNS che non risolve archive.ubuntu.com;
+          (4) un repository di terze parti che risponde 404: si trovano con
           "grep -r . /etc/apt/sources.list.d/";
-          (4) l'orologio troppo indietro, che fa scadere la verifica delle firme.
+          (5) l'orologio troppo indietro, che fa scadere la verifica delle firme.
           Da provare a mano sul nodo: apt-get update
           Errore raccolto adesso:
           {{ (es_apt_update.stderr | default('')) | trim
@@ -124,6 +203,19 @@
         - not es_keyring.stat.exists
         - es_apt_key_local_path | length == 0
 
+    # /usr/share/keyrings NON esiste su tutte le installazioni: su una Ubuntu
+    # minimale la porta il pacchetto che ci mette dentro un portachiavi, e se
+    # nessuno l'ha fatto la directory non c'e'. gpg non la crea da solo e si
+    # ferma con "can't open '/usr/share/keyrings/...': No such file or
+    # directory", che a leggerlo sembra un problema della chiave.
+    - name: "Crea {{ es_apt_keyring | dirname }} se non c'e'"
+      file:
+        path: "{{ es_apt_keyring | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
     # dearmor: la chiave pubblicata e' in armatura ASCII, mentre signed-by
     # vuole un portachiavi binario. Metterci il file cosi' com'e' fa fallire
     # "apt update" con "The following signatures couldn't be verified".
@@ -133,6 +225,11 @@
         -o {{ es_apt_keyring }} /tmp/GPG-KEY-elasticsearch
       when: not es_keyring.stat.exists
 
+    # 0644 e non i permessi che lascia gpg. "gpg --dearmor" scrive con la umask
+    # di root, cioe' 0600, e apt scarica gli indici come utente _apt dopo aver
+    # lasciato i privilegi: un portachiavi che solo root puo' leggere lo manda
+    # in "The following signatures couldn't be verified because the public key
+    # is not available", che parla della chiave e non dei permessi.
     - name: Proteggi il portachiavi
       file:
         path: "{{ es_apt_keyring }}"
