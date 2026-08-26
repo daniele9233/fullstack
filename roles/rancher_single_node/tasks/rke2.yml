@@ -214,19 +214,59 @@
 # --- 3. Il nodo diventa Ready -----------------------------------------------
 # Da qui in poi l'API c'e': se il nodo non e' Ready, il motivo e' il kubelet o
 # il CNI, e i pod lo dicono.
+#
+# NIENTE JSONPATH QUI DENTRO, e non e' una preferenza di stile.
+#
+# La versione precedente chiedeva
+#   get node <nome> -o jsonpath={.status.conditions[?(@.type=="Ready")].status}
+# e non funzionava MAI. Il modulo command non passa per una shell: spezza la
+# riga con shlex, e shlex si mangia le virgolette dentro al filtro. A kubectl
+# arrivava
+#   jsonpath={.status.conditions[?(@.type==Ready)].status}
+# cioe' un confronto con un letterale senza virgolette, che in jsonpath non
+# combacia con niente. Risultato: stringa vuota a ogni tentativo, l'attesa che
+# non finiva mai, e un nodo perfettamente Ready dichiarato guasto dopo dieci
+# minuti.
+#
+# "kubectl wait" fa esattamente questo lavoro, e' fatto per farlo, e non ha
+# niente da citare. In piu' l'attesa la fa lui: un comando, non sessanta.
+#
+# Le due domande restano separate — il nodo ESISTE, e il nodo e' READY — perche'
+# sono due guasti diversi: il primo e' un nome sbagliato, il secondo e' il CNI.
 
-- name: Attendi che il nodo sia Ready
-  command: >-
-    /var/lib/rancher/rke2/bin/kubectl
-    --kubeconfig /etc/rancher/rke2/rke2.yaml
-    get node {{ rsn_node_name }}
-    -o jsonpath={.status.conditions[?(@.type=="Ready")].status}
-  register: rsn_node_ready
-  until: rsn_node_ready.rc == 0 and rsn_node_ready.stdout | trim == 'True'
-  retries: "{{ rsn_ready_retries }}"
-  delay: "{{ rsn_ready_delay }}"
+- name: Attendi che il nodo compaia nel cluster
+  command:
+    argv:
+      - /var/lib/rancher/rke2/bin/kubectl
+      - --kubeconfig
+      - /etc/rancher/rke2/rke2.yaml
+      - get
+      - "node/{{ rsn_node_name }}"
+      - -o
+      - name
+  register: rsn_node_esiste
+  until: rsn_node_esiste.rc == 0
+  retries: 12
+  delay: 5
   changed_when: false
   failed_when: false
+
+# argv, non una stringa: cosi' ogni argomento arriva a kubectl come e' scritto,
+# senza passare da nessuno che possa reinterpretarlo.
+- name: Attendi che il nodo sia Ready
+  command:
+    argv:
+      - /var/lib/rancher/rke2/bin/kubectl
+      - --kubeconfig
+      - /etc/rancher/rke2/rke2.yaml
+      - wait
+      - --for=condition=Ready
+      - "node/{{ rsn_node_name }}"
+      - "--timeout={{ rsn_ready_retries | int * rsn_ready_delay | int }}s"
+  register: rsn_node_ready
+  changed_when: false
+  failed_when: false
+  when: rsn_node_esiste.rc == 0
 
 - name: Raccogli la diagnosi se il nodo non e' Ready
   block:
@@ -249,7 +289,9 @@
       register: rsn_pod_ko
       changed_when: false
       failed_when: false
-  when: not (rsn_node_ready.rc | default(1) == 0 and rsn_node_ready.stdout | default('') | trim == 'True')
+  # "kubectl wait" esce 0 SOLO quando la condizione e' soddisfatta: non c'e'
+  # piu' nessun output da interpretare.
+  when: rsn_node_ready.rc | default(1) != 0
 
 - name: Fermati se il nodo non diventa Ready
   fail:
@@ -278,7 +320,9 @@
       girando:
       {{ rsn_pod_ko.stdout | default('nessuno') }}
       {% endif %}
-  when: not (rsn_node_ready.rc | default(1) == 0 and rsn_node_ready.stdout | default('') | trim == 'True')
+  # "kubectl wait" esce 0 SOLO quando la condizione e' soddisfatta: non c'e'
+  # piu' nessun output da interpretare.
+  when: rsn_node_ready.rc | default(1) != 0
 
 - name: Nodo pronto
   debug:
