@@ -71,22 +71,103 @@
   retries: "{{ traefik_wait_retries }}"
   delay: "{{ traefik_wait_delay }}"
   changed_when: false
-  # Non blocca il playbook: il chart puo' metterci piu' del previsto a scaricare
-  # e i pod a partire. Il task successivo dice com'e' andata.
+  # Il fallimento lo gestiscono i task qui sotto, che prima vanno a leggere
+  # PERCHE' non e' pronto.
   failed_when: false
+  when:
+    - traefik_enabled | bool
+    - inventory_hostname == ansible_play_hosts_all[0]
+
+- name: Stabilisci se Traefik e' pronto
+  set_fact:
+    traefik_pronto: >-
+      {{ traefik_ready.rc | default(1) == 0
+         and (traefik_ready.stdout | default('')) is match('^[0-9]+/[0-9]+$')
+         and traefik_ready.stdout.split('/')[0] | int > 0
+         and traefik_ready.stdout.split('/')[0] == traefik_ready.stdout.split('/')[1] }}
   when:
     - traefik_enabled | bool
     - inventory_hostname == ansible_play_hosts_all[0]
 
 - name: Stato di Traefik
   debug:
-    msg: >-
-      {{ 'Traefik pronto: ' ~ traefik_ready.stdout ~ ' pod'
-         if traefik_ready.rc | default(1) == 0 and traefik_ready.stdout | default('') | length > 0
-         else 'Traefik non ancora pronto dopo '
-              ~ (traefik_wait_retries | int * traefik_wait_delay | int) ~ ' secondi.
-              Controlla con: kubectl -n ' ~ traefik_namespace ~ ' get pods,daemonset
-              e kubectl -n kube-system get helmchart traefik' }}
+    msg: "Traefik pronto: {{ traefik_ready.stdout }} pod"
   when:
     - traefik_enabled | bool
     - inventory_hostname == ansible_play_hosts_all[0]
+    - traefik_pronto | bool
+
+# --- Traefik non e' pronto: prima si guarda PERCHE', poi ci si ferma ----------
+#
+# Il chart lo scarica un POD (il job helm-install-traefik), non il nodo. Se i
+# pod non risolvono i nomi esterni — il caso classico e' il CoreDNS che inoltra
+# a 8.8.8.8 perche' /etc/resolv.conf del nodo e' lo stub 127.0.0.53 — quel job
+# resta a riprovare per sempre con "lookup traefik.github.io: i/o timeout", e
+# fuori si vede solo un DaemonSet che non esiste. Il motivo sta nei log del job:
+# vanno stampati qui, non lasciati li' da cercare.
+- name: Diagnosi di Traefik non pronto
+  when:
+    - traefik_enabled | bool
+    - inventory_hostname == ansible_play_hosts_all[0]
+    - not (traefik_pronto | bool)
+  block:
+    - name: Log del job che scarica il chart
+      shell: >-
+        set -o pipefail;
+        /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml
+        -n kube-system logs job/helm-install-traefik
+        --tail={{ traefik_log_righe }} 2>&1 | tail -{{ traefik_log_righe }}
+      args:
+        executable: /bin/bash
+      register: traefik_job_log
+      changed_when: false
+      failed_when: false
+
+    - name: Stato di HelmChart, job e pod
+      shell: >-
+        /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml
+        -n kube-system get helmchart traefik 2>&1;
+        /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml
+        -n kube-system get job,pods -l helmcharts.helm.cattle.io/chart=traefik 2>&1;
+        /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml
+        -n {{ traefik_namespace }} get daemonset,pods -o wide 2>&1
+      args:
+        executable: /bin/bash
+      register: traefik_stato
+      changed_when: false
+      failed_when: false
+
+    - name: Fermati spiegando perche' Traefik non e' pronto
+      fail:
+        msg: |
+          Traefik non e' pronto dopo {{ traefik_wait_retries | int * traefik_wait_delay | int }} secondi su {{ inventory_hostname }}.
+
+          Log di helm-install-traefik (e' il pod che scarica il chart):
+          {{ traefik_job_log.stdout | default('(nessun log: il job non esiste ancora)') }}
+
+          Stato di HelmChart, job e DaemonSet:
+          {{ traefik_stato.stdout | default('(niente)') }}
+
+          Se qui sopra leggi "i/o timeout" o "no such host" su traefik.github.io,
+          il problema NON e' Traefik: e' che i pod non risolvono i nomi esterni.
+          Su Ubuntu /etc/resolv.conf punta allo stub 127.0.0.53 di
+          systemd-resolved, RKE2 vede il loopback e ripiega su 8.8.8.8, che su
+          rete aziendale chiusa non risponde. La cura e' rke2_resolv_conf in
+          group_vars/all.yml (cluster locale) e cluster_resolv_conf (cluster
+          downstream): il config.yaml del nodo deve contenere
+
+            resolv-conf: /run/systemd/resolve/resolv.conf
+
+          Dopo averlo messo serve un "systemctl restart rke2-server" sui nodi,
+          oppure un azzeramento e reinstallazione.
+
+          Con traefik_ferma_se_non_pronto=false il playbook prosegue lo stesso,
+          ma quello che viene dopo (l'Ingress di Rancher) non puo' funzionare.
+      when: traefik_ferma_se_non_pronto | bool
+
+    - name: Prosegui senza Traefik, come richiesto
+      debug:
+        msg: >-
+          Traefik non e' pronto, ma traefik_ferma_se_non_pronto e' false: si
+          prosegue. L'Ingress di Rancher restera' senza nessuno che lo serve.
+      when: not (traefik_ferma_se_non_pronto | bool)

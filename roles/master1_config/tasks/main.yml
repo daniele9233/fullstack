@@ -48,6 +48,20 @@
     - rke2_token | length == 0
     - inventory_hostname != groups['masters'][0]
 
+# --- resolv.conf --------------------------------------------------------------
+# Il file va cercato SUL NODO: su una macchina senza systemd-resolved non esiste,
+# e scrivere in config.yaml un resolv-conf che punta al nulla e' peggio che non
+# scriverlo. Vedi rke2_resolv_conf in group_vars/all.yml per il perche' serve.
+- name: Verifica se sul nodo c'e' il resolv.conf vero
+  stat:
+    path: "{{ rke2_resolv_conf }}"
+  register: rke2_resolv_stat
+  when: rke2_resolv_conf | default('') | length > 0
+
+- name: Stabilisci se scrivere resolv-conf in config.yaml
+  set_fact:
+    rke2_resolv_conf_presente: "{{ rke2_resolv_stat.stat.exists | default(false) }}"
+
 - name: Create /etc/rancher/rke2/config.yaml
   template:
     src: config_master1.yaml.j2

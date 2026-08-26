@@ -15,22 +15,81 @@
 # until/retries: la pausa qui sopra e' un'attesa a tempo, questa e' un'attesa
 # sul fatto. Se Rancher non e' ancora in piedi il login fallisce e si riprova,
 # invece di far cadere il playbook al primo tentativo.
-- name: Get Rancher API token
-  delegate_to: "{{ ansibleSshHost }}"
-  uri:
-    url: "https://{{ rancher_domain }}/v3-public/localProviders/local?action=login"
-    method: POST
-    body_format: json
-    validate_certs: no
-    body:
-      username: "admin"
-      password: "{{ rancher_password }}"
-    return_content: yes
-    status_code: [200, 201]
-  register: api_token_response
-  until: api_token_response.status | default(0) in [200, 201]
-  retries: "{{ cluster_login_retries }}"
-  delay: "{{ cluster_login_delay }}"
+#
+# ATTENZIONE A CHI PARLA CON CHI: la chiamata parte dal CONTROL NODE
+# (delegate_to), non dal master. Quindi conta come il control node risolve
+# rancher_domain e chi risponde a quell'indirizzo — non quello che gira sui
+# master. Il rescue qui sotto va a guardare esattamente quello, perche' "Status
+# code was -1" da solo non dice niente.
+- name: Login all'API di Rancher
+  block:
+    - name: Get Rancher API token
+      delegate_to: "{{ ansibleSshHost }}"
+      uri:
+        url: "https://{{ rancher_domain }}/v3-public/localProviders/local?action=login"
+        method: POST
+        body_format: json
+        validate_certs: no
+        body:
+          username: "admin"
+          password: "{{ rancher_password }}"
+        return_content: yes
+        status_code: [200, 201]
+      register: api_token_response
+      until: api_token_response.status | default(0) in [200, 201]
+      retries: "{{ cluster_login_retries }}"
+      delay: "{{ cluster_login_delay }}"
+
+  rescue:
+    - name: Guarda a quale indirizzo risponde il dominio
+      shell: >-
+        getent hosts {{ rancher_domain }} 2>&1;
+        echo '--- chi risponde sulla 443 ---';
+        timeout 5 curl -sS -o /dev/null -w 'HTTP %{http_code} da %{remote_ip}:%{remote_port}\n'
+        -k https://{{ rancher_domain }}/ping 2>&1
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ ansibleSshHost }}"
+      register: cluster_dns_check
+      changed_when: false
+      failed_when: false
+
+    - name: Fermati spiegando chi non risponde
+      fail:
+        msg: |
+          Il login all'API di Rancher non riesce da {{ ansibleSshHost }} (il control node).
+
+          URL: https://{{ rancher_domain }}/v3-public/localProviders/local?action=login
+          Esito: {{ api_token_response.msg | default('nessuna risposta') }}
+
+          Dal control node, {{ rancher_domain }} risolve e risponde cosi':
+          {{ cluster_dns_check.stdout | default('(nessun esito)') }}
+
+          {% if 'Connection refused' in (api_token_response.msg | default('')) %}
+          "Connection refused" vuol dire che l'indirizzo si risolve ma su quella
+          macchina NESSUNO ascolta sulla 443. Le due cause solite:
+
+            1. il dominio punta a un bilanciatore su cui nginx non c'e' o non e'
+               in ascolto. nginx qui ascolta SOLO su vip_rancher_ip:443
+               (roles/nginx_install/templates/rancher-console.conf.j2), quindi
+               rancher_endpoint_ip deve valere il VIP, non l'IP di una delle due
+               macchine — e playbooks/10-bilanciatori.yml dev'essere gia' girato.
+
+            2. il dominio punta ai master, ma sui master la 443 non la tiene
+               nessuno perche' Traefik non e' partito. In quel caso il playbook
+               si e' gia' fermato prima, su traefik_install.
+
+          Adesso rancher_endpoint_ip vale
+          "{{ rancher_endpoint_ip | default('(non impostata: si usa il primo master)') }}"
+          e vip_rancher_ip vale "{{ vip_rancher_ip | default('(non impostata)') }}".
+          {% elif 'timed out' in (api_token_response.msg | default('')) or 'timeout' in (api_token_response.msg | default('')) %}
+          Un timeout (invece di un rifiuto) di solito e' un firewall in mezzo, o
+          un indirizzo su cui non c'e' nessuna macchina accesa.
+          {% elif api_token_response.status | default(0) == 401 %}
+          401: il dominio risponde, ma la password non e' quella. E'
+          rancher_password, e conta quella usata al PRIMO avvio di Rancher: se il
+          bootstrap e' gia' avvenuto con un'altra, cambiarla qui non basta.
+          {% endif %}
 
 - name: Set Rancher server URL (completa setup iniziale)
   delegate_to: "{{ ansibleSshHost }}"
@@ -83,6 +142,45 @@
          if cluster_esistente.status == 200
          else ('Il cluster ' ~ cluster_name ~ ' non esiste: viene creato adesso.') }}
 
+# --- resolv.conf dei nodi downstream -----------------------------------------
+# Stessa storia del cluster locale (vedi rke2_resolv_conf in group_vars): senza,
+# il CoreDNS del cluster downstream inoltra a 8.8.8.8 e su rete chiusa non
+# risolve niente — il primo a caderci e' il chart di Traefik.
+#
+# Il file va cercato SUI NODI, non qui: questo ruolo gira sul primo master. Se
+# manca anche su uno solo, la riga non si scrive: un resolv-conf che punta al
+# nulla e' peggio di nessun resolv-conf.
+- name: Verifica il resolv.conf sui nodi del cluster downstream
+  stat:
+    path: "{{ cluster_resolv_conf }}"
+  delegate_to: "{{ item }}"
+  loop: >-
+    {{ (groups['new_managers'] | default([]))
+       + (groups['workers'] | default([]))
+       + (groups['ingress'] | default([])) }}
+  register: cluster_resolv_stat
+  changed_when: false
+  when: cluster_resolv_conf | default('') | length > 0
+
+- name: Stabilisci se scrivere resolv-conf nel cluster downstream
+  set_fact:
+    cluster_resolv_senza: >-
+      {{ cluster_resolv_stat.results | default([])
+         | selectattr('stat', 'defined')
+         | rejectattr('stat.exists')
+         | map(attribute='item') | list }}
+
+- name: Mostra la scelta su resolv-conf
+  debug:
+    msg: >-
+      {{ ('Il cluster downstream nascera con resolv-conf: ' ~ cluster_resolv_conf)
+         if (cluster_resolv_conf | default('') | length > 0 and cluster_resolv_senza | length == 0)
+         else ('resolv-conf NON verra scritto: '
+               ~ ('disabilitato (cluster_resolv_conf vuoto)'
+                  if cluster_resolv_conf | default('') | length == 0
+                  else cluster_resolv_conf ~ ' non esiste su ' ~ (cluster_resolv_senza | join(', '))
+                       ~ '. Su rete chiusa quel cluster non risolvera i nomi esterni.')) }}
+
 - name: Create a new Kubernetes RKE2 custom cluster via Rancher API
   when: cluster_esistente.status == 404
   delegate_to: "{{ ansibleSshHost }}"
@@ -101,14 +199,24 @@
       spec:
         kubernetesVersion: "{{ cluster_k8s_version }}"
         rkeConfig:
-          machineGlobalConfig:
-            cni: "{{ cluster_cni }}"
-            disable-kube-proxy: false
-            etcd-expose-metrics: false
-            # Stesso standard del cluster locale: Calico come CNI e Traefik
-            # come ingress, quindi il nginx packaged non va installato. Traefik
-            # lo mette il ruolo traefik_install sui nodi [new_managers].
-            disable: "{{ cluster_disable }}"
+          # Costruito come dizionario e non riga per riga perche' resolv-conf
+          # c'e' solo quando il file esiste su tutti i nodi: una chiave che
+          # compare o non compare non si scrive con un "when" in mezzo a un body.
+          #
+          # disable: stesso standard del cluster locale — Calico come CNI e
+          # Traefik come ingress, quindi il nginx packaged non va installato.
+          # Traefik lo mette il ruolo traefik_install sui nodi [new_managers].
+          machineGlobalConfig: >-
+            {{ {
+                 'cni': cluster_cni,
+                 'disable-kube-proxy': false,
+                 'etcd-expose-metrics': false,
+                 'disable': cluster_disable
+               } | combine(
+                 {'resolv-conf': cluster_resolv_conf}
+                 if (cluster_resolv_conf | default('') | length > 0
+                     and cluster_resolv_senza | length == 0)
+                 else {}) }}
           machineSelectorConfig:
             - config:
                 protect-kernel-defaults: false

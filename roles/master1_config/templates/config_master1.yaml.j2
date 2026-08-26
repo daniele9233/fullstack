@@ -34,3 +34,12 @@ disable:
 {% if rke2_write_kubeconfig_mode %}
 write-kubeconfig-mode: "{{ rke2_write_kubeconfig_mode }}"
 {% endif %}
+{% if rke2_resolv_conf_presente | default(false) %}
+
+{{ '#' }} Il resolv.conf VERO, non lo stub 127.0.0.53 di systemd-resolved a cui
+{{ '#' }} punta /etc/resolv.conf su Ubuntu. RKE2 vede il loopback e se ne
+{{ '#' }} genera uno con 8.8.8.8 dentro: su rete aziendale chiusa non risponde,
+{{ '#' }} e CoreDNS non risolve piu' nessun nome esterno. Il primo a caderci e'
+{{ '#' }} il job che scarica il chart di Traefik da traefik.github.io.
+resolv-conf: {{ rke2_resolv_conf }}
+{% endif %}

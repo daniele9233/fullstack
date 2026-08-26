@@ -1401,6 +1401,35 @@ Se invece il ruolo si ferma dicendo che kubectl non e' comparso, il problema e'
 piu' indietro: RKE2 non si e' installato su quel nodo. Sul nodo,
 "journalctl -u rancher-system-agent -n 200".
 
+
+  SE TRAEFIK NON DIVENTA MAI PRONTO (e vale per TUTTI E DUE i percorsi)
+
+Il playbook si ferma su traefik_install e stampa i log del job che scarica il
+chart. Se li' dentro c'e'
+
+  lookup traefik.github.io: i/o timeout        (oppure "no such host")
+
+il problema NON e' Traefik: i pod non risolvono i nomi esterni.
+
+Su Ubuntu /etc/resolv.conf e' il link allo stub di systemd-resolved e contiene
+"nameserver 127.0.0.53". RKE2 vede un loopback, non se ne fida, e genera un
+resolv.conf suo con dentro 8.8.8.8. Su una rete aziendale chiusa 8.8.8.8 non
+risponde: CoreDNS non risolve piu' niente di esterno, e il primo a caderci e' il
+pod che scarica il chart di Traefik. Senza Traefik nessuno serve l'Ingress di
+Rancher, e piu' avanti la API di Rancher risponde "Connection refused" — che di
+tutto questo non dice una parola.
+
+La cura e' una riga in config.yaml, e la scrive il playbook:
+
+  rke2_resolv_conf      cluster LOCALE (i [masters] e il nodo singolo)
+  cluster_resolv_conf   cluster DOWNSTREAM (finisce in machineGlobalConfig)
+
+Tutte e due valgono /run/systemd/resolve/resolv.conf, cioe' il resolv.conf VERO
+con i nameserver dell'azienda, e vengono scritte solo se quel file esiste
+davvero sui nodi. Su un cluster gia' installato prima di questa correzione, la
+riga non c'e': o si azzera e si reinstalla, o si aggiunge a mano in
+/etc/rancher/rke2/config.yaml e si fa "systemctl restart rke2-server".
+
 Per azzerare e ripartire, il playbook e' lo stesso di sempre:
 
   ansible-playbook playbooks/99-azzera.yml --limit <nodo> -e azzera_conferma=AZZERA

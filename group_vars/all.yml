@@ -72,6 +72,17 @@ cluster_cni: "calico"
 cluster_disable:
   - rke2-ingress-nginx
 
+# resolv-conf del cluster DOWNSTREAM, stessa ragione di rke2_resolv_conf per il
+# cluster locale (spiegata li' sotto): senza, il CoreDNS di quel cluster inoltra
+# a 8.8.8.8 e su rete chiusa non risolve niente — a partire dal chart di Traefik.
+#
+# Qui finisce dentro a machineGlobalConfig, cioe' nel config.yaml che Rancher
+# scrive sui nodi downstream. Il ruolo lo mette solo se il file esiste su TUTTI
+# quei nodi: se manca anche su uno solo la riga non viene scritta, perche' un
+# resolv-conf che punta al nulla e' peggio di nessun resolv-conf.
+# Vuoto = non scriverlo mai.
+cluster_resolv_conf: "/run/systemd/resolve/resolv.conf"
+
 # Marcatura dei nodi [ingress] del cluster downstream. Da queste due variabili
 # derivano TRE cose che devono restare d'accordo, e per questo stanno scritte
 # una volta sola:
@@ -141,6 +152,26 @@ rke2_extra_tls_san: []
 
 # Permessi di /etc/rancher/rke2/rke2.yaml. Vuoto = default RKE2 (0600).
 rke2_write_kubeconfig_mode: ""
+
+# resolv-conf PER IL KUBELET DEL CLUSTER LOCALE. Non e' un dettaglio: senza
+# questa riga il cluster a 3 nodi non riesce a scaricare NIENTE da internet.
+#
+# Su Ubuntu /etc/resolv.conf e' il link allo stub di systemd-resolved e contiene
+# "nameserver 127.0.0.53". RKE2 si accorge che e' un loopback e — invece di
+# usarlo — se ne genera uno suo con dentro 8.8.8.8. Su una rete aziendale chiusa
+# 8.8.8.8 non risponde, quindi CoreDNS non risolve NESSUN nome esterno.
+#
+# Il guasto non si presenta come un problema di DNS: si presenta come il job
+# helm-install-traefik che resta li' a riprovare ("lookup traefik.github.io:
+# i/o timeout"), Traefik che non parte, l'Ingress di Rancher che non lo serve
+# nessuno e — mezz'ora dopo, in un altro play — "Connection refused" sulla API
+# di Rancher. E' successo davvero, ed e' costato giorni.
+#
+# Questo e' il resolv.conf VERO, con i nameserver dell'azienda. Il ruolo lo
+# scrive in config.yaml SOLO se il file esiste davvero sul nodo: su una macchina
+# senza systemd-resolved la riga non compare e RKE2 fa come ha sempre fatto.
+# Vuoto = non scriverlo mai.
+rke2_resolv_conf: "/run/systemd/resolve/resolv.conf"
 
 # Attesa che ogni master sia entrato nel cluster prima di avviare il successivo.
 rke2_ready_retries: 60
