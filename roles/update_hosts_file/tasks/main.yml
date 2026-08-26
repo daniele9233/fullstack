@@ -4,9 +4,34 @@
 # Default: il primo master. Con 3 master in HA conviene valorizzare
 # rancher_endpoint_ip con l'IP del bilanciatore nginx in group_vars/all.yml,
 # altrimenti la caduta del primo master isola tutti gli altri nodi.
+#
+# NIENTE "| default(hostvars[groups['masters'][0]]...)" QUI, e non e' stile.
+# Il filtro default() di Jinja NON e' pigro: l'argomento di ripiego viene
+# valutato sempre, anche quando la variabile a sinistra c'e'. Con [masters]
+# vuoto — il caso del nodo singolo, dove Rancher sta in [rancher_single] e
+# rancher_endpoint_ip viene passato esplicitamente — quel [0] fa fallire il
+# ruolo con "list object has no element 0" pur essendoci gia' la risposta.
+#
+# L'if/else di Jinja invece e' pigro: il ramo else si valuta solo se serve.
+- name: Verifica di sapere a quale indirizzo punta il dominio
+  assert:
+    that:
+      - (rancher_endpoint_ip | default('') | length > 0)
+        or (groups['masters'] | default([]) | length > 0)
+    fail_msg: >-
+      Non so a quale indirizzo far puntare {{ rancher_domain }}: il gruppo
+      [masters] e' vuoto e rancher_endpoint_ip non e' valorizzata. Dichiara
+      rancher_endpoint_ip (l'IP del nodo che serve la console), oppure invoca
+      questo ruolo da un playbook che ce la passa — e' quello che fa
+      playbooks/21-rancher-single.yml con l'host di [rancher_single].
+  run_once: true
+
 - name: Get master node IP from inventory
   set_fact:
-    rancher_master_ip: "{{ rancher_endpoint_ip | default(hostvars[groups['masters'][0]]['ansible_host']) }}"
+    rancher_master_ip: >-
+      {{ rancher_endpoint_ip
+         if (rancher_endpoint_ip | default('') | length > 0)
+         else hostvars[groups['masters'][0]]['ansible_host'] }}
   run_once: true
 
 - name: Debug values
