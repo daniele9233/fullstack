@@ -81,7 +81,7 @@ rsn_agent_deployments:
 # Rancher: fleet-agent arriva quando Fleet ha finito di installarsi. Su alcune
 # versioni uno dei due non esiste proprio, e allora si aspetta invano tutto
 # questo tempo: e' il motivo per cui l'attesa e' corta e non fallisce.
-rsn_agent_wait_retries: 36
+rsn_agent_wait_retries: 24
 rsn_agent_wait_delay: 5
 
 

@@ -56,17 +56,14 @@
   become: yes
   gather_facts: yes
   roles:
-    # RKE2, kubectl, helm, la risoluzione del nome. Si ferma prima di Rancher.
+    # Tutto: RKE2, kubectl, helm, la risoluzione del nome, Traefik, Rancher.
+    #
+    # Traefik NON sta qui accanto come secondo ruolo, ed e' voluto: i ruoli di
+    # un play girano in blocco, quindi messo qui girerebbe DOPO l'intero
+    # rancher_single_node — verifica finale compresa, che chiede all'Ingress di
+    # Rancher se risponde. L'Ingress lo serve Traefik. Va invocato nel mezzo, e
+    # lo fa il ruolo stesso (tasks/main.yml).
     - role: rancher_single_node
-
-    # Lo STESSO ruolo dei 3 nodi. Non ne esiste una copia per il nodo singolo:
-    # sarebbero due ingress da tenere allineati. rke2_disable gli viene passato
-    # calcolato dal ruolo qui sopra, perche' traefik_install si ferma se
-    # rke2-ingress-nginx non risulta disabilitato — e ha ragione: due ingress
-    # controller che vogliono entrambi le porte 80 e 443 non possono coesistere.
-    - role: traefik_install
-      vars:
-        rke2_disable: "{{ rsn_disable_effettivo }}"
 
   post_tasks:
     - name: Riepilogo
