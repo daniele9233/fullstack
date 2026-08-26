@@ -130,8 +130,10 @@
           - "Nodo Rancher: {{ rsn_node_name }} ({{ rsn_node_ip }}) — uno solo"
           - >-
             Cluster downstream:
-            {{ (cluster_name ~ ' — ' ~ (nodi_agganciati | string) ~ ' nodi registrati in Rancher su '
-                ~ (nodi_attesi | string) ~ ' attesi dall inventario')
+            {{ (cluster_name ~ ' — ' ~ (nodi_agganciati | string) ~ ' macchine registrate su '
+                ~ (nodi_attesi | string) ~ ' agganciate; '
+                ~ ((cluster_nodes.json.data | default([]) | length) | string)
+                ~ ' nodi Kubernetes gia pronti (il resto del provisioning prosegue da solo)')
                if rsn_crea_cluster_downstream | bool
                else 'non creato (rsn_crea_cluster_downstream=false)' }}
           - "CNI: {{ rsn_cni | join(', ') | default('canal (default RKE2)', true) }} — Ingress: Traefik, IngressClass {{ rsn_ingress_class }}"
@@ -147,7 +149,7 @@
         # I nodi che RANCHER dice di avere, non quelli che stanno
         # nell'inventario. Prima contava l'inventario, e ha scritto "3 nodi
         # agganciati" mentre nel cluster non ce n'era nessuno.
-        nodi_agganciati: "{{ cluster_nodes.json.data | default([]) | length }}"
+        nodi_agganciati: "{{ cluster_macchine_mie | default([]) | length }}"
         nodi_attesi: >-
           {{ (groups['new_managers'] | default([]) | length)
              + (groups['workers'] | default([]) | length)

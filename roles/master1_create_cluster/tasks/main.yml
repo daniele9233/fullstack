@@ -407,6 +407,59 @@
       playbooks/21-rancher-single.yml con il ruolo update_hosts_file.
   when: join_falliti | length > 0
 
+# --- Che cosa e' arrivato davvero in Rancher --------------------------------
+#
+# DUE ELENCHI DIVERSI, e vanno letti in due momenti diversi. Confonderli e'
+# costato dieci minuti di attesa e un "0 nodi" su un aggancio riuscito.
+#
+#   MACCHINE (cluster.x-k8s.io.machines) — compaiono in un minuto, appena il
+#   rancher-system-agent contatta il server. Sono la prova che il JOIN e'
+#   andato: nella console stanno sotto la scheda "Machines" del cluster, in
+#   stato Reconciling.
+#
+#   NODI (v3/nodes) — compaiono MOLTO dopo: solo quando il control plane del
+#   cluster downstream ha finito di installare RKE2 e il cluster agent si e'
+#   connesso. Con un control plane che sta ancora scaricando RKE2, quell'elenco
+#   e' vuoto, e non e' un guasto.
+#
+# Il playbook aspetta le MACCHINE, che sono quello che dipende da lui. Il resto
+# del provisioning va avanti da solo e si guarda dalla console: bloccare qui
+# vorrebbe dire tenere Ansible occupato mezz'ora per una cosa su cui non puo'
+# fare niente.
+
+- name: Attendi che le macchine compaiano in Rancher
+  delegate_to: "{{ ansibleSshHost }}"
+  uri:
+    url: >-
+      https://{{ rancher_domain }}/v1/cluster.x-k8s.io.machines/fleet-default
+    method: GET
+    headers:
+      Authorization: "Bearer {{ api_token_response.json.token }}"
+      Content-Type: "application/json"
+    validate_certs: no
+    status_code: [200, 404]
+  register: cluster_macchine
+  until: >-
+    (cluster_macchine.json.data | default([])
+     | selectattr('spec.clusterName', 'defined')
+     | selectattr('spec.clusterName', 'equalto', cluster_name)
+     | list | length)
+    >= ((groups['new_managers'] | default([]) | length)
+        + (groups['workers'] | default([]) | length)
+        + (groups['ingress'] | default([]) | length))
+  retries: "{{ cluster_macchine_retries }}"
+  delay: "{{ cluster_macchine_delay }}"
+  failed_when: false
+
+- name: Conta le macchine di questo cluster
+  set_fact:
+    cluster_macchine_mie: >-
+      {{ cluster_macchine.json.data | default([])
+         | selectattr('spec.clusterName', 'defined')
+         | selectattr('spec.clusterName', 'equalto', cluster_name)
+         | list }}
+
+# I nodi veri e propri: si leggono e si riportano, NON si aspettano.
 - name: Verify nodes are registered in Rancher
   delegate_to: "{{ ansibleSshHost }}"
   uri:
@@ -416,24 +469,54 @@
       Authorization: "Bearer {{ api_token_response.json.token }}"
       Content-Type: "application/json"
     validate_certs: no
+    status_code: [200, 404]
   register: cluster_nodes
-  until: >-
-    (cluster_nodes.json.data | default([]) | length)
-    >= (groups['new_managers'] | default([]) | length)
-       + (groups['workers'] | default([]) | length)
-       + (groups['ingress'] | default([]) | length)
-  retries: "{{ cluster_nodi_retries }}"
-  delay: "{{ cluster_nodi_delay }}"
   failed_when: false
+  changed_when: false
+
+- name: Fermati se nessuna macchina e' arrivata in Rancher
+  fail:
+    msg: |
+      Nessuna macchina di {{ cluster_name }} risulta in Rancher dopo
+      {{ cluster_macchine_retries | int * cluster_macchine_delay | int }} secondi.
+
+      Il rancher-system-agent e' stato installato sui nodi (i task sopra sono
+      riusciti), ma nessuno di loro si e' presentato al server. Da guardare, in
+      quest'ordine, su uno dei nodi agganciati:
+
+        systemctl status rancher-system-agent
+        journalctl -u rancher-system-agent -n 50
+
+      Se nel journal ci sono errori di connessione o di certificato, il nodo non
+      arriva a https://{{ rancher_domain }}.
+  when: cluster_macchine_mie | length == 0
 
 - name: Show registered nodes
   debug:
     msg: |
-      Nodes registered in cluster:
-      {% for node in cluster_nodes.json.data %}
-      - Name: {{ node.nodeName if node.nodeName is defined else 'Unknown' }}
-        IP: {{ node.ipAddress if node.ipAddress is defined else 'Unknown' }}
-        Roles: {{ node.controlPlane | ternary('controlplane', '') }}{{ node.etcd | ternary(' etcd', '') }}{{ node.worker | ternary(' worker', '') }}
-        State: {{ node.state if node.state is defined else 'Unknown' }}
-        Labels: {{ node.labels if node.labels is defined else 'None' }}
+      Cluster {{ cluster_name }}: {{ cluster_macchine_mie | length }} macchine
+      registrate su {{ (groups['new_managers'] | default([]) | length)
+                       + (groups['workers'] | default([]) | length)
+                       + (groups['ingress'] | default([]) | length) }} agganciate.
+      {% for m in cluster_macchine_mie %}
+      - {{ m.metadata.name | default('?') }}:
+        {{ (m.status.conditions | default([])
+            | selectattr('type', 'equalto', 'Ready') | map(attribute='status') | first)
+           | default('in provisioning', true) }}
       {% endfor %}
+
+      Nodi Kubernetes gia' pronti: {{ cluster_nodes.json.data | default([]) | length }}
+      {% for node in cluster_nodes.json.data | default([]) %}
+      - {{ node.nodeName | default('?') }} ({{ node.ipAddress | default('?') }})
+        {{ node.controlPlane | default(false) | ternary('controlplane', '') }}{{ node.etcd | default(false) | ternary(' etcd', '') }}{{ node.worker | default(false) | ternary(' worker', '') }}
+        stato: {{ node.state | default('?') }}
+      {% endfor %}
+
+      {% if (cluster_nodes.json.data | default([]) | length) < (cluster_macchine_mie | length) %}
+      I nodi compaiono qui solo quando il control plane del cluster downstream
+      ha finito di installare RKE2 e il cluster agent si e' connesso: con le
+      macchine in "Reconciling" e il messaggio "Waiting for Cluster control
+      plane to be initialized" e' NORMALE che questo elenco sia ancora corto.
+      Il provisioning prosegue da solo — si segue dalla console, sotto
+      Cluster Management -> {{ cluster_name }} -> Machines.
+      {% endif %}

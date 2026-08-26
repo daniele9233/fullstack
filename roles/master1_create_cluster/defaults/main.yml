@@ -18,9 +18,16 @@ cluster_pausa_iniziale: 280
 cluster_login_retries: 30
 cluster_login_delay: 10
 
-# Attesa che i nodi agganciati compaiano davvero in Rancher. Prima c'erano
-# retries senza until, cioe' nessuna attesa: la richiesta partiva una volta
-# sola, subito dopo il join, e trovava zero nodi — che e' normale, l'agent ci
-# mette minuti. Il playbook lo riportava come esito buono.
-cluster_nodi_retries: 30
-cluster_nodi_delay: 20
+# Attesa che le MACCHINE compaiano in Rancher. Compaiono in un minuto, appena
+# il rancher-system-agent contatta il server: sono la prova che il join e'
+# andato, ed e' l'unica cosa che dipende da questo playbook.
+#
+# NON si aspettano invece i NODI (v3/nodes): quelli arrivano molto dopo, quando
+# il control plane del cluster downstream ha finito di installare RKE2 e il
+# cluster agent si e' connesso. Aspettarli qui vorrebbe dire tenere Ansible
+# fermo mezz'ora su una cosa che va avanti da sola — ed e' esattamente
+# l'attesa che, con il control plane ancora in "Waiting for Cluster control
+# plane to be initialized", finiva per dichiarare "0 nodi" un aggancio
+# riuscito.
+cluster_macchine_retries: 30
+cluster_macchine_delay: 10
