@@ -4,10 +4,14 @@
 #   ansible-playbook playbooks/21-rancher-single.yml
 #
 # E' l'ALTERNATIVA a playbooks/20-rancher.yml, non un suo complemento: quello
-# installa il cluster a 3 master e ci aggancia un cluster downstream con
-# manager, worker e nodi ingress. Questo mette tutto su un host solo, senza
-# cluster downstream. NON vanno lanciati e non vanno tenuti insieme: sarebbero
-# due Rancher che si contendono lo stesso dominio.
+# mette Rancher su 3 master, questo su una macchina sola. NON vanno lanciati e
+# non vanno tenuti insieme: sarebbero due Rancher che si contendono lo stesso
+# dominio.
+#
+# Il CLUSTER DOWNSTREAM invece c'e' in tutti e due, ed e' lo stesso ruolo:
+# master1_create_cluster crea il cluster in Rancher e ci aggancia i nodi di
+# [new_managers], [workers] e [ingress]. Cambia solo dove gira Rancher.
+# Con rsn_crea_cluster_downstream=false si installa il solo Rancher.
 #
 # Per questo site.yml importa il 20 e non il 21: chi vuole il nodo singolo lo
 # lancia da solo.
@@ -65,12 +69,39 @@
     # lo fa il ruolo stesso (tasks/main.yml).
     - role: rancher_single_node
 
+    # L'AGGANCIO DEL CLUSTER DOWNSTREAM: lo STESSO ruolo del percorso a 3 nodi.
+    # Crea il cluster in Rancher via API, si fa dare il token di registrazione e
+    # ci aggancia i nodi di [new_managers], [workers] e [ingress] con
+    # system-agent-install.sh.
+    #
+    # Questo SI' come secondo ruolo, e non e' in contraddizione con Traefik: qui
+    # girare per ultimo e' esattamente quello che serve. Prima di creare un
+    # cluster in Rancher, Rancher deve essere in piedi e la console deve
+    # rispondere — cioe' tutto rancher_single_node, verifica compresa, deve
+    # essere finito.
+    #
+    # Per la stessa ragione la pausa cieca di assestamento qui vale 0: nel
+    # percorso a 3 nodi serve perche' quel ruolo parte subito dopo "helm install
+    # rancher", qui la console e' gia' stata interrogata e ha risposto.
+    #
+    # Con i tre gruppi vuoti il cluster viene creato in Rancher e resta li' ad
+    # aspettare nodi: e' il comportamento voluto, ed e' lo stesso dei 3 nodi.
+    - role: master1_create_cluster
+      when: rsn_crea_cluster_downstream | bool
+      vars:
+        cluster_pausa_iniziale: 0
+
   post_tasks:
     - name: Riepilogo
       debug:
         msg:
           - "Console: https://{{ rancher_domain }}  (utente admin, password in rancher_password)"
-          - "Nodo: {{ rsn_node_name }} ({{ rsn_node_ip }}) — un solo nodo, nessun cluster downstream"
+          - "Nodo Rancher: {{ rsn_node_name }} ({{ rsn_node_ip }}) — uno solo"
+          - >-
+            Cluster downstream:
+            {{ (cluster_name ~ ', ' ~ (nodi_agganciati | string) ~ ' nodi agganciati')
+               if rsn_crea_cluster_downstream | bool
+               else 'non creato (rsn_crea_cluster_downstream=false)' }}
           - "CNI: {{ rsn_cni | join(', ') | default('canal (default RKE2)', true) }} — Ingress: Traefik, IngressClass {{ rsn_ingress_class }}"
           - "Certificato: {{ 'i .pem forniti (tls-rancher-ingress)' if rsn_tls_source == 'secret' else 'autofirmato da Rancher via cert-manager — il browser avvisera' }}"
           - "kubectl e helm sono sul nodo, con KUBECONFIG gia' nel profilo di root: entra in ssh e usali."
@@ -80,3 +111,8 @@
             Se apri il browser da un'ALTRA macchina, quella riga serve anche li':
             e' l'unica cosa da fare a mano.
           - "Dentro ai pod il nome lo risolvono gli hostAliases sugli agent: nessun DNS da configurare."
+      vars:
+        nodi_agganciati: >-
+          {{ (groups['new_managers'] | default([]) | length)
+             + (groups['workers'] | default([]) | length)
+             + (groups['ingress'] | default([]) | length) }}

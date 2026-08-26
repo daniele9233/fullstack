@@ -1286,3 +1286,14 @@ rsn_rancher_replicas: 1
 
 rsn_rancher_wait_timeout: 900
 rsn_verify: true
+
+# --- Cluster downstream -----------------------------------------------------
+# true = dopo Rancher si crea il cluster downstream e ci si agganciano i nodi di
+# [new_managers], [workers] e [ingress], con lo STESSO ruolo del percorso a 3
+# nodi (master1_create_cluster): stesse API, stesso token di registrazione,
+# stesso system-agent-install.sh. Nome, versione di Kubernetes e CNI del cluster
+# downstream restano cluster_name, cluster_k8s_version e cluster_cni piu' sopra.
+#
+# Con i tre gruppi vuoti il cluster viene creato in Rancher e resta ad aspettare
+# nodi: e' voluto, ed e' quello che fa anche l'installazione a 3 nodi.
+rsn_crea_cluster_downstream: true

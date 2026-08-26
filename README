@@ -1232,11 +1232,17 @@ RANCHER SU UN NODO SOLO
 RKE2 + Traefik + Rancher su una macchina sola, sul gruppo [rancher_single].
 
 E' L'ALTERNATIVA a playbooks/20-rancher.yml, non un suo complemento. Quello
-installa il cluster a 3 master e ci aggancia un cluster downstream con manager,
-worker e nodi ingress; questo mette tutto su un host e non crea nessun cluster
-downstream. NON vanno tenuti su insieme: sarebbero due Rancher che si
-contendono lo stesso rancher_domain. Se usi [rancher_single], lascia [masters]
-vuoto — e viceversa. Per questo site.yml importa il 20 e non il 21.
+mette Rancher su 3 master, questo su una macchina sola. NON vanno tenuti su
+insieme: sarebbero due Rancher che si contendono lo stesso rancher_domain. Se
+usi [rancher_single], lascia [masters] vuoto — e viceversa. Per questo site.yml
+importa il 20 e non il 21.
+
+IL CLUSTER DOWNSTREAM C'E' IN TUTTI E DUE, ed e' lo stesso ruolo. Dopo Rancher,
+master1_create_cluster lo crea via API, si fa dare il token di registrazione e
+ci aggancia i nodi di [new_managers], [workers] e [ingress] con
+system-agent-install.sh — identico al percorso a 3 nodi, stesse variabili
+(cluster_name, cluster_k8s_version, cluster_cni). Cambia solo dove gira
+Rancher. Con rsn_crea_cluster_downstream=false si installa il solo Rancher.
 
 Condivide con l'installazione a 3 nodi tutto quello che ha senso condividere:
 rancher_domain, rancher_password, rancher_version, helm_version e i .pem dei
@@ -1283,8 +1289,13 @@ browser, se non e' il control node.
    volta, aspettando che etcd promuova ciascuno da learner a votante. Qui
    config.yaml non ha la direttiva "server:" e il nodo bootstrappa e basta.
 
-2. Niente cluster downstream.
-   master1_create_cluster non viene invocato: Rancher gestisce solo "local".
+2. Il cluster downstream si aggancia in fondo, dal playbook.
+   Non sta dentro al ruolo: master1_create_cluster e' un secondo ruolo del play,
+   e gira per ultimo perche' prima di creare un cluster in Rancher, Rancher deve
+   rispondere — cioe' tutto rancher_single_node, verifica compresa, deve essere
+   finito. La pausa cieca di assestamento di quel ruolo qui vale 0: serve nel
+   percorso a 3 nodi, dove parte subito dopo "helm install rancher", non qui
+   dove la console e' gia' stata interrogata.
 
 3. UNA replica di Rancher, non tre.
    Il chart ne vuole 3 di default e le distribuisce su nodi diversi con una

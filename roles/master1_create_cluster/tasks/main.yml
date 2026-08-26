@@ -1,9 +1,20 @@
 ---
-- name: Wait for Rancher cluster to be fully ready
+# Pausa di assestamento dopo l'installazione di Rancher. E' cieca di proposito:
+# nel percorso a 3 nodi questo ruolo parte subito dopo "helm install rancher",
+# quando l'API puo' rispondere al login ma non essere ancora pronta a
+# provisionare.
+#
+# Sul nodo singolo non serve: li' rancher_single_node ha gia' verificato che la
+# console risponda, e il playbook passa cluster_pausa_iniziale: 0.
+- name: Attesa di assestamento di Rancher
   pause:
-    seconds: 280  # 3 minuti
+    seconds: "{{ cluster_pausa_iniziale }}"
   delegate_to: "{{ ansibleSshHost }}"
+  when: cluster_pausa_iniziale | int > 0
 
+# until/retries: la pausa qui sopra e' un'attesa a tempo, questa e' un'attesa
+# sul fatto. Se Rancher non e' ancora in piedi il login fallisce e si riprova,
+# invece di far cadere il playbook al primo tentativo.
 - name: Get Rancher API token
   delegate_to: "{{ ansibleSshHost }}"
   uri:
@@ -17,6 +28,9 @@
     return_content: yes
     status_code: [200, 201]
   register: api_token_response
+  until: api_token_response.status | default(0) in [200, 201]
+  retries: "{{ cluster_login_retries }}"
+  delay: "{{ cluster_login_delay }}"
 
 - name: Set Rancher server URL (completa setup iniziale)
   delegate_to: "{{ ansibleSshHost }}"
@@ -242,7 +256,7 @@
   poll: 0
   register: join_managers_async
   delegate_to: "{{ item }}"
-  loop: "{{ groups['new_managers'] }}"
+  loop: "{{ groups['new_managers'] | default([]) }}"
 
 - name: Install system-agent and join nodes as workers
   shell: |
@@ -258,7 +272,7 @@
   poll: 0
   register: join_workers_async
   delegate_to: "{{ item }}"
-  loop: "{{ groups['workers'] }}"
+  loop: "{{ groups['workers'] | default([]) }}"
 
 - name: Install system-agent and join nodes as ingress
   shell: |
@@ -276,7 +290,7 @@
   poll: 0
   register: join_ingress_async
   delegate_to: "{{ item }}"
-  loop: "{{ groups['ingress'] }}"
+  loop: "{{ groups['ingress'] | default([]) }}"
 
 - name: Wait for manager nodes join to complete
   async_status:

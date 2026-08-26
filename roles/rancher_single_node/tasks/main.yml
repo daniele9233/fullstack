@@ -13,9 +13,12 @@
 #    il nodo bootstrappa e basta: config.yaml non ha la direttiva "server:" e
 #    non c'e' nessuna barriera fra un host e il successivo.
 #
-# 2. NIENTE CLUSTER DOWNSTREAM.
-#    master1_create_cluster non c'e': Rancher gestisce solo "local". Con questo
-#    sparisce anche meta' della complessita' degli agent.
+# 2. IL CLUSTER DOWNSTREAM SI AGGANCIA DOPO, DAL PLAYBOOK.
+#    Non e' dentro a questo ruolo, ed e' lo stesso master1_create_cluster dei 3
+#    nodi: crea il cluster in Rancher via API e ci aggancia i nodi di
+#    [new_managers], [workers] e [ingress]. Gira per ultimo perche' prima di
+#    creare un cluster in Rancher, Rancher deve rispondere — cioe' tutto questo
+#    ruolo, verifica compresa, deve essere finito.
 #
 # 3. UNA REPLICA DI RANCHER, non tre.
 #    Il chart ne vuole 3 di default e le tiene su nodi diversi (anti-affinity).
