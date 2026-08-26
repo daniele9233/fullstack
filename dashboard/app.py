@@ -234,6 +234,63 @@ def api_output():
     })
 
 
+# Marcatori che git lascia in un file quando una merge o uno "stash pop" non si
+# risolve da sola. In inventory.ini fanno fallire il plugin ini di Ansible, che
+# pero' non FERMA il playbook: si limita a un WARNING, e il play parte con zero
+# host. Su un'installazione e' tempo perso; su un'operazione distruttiva e' un
+# lancio che sembra riuscito e non ha fatto niente — e la volta dopo, con il file
+# meta' riparato, potrebbe fare la cosa sbagliata sugli host sbagliati.
+_MARCATORI_CONFLITTO = ('<<<<<<<', '>>>>>>>')
+
+
+def _inventario_inutilizzabile(azione):
+    """Motivo per cui NON si puo' lanciare, oppure None se si puo'.
+
+    Ansible su un inventario rotto avvisa e prosegue. Qui invece ci si ferma:
+    la dashboard e' il posto dove un warning scorre via nel terminale senza che
+    nessuno lo legga.
+    """
+    percorso = os.path.join(REPO_DIR, 'inventory.ini')
+
+    try:
+        with open(percorso, 'r', encoding='utf-8', errors='replace') as f:
+            righe = f.readlines()
+    except OSError as e:
+        return f"inventory.ini non e' leggibile: {e}"
+
+    sporche = [str(n) for n, riga in enumerate(righe, 1)
+               if riga.startswith(_MARCATORI_CONFLITTO)]
+    if sporche:
+        return ("inventory.ini contiene marcatori di conflitto git alle righe "
+                + ', '.join(sporche) + ". Li lascia un 'git merge' o un "
+                "'git stash pop' che non si e' risolto da solo: finche' ci sono, "
+                "Ansible non riesce a leggere l'inventario e i playbook partono "
+                "con ZERO host. Apri il file, togli le righe <<<<<<<, ======= e "
+                ">>>>>>> tenendo il contenuto di entrambi i lati, e rilancia.")
+
+    inv = inventario.carica(forza=True)
+
+    if not inv.get('host'):
+        return ("Dall'inventario non risulta nessun host"
+                + (f": {inv['errore']}" if inv.get('errore') else '')
+                + ". Senza host i playbook partono e non toccano niente.")
+
+    # Per le distruttive non basta che l'inventario si legga in qualche modo: si
+    # pretende che l'abbia letto ANSIBLE. Il ripiego che legge inventory.ini a
+    # mano serve a mostrare qualcosa nella GUI quando ansible non c'e', e ha una
+    # visione approssimata dei gruppi: decidere "su chi" a partire da quella,
+    # quando l'operazione cancella, non e' accettabile.
+    if azione in DISTRUTTIVE and inv.get('fonte') != 'ansible-inventory':
+        return ("L'inventario e' stato letto con il ripiego interno, non con "
+                "ansible-inventory"
+                + (f" ({inv['errore']})" if inv.get('errore') else '')
+                + ". Le operazioni distruttive non partono su questa base: "
+                "l'elenco dei gruppi potrebbe non essere quello vero. Sistema "
+                "l'inventario e riprova.")
+
+    return None
+
+
 @app.route('/api/run', methods=['POST'])
 def api_run():
     dati = request.get_json(force=True, silent=True) or {}
@@ -242,6 +299,10 @@ def api_run():
 
     if azione not in COMANDI:
         return jsonify({'error': 'Azione non valida'}), 400
+
+    problema = _inventario_inutilizzabile(azione)
+    if problema:
+        return jsonify({'error': problema}), 400
 
     if azione in RICHIEDE_LIMIT and not limit:
         return jsonify({'error': 'Questa operazione richiede di scegliere su quali '
