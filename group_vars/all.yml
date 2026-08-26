@@ -1284,6 +1284,7 @@ rsn_tls_source: "secret"
 # un'installazione che invece e' stata solo chiesta male.
 rsn_rancher_replicas: 1
 
+rsn_ingress_class: "{{ rancher_ingress_class | default('traefik') }}"
 rsn_rancher_wait_timeout: 900
 rsn_verify: true
 

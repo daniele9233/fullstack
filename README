@@ -1266,13 +1266,21 @@ tre posti in cui serve, e sono tre meccanismi diversi:
                      loopback, e chi risolve il proprio nome per annunciarsi si
                      annuncia li'
 
-  dentro ai POD      hostAliases su cattle-cluster-agent e fleet-agent. E'
-                     l'unico posto che /etc/hosts del nodo NON copre: i pod
-                     hanno un loro resolver, e su rete chiusa rancher_domain non
-                     esiste in nessun DNS. Senza, gli agent restano in
-                     CrashLoopBackOff con "no such host" e il cluster "local"
-                     risulta Unavailable nella console — pur essendo il cluster
-                     su cui Rancher gira
+  dentro ai POD      hostAliases sugli agent. E' l'unico posto che /etc/hosts
+                     del nodo NON copre: i pod hanno un loro resolver, e su rete
+                     chiusa rancher_domain non esiste in nessun DNS. Senza, gli
+                     agent restano in CrashLoopBackOff con "Could not resolve
+                     host" e il cluster risulta Unavailable nella console.
+
+                     SONO DUE PATCH SU DUE CLUSTER DIVERSI, e vanno fatti
+                     tutti e due:
+                       - cluster LOCALE (dove gira Rancher): cattle-cluster-agent
+                         e fleet-agent, da rancher_single_node/tasks/agenti.yml;
+                       - cluster DOWNSTREAM (su [new_managers]): il suo
+                         cattle-cluster-agent ha il CoreDNS di QUEL cluster, che
+                         di rancher_domain non sa niente. Ci pensa kubectl_setup,
+                         lo stesso ruolo del percorso a 3 nodi, in un play
+                         apposta dopo l'aggancio
 
   sul CONTROL NODE   la scrive il ruolo (serve root li'). Con
                      rsn_update_control_node_hosts=false non la scrive e la

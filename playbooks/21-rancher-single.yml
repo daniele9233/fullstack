@@ -123,6 +123,52 @@
         cluster_pausa_iniziale: 0
 
   post_tasks:
+    - name: Riepilogo parziale (il cluster downstream prosegue nel play dopo)
+      debug:
+        msg: >-
+          Rancher e' su e il cluster {{ cluster_name }} e' stato creato. Resta
+          da sistemare il DNS dell'agent DENTRO al cluster downstream: e' il
+          play successivo.
+      when: rsn_crea_cluster_downstream | bool
+
+
+# IL DNS DELL'AGENT DENTRO AL CLUSTER DOWNSTREAM.
+#
+# QUESTO PLAY MANCAVA, ed e' il motivo per cui il cattle-cluster-agent del
+# cluster downstream restava in CrashLoopBackOff con
+#   ERROR: https://<dominio>/ping is not accessible (Could not resolve host)
+#
+# Sono DUE cluster con DUE CoreDNS diversi, e li avevo confusi:
+#
+#   - il cluster LOCALE, su cui gira Rancher. I suoi agent li sistema
+#     rancher_single_node/tasks/agenti.yml, ed e' quello che vedevi funzionare;
+#   - il cluster DOWNSTREAM, su [new_managers]. Il suo cattle-cluster-agent
+#     risolve i nomi con il CoreDNS di QUEL cluster, che di rancher_domain non
+#     sa niente. /etc/hosts del nodo non lo copre: un pod non lo legge.
+#
+# La cura e' la stessa del percorso a 3 nodi, ed e' lo stesso ruolo:
+# kubectl_setup mette hostAliases sul deployment cattle-cluster-agent. Nel
+# playbook a 3 nodi gira dopo master1_create_cluster, qui pure.
+#
+# master_node_ip va PASSATO: in group_vars vale
+# hostvars[groups['masters'][0]].ansible_host, e qui [masters] e' vuoto.
+- name: DNS dell'agent nel cluster downstream
+  hosts: new_managers
+  become: yes
+  gather_facts: no
+  roles:
+    - role: kubectl_setup
+      when: rsn_crea_cluster_downstream | default(true) | bool
+      vars:
+        master_node_ip: >-
+          {{ hostvars[groups[rsn_group | default('rancher_single')][0]]['ansible_host'] }}
+
+
+- name: Riepilogo finale
+  hosts: "{{ rsn_group | default('rancher_single') }}"
+  become: no
+  gather_facts: no
+  tasks:
     - name: Riepilogo
       debug:
         msg:
@@ -144,7 +190,11 @@
             sul nodo{{ ' e sul control node' if rsn_update_control_node_hosts | bool else '' }}.
             Se apri il browser da un'ALTRA macchina, quella riga serve anche li':
             e' l'unica cosa da fare a mano.
-          - "Dentro ai pod il nome lo risolvono gli hostAliases sugli agent: nessun DNS da configurare."
+          - >-
+            Dentro ai pod il nome lo risolvono gli hostAliases, e sono DUE patch
+            su DUE cluster diversi: gli agent del cluster locale (dove gira
+            Rancher) e il cattle-cluster-agent del cluster downstream, che ha un
+            CoreDNS suo e di rancher_domain non saprebbe niente.
       vars:
         # I nodi che RANCHER dice di avere, non quelli che stanno
         # nell'inventario. Prima contava l'inventario, e ha scritto "3 nodi
