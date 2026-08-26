@@ -1297,3 +1297,14 @@ rsn_verify: true
 # Con i tre gruppi vuoti il cluster viene creato in Rancher e resta ad aspettare
 # nodi: e' voluto, ed e' quello che fa anche l'installazione a 3 nodi.
 rsn_crea_cluster_downstream: true
+
+# true = la riga di rancher_domain viene scritta anche in /etc/hosts dei nodi di
+# [new_managers], [workers] e [ingress].
+#
+# NON e' un extra: l'agent di Rancher parla con il server PER NOME. Senza
+# risoluzione il join fallisce subito ("curl: (6) Could not resolve host") e,
+# anche riuscendo, l'agent smetterebbe di funzionare al primo riavvio. La riga
+# la scrive update_hosts_file: a mano non c'e' niente da fare.
+#
+# false su una rete dove rancher_domain sta in un DNS vero.
+rsn_hosts_nodi_downstream: true

@@ -244,6 +244,10 @@
 
 - name: Install system-agent and join nodes as managers
   shell: |
+    # pipefail: senza, l'esito della pipeline e' quello di "sh", e un curl
+    # fallito (host non risolto, rete chiusa) passa per un'installazione
+    # riuscita. E' successo: tre nodi "Success" e zero nodi registrati.
+    set -o pipefail
     # Download and install system-agent for manager nodes
     curl --insecure -fL https://{{ rancher_host }}/system-agent-install.sh | sh -s - \
       --server https://{{ rancher_host }} \
@@ -260,6 +264,7 @@
 
 - name: Install system-agent and join nodes as workers
   shell: |
+    set -o pipefail
     # Download and install system-agent for worker nodes
     curl --insecure -fL https://{{ rancher_host }}/system-agent-install.sh | sh -s - \
       --server https://{{ rancher_host }} \
@@ -276,6 +281,7 @@
 
 - name: Install system-agent and join nodes as ingress
   shell: |
+    set -o pipefail
     # Download and install system-agent for ingress nodes
     curl --insecure -fL https://{{ rancher_host }}/system-agent-install.sh | sh -s - \
       --server https://{{ rancher_host }} \
@@ -328,8 +334,8 @@
 - name: Show manager nodes join results
   debug:
     msg: |
-      Manager Node: {{ item.item }}
-      Status: {{ 'Success' if item.rc == 0 else 'Failed' }}
+      Manager Node: {{ item.item.item | default('?') }}
+      Status: {{ 'Success' if item.rc | default(1) == 0 else 'Failed' }}
       Output: {{ item.stdout if item.stdout is defined else 'No output' }}
       Error: {{ item.stderr if item.stderr is defined else 'No error' }}
   loop: "{{ join_managers_status.results }}"
@@ -337,8 +343,8 @@
 - name: Show worker nodes join results
   debug:
     msg: |
-      Worker Node: {{ item.item }}
-      Status: {{ 'Success' if item.rc == 0 else 'Failed' }}
+      Worker Node: {{ item.item.item | default('?') }}
+      Status: {{ 'Success' if item.rc | default(1) == 0 else 'Failed' }}
       Output: {{ item.stdout if item.stdout is defined else 'No output' }}
       Error: {{ item.stderr if item.stderr is defined else 'No error' }}
   loop: "{{ join_workers_status.results }}"
@@ -346,11 +352,51 @@
 - name: Show ingress nodes join results
   debug:
     msg: |
-      Ingress Node: {{ item.item }}
-      Status: {{ 'Success' if item.rc == 0 else 'Failed' }}
+      Ingress Node: {{ item.item.item | default('?') }}
+      Status: {{ 'Success' if item.rc | default(1) == 0 else 'Failed' }}
       Output: {{ item.stdout if item.stdout is defined else 'No output' }}
       Error: {{ item.stderr if item.stderr is defined else 'No error' }}
   loop: "{{ join_ingress_status.results }}"
+
+# --- I join falliti fermano il playbook -------------------------------------
+#
+# Prima non lo facevano: i tre task qui sopra stampavano "Status: Success" e il
+# play finiva con failed=0 anche con zero nodi agganciati. Due difetti insieme —
+# senza pipefail l'esito di "curl | sh" era quello di sh, e nessuno guardava
+# quell'esito comunque.
+#
+# Il caso che si vede davvero: "curl: (6) Could not resolve host". I nodi da
+# agganciare devono risolvere il dominio di Rancher, e devono continuare a
+# risolverlo dopo — l'agent ci parla per nome, per sempre.
+
+- name: Raccogli i nodi che non si sono agganciati
+  set_fact:
+    join_falliti: >-
+      {{ (join_managers_status.results | default([]))
+         + (join_workers_status.results | default([]))
+         + (join_ingress_status.results | default([]))
+         | selectattr('rc', 'defined')
+         | rejectattr('rc', 'equalto', 0)
+         | list }}
+
+- name: Fermati se qualche nodo non si e' agganciato
+  fail:
+    msg: |
+      {{ join_falliti | length }} nodi non si sono agganciati al cluster
+      {{ cluster_name }}:
+
+      {% for f in join_falliti %}
+      {{ f.item.item | default('?') }} (uscita {{ f.rc }}):
+      {{ f.stderr | default('') | trim }}
+
+      {% endfor %}
+      Se leggi "Could not resolve host", quei nodi non risolvono
+      "{{ rancher_domain }}". Non e' un problema del momento del join: l'agent
+      di Rancher parla con il server PER NOME, quindi quel nome deve risolvere
+      su ogni nodo agganciato, sempre. Mettilo nel DNS, oppure lascia che sia il
+      playbook a scrivere la riga in /etc/hosts di quei nodi — e' quello che fa
+      playbooks/21-rancher-single.yml con il ruolo update_hosts_file.
+  when: join_falliti | length > 0
 
 - name: Verify nodes are registered in Rancher
   delegate_to: "{{ ansibleSshHost }}"
@@ -362,8 +408,14 @@
       Content-Type: "application/json"
     validate_certs: no
   register: cluster_nodes
-  retries: 10
-  delay: 15
+  until: >-
+    (cluster_nodes.json.data | default([]) | length)
+    >= (groups['new_managers'] | default([]) | length)
+       + (groups['workers'] | default([]) | length)
+       + (groups['ingress'] | default([]) | length)
+  retries: "{{ cluster_nodi_retries }}"
+  delay: "{{ cluster_nodi_delay }}"
+  failed_when: false
 
 - name: Show registered nodes
   debug:

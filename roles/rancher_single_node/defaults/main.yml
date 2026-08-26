@@ -230,6 +230,18 @@ rsn_rancher_wait_timeout: 900
 # stesse variabili dei 3 nodi, e non ne servono altre.
 rsn_crea_cluster_downstream: true
 
+# true = il playbook scrive la riga di rancher_domain anche in /etc/hosts dei
+# nodi di [new_managers], [workers] e [ingress].
+#
+# Qui il "niente /etc/hosts da compilare" ha un limite, e va detto: vale per il
+# nodo Rancher, che e' uno. I nodi agganciati al cluster downstream devono
+# risolvere il dominio perche' l'agent parla con il server PER NOME, e continua
+# a farlo per sempre — non solo al momento del join. Da compilare a mano non
+# c'e' niente lo stesso: la riga la scrive update_hosts_file.
+#
+# false su una rete dove rancher_domain sta in un DNS vero.
+rsn_hosts_nodi_downstream: true
+
 
 # ===========================================================================
 # 6. VERIFICA

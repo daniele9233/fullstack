@@ -1278,6 +1278,15 @@ tre posti in cui serve, e sono tre meccanismi diversi:
                      rsn_update_control_node_hosts=false non la scrive e la
                      stampa nel riepilogo, da incollare a mano
 
+  sui NODI del cluster    quando si aggancia il cluster downstream, la stessa
+  DOWNSTREAM             riga finisce in /etc/hosts di [new_managers],
+                         [workers] e [ingress], con update_hosts_file. NON e'
+                         un extra: l'agent di Rancher parla con il server PER
+                         NOME, quindi quei nodi devono risolvere il dominio per
+                         sempre, non solo al momento del join. Senza, il join
+                         fallisce con "curl: (6) Could not resolve host"
+                         (rsn_hosts_nodi_downstream)
+
 L'unica cosa che resta a mano e' la stessa riga sulla postazione da cui apri il
 browser, se non e' il control node.
 

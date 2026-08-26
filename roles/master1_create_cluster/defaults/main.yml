@@ -17,3 +17,10 @@ cluster_pausa_iniziale: 280
 # cadere il playbook al primo tentativo.
 cluster_login_retries: 30
 cluster_login_delay: 10
+
+# Attesa che i nodi agganciati compaiano davvero in Rancher. Prima c'erano
+# retries senza until, cioe' nessuna attesa: la richiesta partiva una volta
+# sola, subito dopo il join, e trovava zero nodi — che e' normale, l'agent ci
+# mette minuti. Il playbook lo riportava come esito buono.
+cluster_nodi_retries: 30
+cluster_nodi_delay: 20

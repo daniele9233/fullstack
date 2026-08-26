@@ -22,10 +22,13 @@
 #   rancher_domain   il nome con cui si aprira' la console
 #   rancher_password la password di bootstrap dell'utente admin
 #
-# E BASTA. In particolare NON serve compilare /etc/hosts sulle macchine: il
-# nodo e' uno, la riga e' una, e la scrive il ruolo — sul nodo, dentro ai pod
-# che ne hanno bisogno (hostAliases) e sul control node Ansible. Vedi
-# roles/rancher_single_node/tasks/nomi.yml.
+# E BASTA. In particolare NON c'e' nessun /etc/hosts da compilare A MANO: le
+# righe le scrive il playbook, sul nodo Rancher, dentro ai pod che ne hanno
+# bisogno (hostAliases), sul control node e — quando si aggancia il cluster
+# downstream — sui nodi che ci si agganciano. Quest'ultima non e' un extra:
+# l'agent di Rancher parla con il server PER NOME, quindi quei nodi devono
+# risolvere rancher_domain per sempre, non solo al momento del join.
+# Vedi roles/rancher_single_node/tasks/nomi.yml e il secondo play qui sotto.
 #
 # IL DISCO si prepara e si monta A MANO su /var/lib/rancher, come in tutto il
 # resto di questo repository: create_disk esiste ma non lo invoca nessuno.
@@ -51,6 +54,34 @@
   gather_facts: no
   roles:
     - role: host_prep
+
+
+# I NODI DEL CLUSTER DOWNSTREAM DEVONO RISOLVERE IL DOMINIO DI RANCHER.
+#
+# Qui il "niente /etc/hosts da compilare" ha un limite, e va detto: vale per il
+# nodo Rancher, che e' uno. I nodi che si agganciano al cluster downstream sono
+# un'altra cosa — l'agent di Rancher parla con il server PER NOME, e continua a
+# farlo dopo, per sempre. Senza risoluzione il join fallisce subito con
+# "curl: (6) Could not resolve host".
+#
+# Da compilare a mano pero' non c'e' niente lo stesso: la riga la scrive
+# update_hosts_file, lo STESSO ruolo del percorso a 3 nodi, a cui basta sapere a
+# quale indirizzo punta il dominio. Su un DNS aziendale che risolve
+# rancher_domain questo play non serve: rsn_hosts_nodi_downstream a false.
+- name: Risoluzione del dominio Rancher sui nodi del cluster downstream
+  hosts: new_managers,workers,ingress
+  become: yes
+  gather_facts: no
+  roles:
+    - role: update_hosts_file
+      when:
+        - rsn_crea_cluster_downstream | default(true) | bool
+        - rsn_hosts_nodi_downstream | default(true) | bool
+      vars:
+        # L'indirizzo del nodo Rancher, preso dall'inventario: qui [masters] e'
+        # vuoto, quindi il default del ruolo non puo' funzionare.
+        rancher_endpoint_ip: >-
+          {{ hostvars[groups[rsn_group | default('rancher_single')][0]]['ansible_host'] }}
 
 
 # gather_facts: yes serve per la distribuzione rilevata e per l'indirizzo di
@@ -99,7 +130,8 @@
           - "Nodo Rancher: {{ rsn_node_name }} ({{ rsn_node_ip }}) — uno solo"
           - >-
             Cluster downstream:
-            {{ (cluster_name ~ ', ' ~ (nodi_agganciati | string) ~ ' nodi agganciati')
+            {{ (cluster_name ~ ' — ' ~ (nodi_agganciati | string) ~ ' nodi registrati in Rancher su '
+                ~ (nodi_attesi | string) ~ ' attesi dall inventario')
                if rsn_crea_cluster_downstream | bool
                else 'non creato (rsn_crea_cluster_downstream=false)' }}
           - "CNI: {{ rsn_cni | join(', ') | default('canal (default RKE2)', true) }} — Ingress: Traefik, IngressClass {{ rsn_ingress_class }}"
@@ -112,7 +144,11 @@
             e' l'unica cosa da fare a mano.
           - "Dentro ai pod il nome lo risolvono gli hostAliases sugli agent: nessun DNS da configurare."
       vars:
-        nodi_agganciati: >-
+        # I nodi che RANCHER dice di avere, non quelli che stanno
+        # nell'inventario. Prima contava l'inventario, e ha scritto "3 nodi
+        # agganciati" mentre nel cluster non ce n'era nessuno.
+        nodi_agganciati: "{{ cluster_nodes.json.data | default([]) | length }}"
+        nodi_attesi: >-
           {{ (groups['new_managers'] | default([]) | length)
              + (groups['workers'] | default([]) | length)
              + (groups['ingress'] | default([]) | length) }}
