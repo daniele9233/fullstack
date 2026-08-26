@@ -19,7 +19,9 @@
         -e azzera_conferma=AZZERA     conferma
 
       Senza --limit "hosts: all" prende tutto l'inventario.
-    success_msg: "Conferma ricevuta: azzeramento di {{ inventory_hostname }}."
+    success_msg: >-
+      Conferma ricevuta: azzeramento di
+      {{ ansible_host | default(inventory_hostname) }}.
   run_once: false
 
 # Il control node sta in [local] e da li' si lanciano i playbook: azzerarlo
@@ -34,10 +36,45 @@
       {{ inventory_hostname }} e' il control node (gruppo [local]): non si
       azzera da solo. Togli --limit all e indica gli host veri.
 
+# Il nome di inventario dice solo su quale RIGA di inventory.ini si sta
+# lavorando; a rispondere e' la macchina che sta a quell'indirizzo, e il suo
+# hostname puo' essere cambiato dieci volte da quando quella riga e' stata
+# scritta. Su un ruolo che cancella, l'identita' che conta e' l'indirizzo: se
+# non e' uno di quelli del nodo che ha risposto, l'inventario punta altrove e
+# qui non c'e' niente da azzerare.
+#
+# Il controllo ha senso solo se ansible_host e' un indirizzo: quando e' un nome
+# DNS si salta da solo, perche' confrontare un nome con gli indirizzi del nodo
+# non direbbe niente.
+- name: Verifica che l'indirizzo sia davvero di questo nodo
+  vars:
+    azzera_indirizzi_del_nodo: "{{ (ansible_all_ipv4_addresses | default([])) + (ansible_all_ipv6_addresses | default([])) }}"
+  assert:
+    that:
+      - ansible_host in azzera_indirizzi_del_nodo
+    fail_msg: >-
+      {{ ansible_host }} NON e' fra gli indirizzi del nodo che ha risposto
+      ({{ azzera_indirizzi_del_nodo | join(', ') }}), il cui hostname e'
+      {{ ansible_hostname | default('sconosciuto') }}.
+      L'inventario sta puntando a una macchina diversa da quella che credi:
+      correggi ansible_host della riga {{ inventory_hostname }} prima di
+      cancellare qualcosa. Se al nodo ci arrivi attraverso un NAT o un bastion
+      l'indirizzo non puo' coincidere, e il controllo si spegne con
+      -e azzera_verifica_indirizzo=false.
+    success_msg: >-
+      Indirizzo confermato: {{ ansible_host }} e' di questo nodo, che adesso si
+      chiama {{ ansible_hostname | default('sconosciuto') }}.
+  when:
+    - azzera_verifica_indirizzo | bool
+    - ansible_all_ipv4_addresses is defined or ansible_all_ipv6_addresses is defined
+    - >-
+      (ansible_host | default('')) is match('^([0-9]{1,3}\.){3}[0-9]{1,3}$')
+      or ':' in (ansible_host | default(''))
+
 - name: Annuncia che cosa sta per succedere
   debug:
     msg:
-      - "AZZERAMENTO DI {{ inventory_hostname }} ({{ ansible_host | default(inventory_hostname) }})"
+      - "AZZERAMENTO DI {{ ansible_host | default(inventory_hostname) }} (inventario: {{ inventory_hostname }} · hostname adesso: {{ ansible_hostname | default('sconosciuto') }})"
       - "Rancher/RKE2: {{ azzera_rancher }} · Database: {{ azzera_database }} · Storage: {{ azzera_storage }} · Bilanciatori: {{ azzera_bilanciatori }} · Kafka: {{ azzera_kafka }} · Elasticsearch: {{ azzera_elasticsearch }}"
       - "Dati cancellati: {{ azzera_dati }} · Pacchetti rimossi: {{ azzera_pacchetti }}"
 

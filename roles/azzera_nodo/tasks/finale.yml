@@ -74,7 +74,8 @@
 - name: Riepilogo dell'azzeramento
   debug:
     msg: |
-      === AZZERAMENTO DI {{ inventory_hostname }} ===
+      === AZZERAMENTO DI {{ ansible_host | default(inventory_hostname) }} ===
+      inventario: {{ inventory_hostname }} · hostname: {{ ansible_hostname | default('sconosciuto') }}
 
       Servizi ancora presenti: {{ azzera_servizi_rimasti.stdout_lines | default([]) | length }}
       {% for r in azzera_servizi_rimasti.stdout_lines | default([]) %}

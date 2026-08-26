@@ -681,7 +681,7 @@
             <div class="card p-5 mb-4 max-w-[640px]" data-limite-box>
               <label class="text-[12px] font-medium text-fg-mute">Limita a (facoltativo)</label>
               <select class="field mt-2 limite-sel"><option value="">tutti gli host del playbook</option></select>
-              <p class="text-[11px] text-fg-dim mt-2">Aggiunge <span class="font-mono">--limit</span>. Accetta solo host e gruppi presenti in inventario; il controllo è anche lato server.</p>
+              <p class="text-[11px] text-fg-dim mt-2">Aggiunge <span class="font-mono">--limit</span>. Gli host si scelgono per indirizzo — il nome di inventario è accanto, fra i trattini — e il server lo ritraduce prima di passarlo ad Ansible. Accetta solo host e gruppi presenti in inventario; il controllo è anche lato server.</p>
             </div>
 
             <div class="card card-hover p-6 max-w-[640px] mb-4" style="border-color: rgba(63,184,122,.40); background: linear-gradient(135deg, rgba(63,184,122,.05), transparent 65%)">
@@ -794,6 +794,7 @@
               <label class="text-[12px] font-medium text-fg-mute">Limita a (facoltativo)</label>
               <select class="field mt-2 limite-sel"><option value="">tutti gli host del playbook</option></select>
               <p class="text-[11px] text-fg-dim mt-2">Su un'operazione distruttiva conviene sempre restringere il campo a un host solo, e guardare che cosa succede prima di lanciare sugli altri. Per <strong class="text-fg-mute">Azzera il nodo</strong> il filtro è obbligatorio: senza, l'operazione viene rifiutata.</p>
+              <p class="text-[11px] text-fg-dim mt-2">Il nodo si sceglie per <strong class="text-fg-mute">indirizzo</strong>, non per hostname: l'hostname di un server cambia, l'IP con cui lo raggiungi no. Il nome di inventario è lì accanto solo per riconoscerlo, e prima di cancellare il ruolo verifica che l'indirizzo sia davvero della macchina che ha risposto.</p>
             </div>
 
             <!-- Azzeramento completo: la carta piu' grossa, in cima, con il bordo
@@ -2128,14 +2129,34 @@ window.addEventListener('beforeunload', (e) => {
   if (editor.sporco) { e.preventDefault(); e.returnValue = ''; }
 });
 
+/* Gli host si scelgono per INDIRIZZO, non per nome: l'hostname di un server di
+   laboratorio cambia spesso, l'indirizzo con cui lo si raggiunge no — e su
+   un'operazione distruttiva sbagliare macchina si paga caro. Il nome di
+   inventario resta in etichetta, per riconoscere il nodo a colpo d'occhio.
+   Ansible i pattern li confronta con i nomi, quindi e' il backend a
+   ritradurre l'indirizzo (vedi Inventario.risolvi_limite).
+   Due righe di inventario con lo stesso ansible_host sono la stessa macchina:
+   fanno una voce sola, e l'operazione le prende entrambe. */
 function riempiLimiti(d) {
   const opzioni = ['<option value="">tutti gli host del playbook</option>'];
   (d.gruppi || []).forEach(g => {
     if ((g.host || []).length) opzioni.push(`<option value="${esc(g.nome)}">gruppo · ${esc(g.nome)} (${g.host.length})</option>`);
   });
-  Object.keys(d.host || {}).sort().forEach(h => {
-    opzioni.push(`<option value="${esc(h)}">host · ${esc(h)}</option>`);
+
+  const perIndirizzo = new Map();
+  Object.keys(d.host || {}).sort().forEach(nome => {
+    const indirizzo = (d.host[nome] || {}).indirizzo || nome;
+    if (!perIndirizzo.has(indirizzo)) perIndirizzo.set(indirizzo, []);
+    perIndirizzo.get(indirizzo).push(nome);
   });
+  Array.from(perIndirizzo.keys()).sort().forEach(indirizzo => {
+    const nomi = perIndirizzo.get(indirizzo);
+    const etichetta = (nomi.length === 1 && nomi[0] === indirizzo)
+      ? `host · ${esc(indirizzo)}`
+      : `host · ${esc(indirizzo)} — ${esc(nomi.join(', '))}`;
+    opzioni.push(`<option value="${esc(indirizzo)}">${etichetta}</option>`);
+  });
+
   $$('.limite-sel').forEach(sel => {
     const scelto = sel.value;
     sel.innerHTML = opzioni.join('');
@@ -2229,6 +2250,18 @@ function limiteDi(elemento) {
   return sel ? sel.value : '';
 }
 
+/* L'etichetta per esteso della voce scelta ('host · 10.205.166.214 —
+   dbserver01'). Nella conferma di un'operazione distruttiva serve quella, non
+   il valore secco: dice indirizzo E nome, che e' il modo per accorgersi di
+   avere puntato la macchina sbagliata prima di premere. */
+function descrizioneLimiteDi(elemento) {
+  const sezione = elemento.closest('section');
+  const sel = sezione ? sezione.querySelector('.limite-sel') : null;
+  if (!sel || !sel.value) return '';
+  const opt = sel.options[sel.selectedIndex];
+  return opt ? opt.textContent.trim() : sel.value;
+}
+
 async function avvia(azione, limit) {
   nuovoJob(azione, limit);
   stato.righeViste = 0;
@@ -2256,8 +2289,8 @@ document.addEventListener('click', async (e) => {
     apriConferma({
       titolo: c.titolo,
       corpo: c.corpo + (limit
-        ? ` <br><br>Verrà lanciato con <span class="font-mono text-fg">--limit ${esc(limit)}</span>.`
-        : ' <br><br>Nessun <span class="font-mono text-fg">--limit</span> impostato: verranno toccati <strong class="text-fg">tutti</strong> gli host del playbook.'),
+        ? ` <br><br>Verrà lanciato <strong class="text-fg">solo su</strong> <span class="font-mono text-fg">${esc(descrizioneLimiteDi(distruttiva))}</span>. Il nodo è scelto per indirizzo, non per hostname.`
+        : ' <br><br>Nessun filtro impostato: verranno toccati <strong class="text-fg">tutti</strong> gli host del playbook.'),
       parola: c.parola,
       pulsante: c.pulsante,
       onConferma: () => avvia(chiave, limit),

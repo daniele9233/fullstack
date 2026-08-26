@@ -27,6 +27,19 @@
 # --limit "hosts: all" prende tutto l'inventario; senza la conferma il ruolo si
 # ferma al primo task. Il control node ([local]) e' escluso a prescindere.
 #
+# --limit VUOLE IL NOME DI INVENTARIO: i pattern Ansible si confrontano con i
+# nomi delle righe e con i gruppi, dentro ansible_host non guardano. Il nome
+# pero' e' solo un'etichetta, e su macchine che cambiano hostname invecchia
+# male: per questo dalla dashboard il nodo si sceglie per INDIRIZZO ed e' lei a
+# ritradurlo in nome prima di lanciare (vedi dashboard/inventario.py,
+# risolvi_limite). Da riga di comando la traduzione la fai tu guardando
+# inventory.ini.
+#
+# In tutti e due i casi il ruolo, prima di cancellare, controlla che
+# ansible_host sia davvero uno degli indirizzi del nodo che ha risposto: se
+# l'inventario punta a un'altra macchina si ferma li'. Vedi
+# azzera_verifica_indirizzo in roles/azzera_nodo/defaults/main.yml.
+#
 # VARIANTI
 #
 #   # solo un pezzo, invece di tutto

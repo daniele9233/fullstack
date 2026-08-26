@@ -117,9 +117,10 @@ DISTRUTTIVE = {'azzera_nodi', 'reinit_postgres', 'rigenera_certificati_kafka', '
 # passa la dashboard: qui serve la seconda meta' del vincolo, cioe' "su chi".
 RICHIEDE_LIMIT = {'azzera_nodo'}
 
-# --limit accetta solo nomi presenti in inventario (vedi Inventario.nomi_validi).
-# Questa e' la prima rete: la forma. Un nome di host o gruppo Ansible non
-# contiene spazi ne' metacaratteri di shell.
+# --limit accetta solo quello che sta in inventario (vedi
+# Inventario.risolvi_limite). Questa e' la prima rete: la forma. Un nome di
+# host, un nome di gruppo e un indirizzo IP non contengono spazi ne'
+# metacaratteri di shell.
 _NOME_LIMIT_RE = re.compile(r'^[A-Za-z0-9_.:\-]{1,120}$')
 
 
@@ -243,14 +244,18 @@ def api_run():
                                  'host agire: senza filtro prenderebbe tutto '
                                  "l'inventario."}), 400
 
+    pattern, host_scelti = '', []
     if limit:
         if not _NOME_LIMIT_RE.match(limit):
             return jsonify({'error': 'Il filtro --limit contiene caratteri non ammessi'}), 400
-        validi = inventario.nomi_validi()
-        # Ansible accetta anche 'a:b' e 'a:!b'; qui si tiene la forma semplice,
-        # cioe' UN host o UN gruppo, e si controlla che esista davvero.
-        if limit not in validi:
-            return jsonify({'error': f"'{limit}' non e' un host ne' un gruppo dell'inventario"}), 400
+        # La GUI manda l'INDIRIZZO dell'host, non il suo nome: l'hostname di un
+        # server di laboratorio cambia, l'IP con cui lo si raggiunge no. Ansible
+        # pero' i pattern li confronta con i nomi di inventario, quindi qui si
+        # ritraduce. Restano accettati anche i nomi (gruppi, e le pagine aperte
+        # prima di questo cambiamento).
+        pattern, host_scelti, errore = inventario.risolvi_limite(limit)
+        if errore:
+            return jsonify({'error': errore}), 400
 
     if not _job_lock.acquire(blocking=False):
         return jsonify({'error': "Un job e' gia' in esecuzione. Attendi il completamento."}), 409
@@ -259,8 +264,16 @@ def api_run():
     _job_state['status'] = 'running'
     _job_state['azione'] = azione
 
-    threading.Thread(target=_esegui, args=(COMANDI[azione], limit), daemon=True).start()
-    return jsonify({'status': 'started', 'azione': azione, 'limit': limit or None})
+    # Su un'operazione distruttiva deve essere scritto nero su bianco su CHI si
+    # sta per lavorare: l'indirizzo scelto e i nomi di inventario che ci stanno
+    # dietro. E' l'unico punto in cui i due si vedono insieme.
+    if pattern and pattern != limit:
+        _job_state['output'].append(
+            f'\x1b[2m[indirizzo] {limit} -> {pattern}\x1b[0m')
+
+    threading.Thread(target=_esegui, args=(COMANDI[azione], pattern), daemon=True).start()
+    return jsonify({'status': 'started', 'azione': azione, 'limit': limit or None,
+                    'pattern': pattern or None, 'host': host_scelti})
 
 
 @app.route('/api/file')

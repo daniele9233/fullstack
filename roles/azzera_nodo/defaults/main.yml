@@ -18,6 +18,18 @@
 # questo ruolo cancella dati.
 azzera_conferma: ""
 
+# LA MACCHINA SI RICONOSCE DALL'INDIRIZZO, NON DAL NOME.
+# In laboratorio gli hostname cambiano, e il nome di inventario e' solo
+# un'etichetta: se punta a una macchina diversa da quella che si crede, un ruolo
+# che cancella lo fa scoprire nel modo peggiore. Prima di togliere qualunque
+# cosa, il ruolo controlla che ansible_host sia davvero uno degli indirizzi del
+# nodo che ha risposto — e se non lo e' si ferma.
+# Il controllo si salta da solo quando ansible_host non e' un indirizzo ma un
+# nome DNS. Va spento a mano (-e azzera_verifica_indirizzo=false) quando al nodo
+# si arriva attraverso un NAT o un bastion, cioe' quando l'indirizzo con cui lo
+# si raggiunge NON e' un indirizzo della macchina.
+azzera_verifica_indirizzo: true
+
 # Che cosa togliere. Tutto acceso: un nodo riusato puo' avere addosso i resti
 # di piu' installazioni diverse, e spegnere un pezzo significa lasciarli li'.
 azzera_rancher: true

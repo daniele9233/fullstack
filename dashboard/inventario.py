@@ -6,9 +6,14 @@ Due cose servono a chi sta sopra:
                   poche variabili di group_vars che le sonde e la GUI usano
                   (VIP, porte, punti di mount).
 
-  nomi_validi()   l'insieme dei nomi che possono finire dopo --limit. E' una
-                  allowlist: senza, il campo "limita a" della GUI sarebbe un
-                  modo per infilare stringhe arbitrarie nella riga di comando.
+  risolvi_limite() che cosa mettere dopo --limit, a partire da quello che ha
+                  scelto la GUI. E' una allowlist: senza, il campo "limita a"
+                  sarebbe un modo per infilare stringhe arbitrarie nella riga
+                  di comando. Accetta un gruppo, un nome di host, e soprattutto
+                  l'INDIRIZZO di un host, che ritraduce nel nome. La GUI sceglie
+                  i nodi per indirizzo — l'hostname di un server di laboratorio
+                  cambia, l'IP con cui lo si raggiunge no — mentre Ansible i
+                  pattern li confronta solo con i nomi e con i gruppi.
 
 La fonte e' 'ansible-inventory --list', che risolve inventory.ini e group_vars
 insieme. Quando ansible non c'e' — prima installazione, venv non attivo — si
@@ -249,13 +254,59 @@ class Inventario:
                             self._repo_dir, os.environ.copy(), timeout=10)
         return (out or '').strip() or None
 
-    def nomi_validi(self):
-        """Host e gruppi accettabili dopo --limit."""
+    def per_indirizzo(self):
+        """Indice inverso di ansible_host: {indirizzo: [nomi di inventario]}.
+
+        Piu' righe di inventario possono avere lo stesso ansible_host — sono
+        alias della STESSA macchina, e chi sceglie quell'indirizzo li vuole
+        tutti.
+        """
+        indice = {}
+        for nome, scheda in (self.carica().get('host') or {}).items():
+            indirizzo = (scheda or {}).get('indirizzo')
+            if indirizzo:
+                indice.setdefault(indirizzo, []).append(nome)
+        for nomi in indice.values():
+            nomi.sort()
+        return indice
+
+    def risolvi_limite(self, valore):
+        """Da quello che sceglie la GUI al pattern da mettere dopo --limit.
+
+        La GUI propone gli host per INDIRIZZO, non per nome: in laboratorio
+        l'hostname di un server cambia spesso, l'indirizzo con cui lo si
+        raggiunge no. Ansible pero' i pattern li confronta con i NOMI di
+        inventario e con i gruppi — dentro ansible_host non guarda — quindi
+        l'indirizzo va ritradotto qui, prima che finisca sulla riga di comando.
+
+        Ritorna (pattern, host, errore):
+          pattern  quello che va dopo --limit ('' se non si limita niente)
+          host     i nomi di inventario che quel pattern seleziona
+          errore   il testo da mostrare all'utente, oppure None
+        """
+        valore = (valore or '').strip()
+        if not valore:
+            return '', [], None
+
         dati = self.carica()
-        nomi = set(dati.get('gruppi', {}))
-        nomi.update(dati.get('host', {}))
-        nomi.update(GRUPPI_TECNICI)
-        return nomi
+        gruppi = dati.get('gruppi') or {}
+        host = dati.get('host') or {}
+
+        # Un nome di gruppo o di host passa com'era: la dashboard di prima
+        # mandava quelli, e un segnalibro o una pagina non ricaricata non deve
+        # smettere di funzionare per il cambio di etichetta.
+        if valore in gruppi:
+            return valore, list(gruppi[valore]), None
+        if valore in host:
+            return valore, [valore], None
+        if valore in GRUPPI_TECNICI:
+            return valore, [], None
+
+        nomi = self.per_indirizzo().get(valore, [])
+        if not nomi:
+            return None, [], (f"'{valore}' non e' un host, un gruppo ne' un "
+                              "indirizzo dell'inventario")
+        return ':'.join(nomi), nomi, None
 
     def host_del_gruppo(self, gruppo):
         return list(self.carica().get('gruppi', {}).get(gruppo, []))
