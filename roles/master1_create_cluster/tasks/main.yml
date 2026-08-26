@@ -371,10 +371,19 @@
 
 - name: Raccogli i nodi che non si sono agganciati
   set_fact:
+    # LE PARENTESI ATTORNO ALLE TRE LISTE SONO OBBLIGATORIE.
+    #
+    # In Jinja il filtro "|" lega piu' stretto della somma "+", quindi
+    #   a + b + c | selectattr(...) | rejectattr(...)
+    # si legge
+    #   a + b + (c | selectattr(...) | rejectattr(...))
+    # e i primi due elenchi passano NON filtrati. Scritto cosi', questo task
+    # dichiarava falliti i nodi manager e worker mostrando "uscita 0", cioe'
+    # successo, mentre l'unico davvero filtrato era l'ingress.
     join_falliti: >-
-      {{ (join_managers_status.results | default([]))
-         + (join_workers_status.results | default([]))
-         + (join_ingress_status.results | default([]))
+      {{ ((join_managers_status.results | default([]))
+          + (join_workers_status.results | default([]))
+          + (join_ingress_status.results | default([])))
          | selectattr('rc', 'defined')
          | rejectattr('rc', 'equalto', 0)
          | list }}
