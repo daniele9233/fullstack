@@ -112,9 +112,14 @@ COMANDI = {
 
 DISTRUTTIVE = {'azzera_nodi', 'reinit_postgres', 'rigenera_certificati_kafka', 'azzera_nodo'}
 
-# Azioni che senza --limit prenderebbero tutto l'inventario facendo un disastro.
-# Il playbook si protegge da solo pretendendo azzera_conferma, ma quella la
-# passa la dashboard: qui serve la seconda meta' del vincolo, cioe' "su chi".
+# Azioni per cui "su chi" va DETTO, non lasciato al valore predefinito. Il
+# playbook si protegge da solo pretendendo azzera_conferma, ma quella la passa la
+# dashboard: qui serve la seconda meta' del vincolo.
+#
+# Non vuol dire "non si puo' prendere tutto": si puo', scegliendo "tutti i nodi
+# dell'inventario" nella tendina, che vale --limit all ("all" e' un gruppo vero
+# di Ansible ed e' gia' in Inventario.nomi_validi). Vuol dire che la riga di
+# comando piu' corta non puo' essere quella che tocca piu' macchine.
 RICHIEDE_LIMIT = {'azzera_nodo'}
 
 # --limit accetta solo nomi presenti in inventario (vedi Inventario.nomi_validi).
@@ -240,8 +245,10 @@ def api_run():
 
     if azione in RICHIEDE_LIMIT and not limit:
         return jsonify({'error': 'Questa operazione richiede di scegliere su quali '
-                                 'host agire: senza filtro prenderebbe tutto '
-                                 "l'inventario."}), 400
+                                 'host agire. Per prenderli tutti la scelta c\'e\' '
+                                 'ed e\' "tutti i nodi dell\'inventario" (--limit '
+                                 'all): va indicata, non lasciata come valore '
+                                 'vuoto.'}), 400
 
     if limit:
         if not _NOME_LIMIT_RE.match(limit):

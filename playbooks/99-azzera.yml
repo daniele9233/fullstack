@@ -23,9 +23,33 @@
 #     --limit dbserver01 \
 #     -e azzera_conferma=AZZERA
 #
-# --limit dice su chi, azzera_conferma dice che sai cosa stai facendo. Senza
-# --limit "hosts: all" prende tutto l'inventario; senza la conferma il ruolo si
-# ferma al primo task. Il control node ([local]) e' escluso a prescindere.
+# --limit dice su chi, azzera_conferma dice che sai cosa stai facendo. Senza la
+# conferma il ruolo si ferma al primo task.
+#
+# PER AZZERARE TUTTO L'INVENTARIO il filtro e' "all", e va scritto:
+#
+#   ansible-playbook playbooks/99-azzera.yml --limit all -e azzera_conferma=AZZERA
+#
+# Non e' la stessa cosa che ometterlo. Omettendolo si ottiene lo stesso
+# risultato, ma per distrazione — la riga di comando piu' corta non puo' essere
+# quella che tocca piu' macchine. La dashboard non lo accetta nemmeno: nella
+# tendina "Limita a" bisogna scegliere, e "tutti i nodi dell'inventario" e' una
+# delle scelte.
+#
+# IL CONTROL NODE E' ESCLUSO DAL PLAY, non solo rifiutato dal ruolo: e' la
+# ragione di "hosts: all:!local" qui sotto. Prima il gruppo [local] rientrava in
+# "all", e con --limit all il ruolo ci sbatteva contro a meta' elenco: l'assert
+# faceva FALLIRE quell'host, e con serial: 1 un batch tutto fallito chiude il
+# play ("NO MORE HOSTS LEFT"). Risultato: gli host prima di [local]
+# nell'inventario azzerati, quelli dopo intatti, e nessuno che se ne accorgesse
+# se non leggendo il riepilogo. L'assert nel ruolo resta come seconda rete, per
+# chi lancia da fuori con un pattern che [local] se lo tira dentro.
+#
+# SE UN NODO NON RISPONDE il play si ferma li': serial: 1 vuol dire un batch per
+# host, e un batch tutto fallito chiude il play. Voluto quando si azzera un
+# nodo solo, meno comodo con --limit all su un laboratorio dove qualche macchina
+# e' spenta. In quel caso si spengono i nodi irraggiungibili dall'inventario,
+# oppure si lancia per gruppi.
 #
 # VARIANTI
 #
@@ -46,7 +70,9 @@
 # dice quali servizi, porte e directory sono sopravvissuti.
 
 - name: Azzera i nodi selezionati
-  hosts: all
+  # all:!local = tutti gli host dell'inventario TRANNE il control node. Vedi
+  # sopra: con "all" e basta, --limit all si fermava a meta' elenco.
+  hosts: all:!local
   become: yes
   # I fatti servono al modulo apt e al riavvio finale.
   gather_facts: yes

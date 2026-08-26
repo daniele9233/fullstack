@@ -793,7 +793,7 @@
             <div class="card p-5 mb-4 max-w-[680px]" data-limite-box>
               <label class="text-[12px] font-medium text-fg-mute">Limita a (facoltativo)</label>
               <select class="field mt-2 limite-sel"><option value="">tutti gli host del playbook</option></select>
-              <p class="text-[11px] text-fg-dim mt-2">Su un'operazione distruttiva conviene sempre restringere il campo a un host solo, e guardare che cosa succede prima di lanciare sugli altri. Per <strong class="text-fg-mute">Azzera il nodo</strong> il filtro è obbligatorio: senza, l'operazione viene rifiutata.</p>
+              <p class="text-[11px] text-fg-dim mt-2">Su un'operazione distruttiva conviene sempre restringere il campo a un host solo, e guardare che cosa succede prima di lanciare sugli altri. Per <strong class="text-fg-mute">Azzera il nodo</strong> una scelta va fatta: lasciando <span class="font-mono">tutti gli host del playbook</span> l'operazione viene rifiutata. Per prendere davvero tutto, scegli <span class="font-mono text-fg-mute">tutti i nodi dell'inventario</span> &mdash; il control node resta fuori comunque.</p>
             </div>
 
             <!-- Azzeramento completo: la carta piu' grossa, in cima, con il bordo
@@ -818,7 +818,7 @@
                     <span class="badge badge-pend"><span class="dot"></span>Kafka · JDK Zulu</span>
                   </div>
                   <p class="text-[12.5px] text-fg-mute mt-3">Svuota anche i dati — PGDATA, i brick, la directory di Kafka — e toglie le righe che i ruoli hanno scritto in <span class="font-mono">/etc/hosts</span>. <strong class="text-fg">I dischi non li tocca</strong>: niente umount, niente mkfs, niente fstab. Restano montati e vuoti, pronti per l'installazione dopo.</p>
-                  <p class="text-[12px] text-fg-dim mt-2">Il control node è escluso a prescindere, e senza un filtro qui sotto l'operazione non parte.</p>
+                  <p class="text-[12px] text-fg-dim mt-2">Il control node è escluso a prescindere. Nella tendina qui sopra una scelta va fatta: un host, un gruppo, oppure <span class="font-mono">tutti i nodi dell'inventario</span> &mdash; che è l'unico modo di prendere tutto, perché il valore lasciato vuoto viene rifiutato. Gli host vengono azzerati <strong class="text-fg-mute">uno alla volta</strong>: se uno non risponde, il playbook si ferma lì.</p>
                   <div class="mt-5 flex gap-2">
                     <button class="btn btn-danger" data-conferma="azzera_nodo"><i data-lucide="bomb" class="w-4 h-4"></i>Azzera il nodo</button>
                     <a href="#/cruscotto" class="btn btn-ghost"><i data-lucide="x" class="w-4 h-4"></i>Annulla</a>
@@ -2129,7 +2129,19 @@ window.addEventListener('beforeunload', (e) => {
 });
 
 function riempiLimiti(d) {
-  const opzioni = ['<option value="">tutti gli host del playbook</option>'];
+  // "all" e' un gruppo vero di Ansible, non una scorciatoia della GUI: --limit all
+  // vuol dire tutto l'inventario. Sta qui perche' le operazioni distruttive
+  // PRETENDONO una scelta esplicita (il valore vuoto viene rifiutato dal
+  // backend), e senza questa voce "tutti i nodi" non sarebbe sceglibile —
+  // toccherebbe indicare i gruppi uno per uno.
+  // Senza conteggio di proposito: "all" vuol dire host diversi a seconda del
+  // playbook (99-azzera.yml esclude il control node, gli altri no), e un numero
+  // accanto a un'operazione distruttiva o è quello giusto o è peggio di niente.
+  // Quanti e quali si vedono nella conferma e nell'elenco qui sotto.
+  const opzioni = [
+    '<option value="">tutti gli host del playbook</option>',
+    '<option value="all">tutti i nodi dell\'inventario</option>',
+  ];
   (d.gruppi || []).forEach(g => {
     if ((g.host || []).length) opzioni.push(`<option value="${esc(g.nome)}">gruppo · ${esc(g.nome)} (${g.host.length})</option>`);
   });
@@ -2253,11 +2265,16 @@ document.addEventListener('click', async (e) => {
     const c = CONFERME[chiave];
     if (!c) return;
     const limit = limiteDi(distruttiva);
+    // "all" merita una frase sua: è la scelta che tocca più macchine, e nella
+    // tendina è una riga come le altre.
+    const nota = limit === 'all'
+      ? ' <br><br>Verrà lanciato con <span class="font-mono text-fg">--limit all</span>: <strong class="text-fg">tutti i nodi dell\'inventario</strong>, uno alla volta, in ordine di inventario. Il control node resta fuori. Se un nodo non risponde il playbook si ferma lì e i successivi non vengono toccati.'
+      : (limit
+        ? ` <br><br>Verrà lanciato con <span class="font-mono text-fg">--limit ${esc(limit)}</span>.`
+        : ' <br><br>Nessun <span class="font-mono text-fg">--limit</span> impostato: verranno toccati <strong class="text-fg">tutti</strong> gli host del playbook.');
     apriConferma({
       titolo: c.titolo,
-      corpo: c.corpo + (limit
-        ? ` <br><br>Verrà lanciato con <span class="font-mono text-fg">--limit ${esc(limit)}</span>.`
-        : ' <br><br>Nessun <span class="font-mono text-fg">--limit</span> impostato: verranno toccati <strong class="text-fg">tutti</strong> gli host del playbook.'),
+      corpo: c.corpo + nota,
       parola: c.parola,
       pulsante: c.pulsante,
       onConferma: () => avvia(chiave, limit),
