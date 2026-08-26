@@ -47,3 +47,19 @@
 # Elasticsearch, come Kafka, e' indipendente da tutto il resto: nodo singolo,
 # gruppo [elastic_servers]. Vuoto il gruppo, il play viene saltato senza rumore.
 - import_playbook: playbooks/60-elasticsearch.yml
+
+# Gli indici di logging: legge i namespace dal cluster Kubernetes e prepara su
+# Elasticsearch template, indici e alias su cui il collector scrivera'. Sta in
+# fondo perche' e' l'unico play che ha bisogno di DUE cose gia' in piedi — il
+# cluster downstream (20-rancher) e il nodo Elasticsearch (60-elasticsearch) —
+# e non basta a se stesso come gli altri.
+#
+# Si salta da solo finche' logging_system_project_id e logging_es_host sono
+# vuote, che e' come nascono in group_vars/all.yml: senza il projectId del
+# progetto "system" di Rancher non c'e' modo di distinguere i namespace
+# infrastrutturali dagli applicativi, e tirare a indovinare qui vuol dire
+# creare gli indici sbagliati.
+- import_playbook: playbooks/70-logging.yml
+  when:
+    - logging_system_project_id | default('') | length > 0
+    - logging_es_host | default('') | length > 0

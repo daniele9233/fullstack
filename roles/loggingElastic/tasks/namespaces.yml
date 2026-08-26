@@ -1,0 +1,246 @@
+---
+# Quello che faceva namespace-listing.sh: dividere i namespace del cluster fra
+# infrastrutturali (progetto "system" di Rancher) e applicativi (tutti gli
+# altri), e ricavare da ciascuno il nome dell'indice.
+#
+# --- COME RANCHER MARCA I NAMESPACE ----------------------------------------
+#
+# Un namespace assegnato a un progetto porta DUE cose con lo stesso nome:
+#
+#   annotations:
+#     field.cattle.io/projectId: c-m-4kzrlq7x:p-dkknq     <clusterId>:<projectId>
+#   labels:
+#     field.cattle.io/projectId: p-dkknq                  solo <projectId>
+#
+# Si filtra sulla LABEL (le annotazioni non sono selezionabili), quindi
+# logging_system_project_id e' la seconda forma. Il controllo preliminare si
+# ferma se ci trova dentro un ":".
+#
+# --- UNA SOLA CHIAMATA, NON DUE --------------------------------------------
+#
+# Lo script interroga kubectl due volte (tutti i namespace, poi quelli del
+# progetto system) e sottrae il secondo elenco dal primo. Qui si legge una volta
+# sola con -o json e si divide in memoria: un namespace creato fra le due
+# chiamate non puo' finire da entrambe le parti o da nessuna, e soprattutto un
+# elenco vuoto perche' kubectl e' fallito non passa inosservato — lo script non
+# controlla il codice di uscita e prosegue con gli array vuoti.
+
+- name: Leggi i namespace del cluster
+  command: "{{ logging_kubectl }} get ns -o json"
+  environment:
+    KUBECONFIG: "{{ logging_kubeconfig }}"
+  register: logging_ns_raw
+  changed_when: false
+
+# --- Divisione fra infra e app ----------------------------------------------
+# Infra = label del progetto system. App = tutto il resto, quindi anche i
+# namespace che non stanno in nessun progetto e quelli di altri progetti: e'
+# esattamente la regola dello script ("non e' di sistema, allora e'
+# applicativo"), scritta qui in chiaro perche' e' una decisione, non un
+# dettaglio.
+
+- name: Dividi i namespace fra infrastrutturali e applicativi
+  set_fact:
+    logging_ns_infra: >-
+      {%- set out = [] -%}
+      {%- for ns in (logging_ns_raw.stdout | from_json)['items'] -%}
+      {%-   set etichette = ns.metadata.labels | default({}) -%}
+      {%-   if etichette[logging_project_label] | default('') == logging_system_project_id -%}
+      {%-     set _ = out.append(ns.metadata.name) -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ out | sort | to_json }}
+    logging_ns_app: >-
+      {%- set out = [] -%}
+      {%- for ns in (logging_ns_raw.stdout | from_json)['items'] -%}
+      {%-   set etichette = ns.metadata.labels | default({}) -%}
+      {%-   if etichette[logging_project_label] | default('') != logging_system_project_id -%}
+      {%-     set _ = out.append(ns.metadata.name) -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ out | sort | to_json }}
+
+# Le due set_fact sopra producono stringhe JSON: qui tornano liste.
+- name: Converti gli elenchi in liste
+  set_fact:
+    logging_ns_infra: "{{ logging_ns_infra | from_json }}"
+    logging_ns_app: "{{ logging_ns_app | from_json }}"
+
+# Un elenco infrastrutturale vuoto non e' un cluster senza namespace di
+# sistema: e' il projectId che non corrisponde a niente. Lo script arriva fino
+# in fondo lo stesso e scrive un infra_namespaces.txt con dentro una riga vuota,
+# che poi diventa un template jolly "<prefisso>-*" a priorita' 500.
+- name: Verifica che il progetto system contenga qualcosa
+  assert:
+    that:
+      - logging_ns_infra | length > 0
+    fail_msg: >-
+      Nessun namespace ha la label
+      {{ logging_project_label }}={{ logging_system_project_id }}.
+      Il projectId non corrisponde a nessun progetto di questo cluster: la label
+      di un namespace del progetto system si legge con
+      kubectl get ns cattle-system
+      -o jsonpath='{.metadata.labels.field\.cattle\.io/projectId}'
+      e vale solo la parte "p-...", non "<clusterId>:<projectId>".
+      Namespace visti in tutto: {{ logging_ns_app | length }}.
+    success_msg: >-
+      Progetto system {{ logging_system_project_id }}:
+      {{ logging_ns_infra | length }} namespace infrastrutturali,
+      {{ logging_ns_app | length }} applicativi.
+
+# --- Esclusioni -------------------------------------------------------------
+
+- name: Applica le esclusioni
+  set_fact:
+    logging_ns_infra: >-
+      {{ logging_ns_infra
+         | reject('search', '(' ~ (logging_ns_exclude | join('|')) ~ ')')
+         | list }}
+    logging_ns_app: >-
+      {{ logging_ns_app
+         | reject('search', '(' ~ (logging_ns_exclude | join('|')) ~ ')')
+         | list }}
+  when: logging_ns_exclude | length > 0
+
+# --- Dal nome del namespace al nome dell'indice -----------------------------
+#
+# La mappa e' <nome pulito> -> [namespace che ci finiscono dentro]. Serve per la
+# COLLISIONE: togliendo i trattini, "my-app" e "myapp" diventano lo stesso
+# "myapp", cioe' lo stesso template, lo stesso indice, lo stesso alias.
+#
+# Lo script non se ne accorge. Le due righe identiche in app_namespaces.txt
+# passano nel ciclo una dopo l'altra: la seconda PUT del template sovrascrive la
+# prima e risponde "acknowledged": true, la PUT dell'indice fallisce con
+# resource_already_exists_exception (che nessuno guarda) e la POST dell'alias
+# rifa' quello che c'era gia'. Nessun errore, nessuna riga nel file delle
+# priorita', e alla fine due namespace scrivono nello stesso indice.
+#
+# E' proprio il caso in cui "di due namespace ne viene creato uno solo", e non
+# ha niente a che vedere con la priorita': il file
+# <prefisso>-template-priority-600 nasce dall'altro problema, quello dei
+# pattern che si sovrappongono, ed e' trattato in insiemi.yml.
+
+- name: Costruisci la mappa nome-indice -> namespace
+  set_fact:
+    logging_mappa_infra: >-
+      {%- set mappa = {} -%}
+      {%- for ns in logging_ns_infra -%}
+      {%-   set pulito = (ns | replace('-', '')) if logging_strip_dashes | bool else ns -%}
+      {%-   set _ = mappa.setdefault(pulito, []).append(ns) -%}
+      {%- endfor -%}
+      {{ mappa | to_json }}
+    logging_mappa_app: >-
+      {%- set mappa = {} -%}
+      {%- for ns in logging_ns_app -%}
+      {%-   set pulito = (ns | replace('-', '')) if logging_strip_dashes | bool else ns -%}
+      {%-   set _ = mappa.setdefault(pulito, []).append(ns) -%}
+      {%- endfor -%}
+      {{ mappa | to_json }}
+
+- name: Converti le mappe in dizionari
+  set_fact:
+    logging_mappa_infra: "{{ logging_mappa_infra | from_json }}"
+    logging_mappa_app: "{{ logging_mappa_app | from_json }}"
+
+- name: Raccogli le collisioni
+  set_fact:
+    logging_collisioni: >-
+      {%- set out = [] -%}
+      {%- for sorgente, mappa in [('app', logging_mappa_app), ('infra', logging_mappa_infra)] -%}
+      {%-   for pulito, namespaces in mappa.items() | sort -%}
+      {%-     if namespaces | length > 1 -%}
+      {%-       set _ = out.append(sorgente ~ ': ' ~ (namespaces | join(' + ')) ~ ' -> ' ~ pulito) -%}
+      {%-     endif -%}
+      {%-   endfor -%}
+      {%- endfor -%}
+      {{ out | to_json }}
+
+- name: Converti le collisioni in lista
+  set_fact:
+    logging_collisioni: "{{ logging_collisioni | from_json }}"
+
+- name: Fermati sulle collisioni fra nomi di namespace
+  assert:
+    that:
+      - logging_collisioni | length == 0
+    fail_msg: >-
+      {{ logging_collisioni | length }} nomi di indice sono contesi da piu'
+      namespace, perche' togliendo i trattini diventano identici:
+      {{ logging_collisioni | join(' ; ') }}.
+      Cosi' com'e', i log di quei namespace finirebbero MESCOLATI in un indice
+      solo — ed e' quello che succede oggi lanciando lo script a mano, senza che
+      niente lo segnali. Le vie d'uscita, in ordine di preferenza:
+      (1) logging_strip_dashes=false, se il collector tiene i trattini nel nome
+      dell'indice — e' la soluzione vera, i namespace tornano distinti;
+      (2) escludere uno dei due con logging_ns_exclude;
+      (3) rinominare il namespace.
+      Per riprodurre comunque il comportamento dello script — un indice solo,
+      il primo in ordine alfabetico — metti logging_fail_on_collision=false.
+  when: logging_fail_on_collision | bool
+
+- name: Segnala le collisioni senza fermarti
+  debug:
+    msg: >-
+      ATTENZIONE: {{ logging_collisioni | length }} nomi di indice sono contesi
+      da piu' namespace ({{ logging_collisioni | join(' ; ') }}). Con
+      logging_fail_on_collision=false si prosegue come fa lo script: un solo
+      template, un solo indice, e i log dei namespace in collisione mescolati
+      dentro.
+  when:
+    - logging_collisioni | length > 0
+    - not (logging_fail_on_collision | bool)
+
+# I nomi veri e propri degli indici. La chiave della mappa e' gia' univoca, e
+# l'ordinamento e' quello del "sort" dello script: conta, perche' e' l'ordine in
+# cui i template vengono creati e quindi quello in cui si scoprono le
+# sovrapposizioni fra pattern.
+#
+# reject('equalto', '') e' una cintura di sicurezza: un nome vuoto qui
+# diventerebbe il template jolly "<prefisso>-*".
+- name: Ricava i nomi degli indici
+  set_fact:
+    logging_nomi:
+      app: "{{ logging_mappa_app.keys() | reject('equalto', '') | list | sort }}"
+      infra: "{{ logging_mappa_infra.keys() | reject('equalto', '') | list | sort }}"
+    logging_namespaces:
+      app: "{{ logging_ns_app }}"
+      infra: "{{ logging_ns_infra }}"
+
+- name: Mostra gli elenchi
+  debug:
+    msg:
+      - "Applicativi ({{ logging_nomi.app | length }}): {{ logging_nomi.app | join(', ') | default('nessuno', true) }}"
+      - "Infrastrutturali ({{ logging_nomi.infra | length }}): {{ logging_nomi.infra | join(', ') | default('nessuno', true) }}"
+      - "Trattini nel nome dell'indice: {{ 'tolti (my-app -> myapp)' if logging_strip_dashes | bool else 'tenuti' }}"
+
+# --- I due file sul nodo ----------------------------------------------------
+# Stessi percorsi e stesso formato dello script, perche' restano l'input dei
+# lanci manuali di create-index.sh e la prima cosa da guardare quando il
+# risultato non torna. Il ruolo non li rilegge: lavora sui dati che ha in
+# memoria, quindi modificarli a mano non cambia cosa fa il playbook.
+
+- name: "Crea {{ logging_script_dir }}"
+  file:
+    path: "{{ logging_script_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+  when: logging_write_ns_files | bool or logging_deploy_scripts | bool
+
+- name: Scrivi gli elenchi dei namespace
+  copy:
+    content: |
+      {% for nome in logging_nomi[item.sorgente] %}
+      {{ nome }}
+      {% endfor %}
+    dest: "{{ item.file }}"
+    owner: root
+    group: root
+    mode: "0640"
+  loop:
+    - { sorgente: 'app', file: "{{ logging_app_ns_file }}" }
+    - { sorgente: 'infra', file: "{{ logging_infra_ns_file }}" }
+  loop_control:
+    label: "{{ item.file }}"
+  when: logging_write_ns_files | bool

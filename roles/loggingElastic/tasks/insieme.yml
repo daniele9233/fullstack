@@ -1,0 +1,354 @@
+---
+# UN insieme: un prefisso, un elenco di namespace, una priorita' di partenza.
+# E' l'equivalente di una riga come
+#
+#   ./create-index.sh https 10.10.111.24 elastic '<password>' k8s-coll-app \
+#       /root/logging-script/app_namespaces.txt 500 1 1 logs
+#
+# ma senza il giro dei rilanci a priorita' crescente.
+
+# ===========================================================================
+# LE PRIORITA', CALCOLATE INVECE CHE SCOPERTE
+# ===========================================================================
+#
+# Il problema, in due namespace: "foo" e "foobar".
+#
+#   template k8s-coll-app-foo      pattern "k8s-coll-app-foo*"     priorita' 500
+#   template k8s-coll-app-foobar   pattern "k8s-coll-app-foobar*"  priorita' 500
+#
+# Il primo pattern matcha ANCHE gli indici del secondo
+# ("k8s-coll-app-foobar-000001" comincia per "k8s-coll-app-foo"). Due template
+# che si contendono lo stesso indice con la stessa priorita' sono ambigui, e
+# Elasticsearch rifiuta il secondo:
+#
+#   ...that have the same priority [500], multiple index templates may not
+#   match during index creation, please use a different priority
+#
+# Lo script se ne accorge cercando quella frase nella risposta, scrive "foobar"
+# in <prefisso>-template-priority-600 e VA RILANCIATO A MANO su quel file. Con
+# tre nomi incastrati (foo, foobar, foobarbaz) i rilanci diventano due.
+#
+# Qui si calcola prima: per ogni nome si contano quanti ALTRI nomi dell'elenco
+# gli stanno davanti come prefisso, e si sale di logging_priority_step per
+# ognuno. Il piu' specifico finisce sempre piu' in alto del piu' generico, che
+# e' l'unico ordine giusto — se vincesse "foo", gli indici di "foobar"
+# nascerebbero con l'alias di rollover di "foo" e il rollover di uno
+# scriverebbe nell'altro.
+#
+# Con logging_pattern_suffix = "-*" il problema non si pone proprio:
+# "k8s-coll-app-foo-*" non matcha "k8s-coll-app-foobar-000001", i conflitti
+# calcolati vengono zero e tutti i template restano alla priorita' di base.
+# (Restano possibili se logging_strip_dashes e' false, perche' allora nei nomi i
+# trattini ci sono ancora: "foo" e "foo-bar" tornano a incastrarsi.)
+
+- name: "Calcola le priorita' dell'insieme {{ insieme.nome | default(insieme.prefisso) }}"
+  set_fact:
+    logging_indici_json: >-
+      {%- set nomi = logging_nomi[insieme.sorgente] -%}
+      {%- set sep = logging_pattern_suffix | regex_replace('\*$', '') -%}
+      {%- set out = [] -%}
+      {%- for nome in nomi -%}
+      {%-   set prefissi = [] -%}
+      {%-   for altro in nomi -%}
+      {%-     if altro != nome and nome.startswith(altro ~ sep) -%}
+      {%-       set _ = prefissi.append(altro) -%}
+      {%-     endif -%}
+      {%-   endfor -%}
+      {%-   set _ = out.append({
+              'nome': nome,
+              'indice': insieme.prefisso ~ '-' ~ nome,
+              'priorita': (insieme.priorita | int) + (logging_priority_step | int) * (prefissi | length),
+              'prefissi': prefissi | sort }) -%}
+      {%- endfor -%}
+      {{ out | to_json }}
+
+- name: Converti in lista
+  set_fact:
+    logging_indici: "{{ logging_indici_json | from_json }}"
+
+- name: "Insieme {{ insieme.nome | default(insieme.prefisso) }}: cosa verra' creato"
+  debug:
+    msg:
+      - "Prefisso {{ insieme.prefisso }}, elenco {{ insieme.sorgente }}, {{ logging_indici | length }} indici"
+      - "Pattern <indice>{{ logging_pattern_suffix }}, priorita' base {{ insieme.priorita }}, {{ insieme.shards }} shard, {{ insieme.replicas }} repliche"
+      - "Policy ILM {{ insieme.prefisso }}-{{ insieme.lifecycle }}"
+      - >-
+        Priorita' alzate per sovrapposizione di pattern:
+        {{ logging_indici | selectattr('prefissi', 'ne', [])
+           | map(attribute='indice') | list | join(', ') | default('nessuna', true) }}
+
+- name: "Elenca le priorita' alzate"
+  debug:
+    msg: >-
+      {{ item.indice }} -> priorita' {{ item.priorita }} invece di
+      {{ insieme.priorita }}: il suo pattern e' contenuto in quello di
+      {{ item.prefissi | map('regex_replace', '^', insieme.prefisso ~ '-') | join(', ') }}.
+      A mano, questo namespace sarebbe finito nel file
+      {{ insieme.prefisso }}-template-priority-{{ item.priorita }} da rilanciare.
+  loop: "{{ logging_indici | selectattr('prefissi', 'ne', []) | list }}"
+  loop_control:
+    label: "{{ item.indice }}"
+
+- name: "Nessun indice per l'insieme {{ insieme.nome | default(insieme.prefisso) }}"
+  debug:
+    msg: >-
+      L'elenco "{{ insieme.sorgente }}" e' vuoto: niente da creare per il
+      prefisso {{ insieme.prefisso }}.
+  when: logging_indici | length == 0
+
+
+# ===========================================================================
+# INDEX TEMPLATE
+# ===========================================================================
+#
+# Si legge prima e si scrive solo se serve. Lo script fa sempre la PUT: su un
+# insieme gia' a posto ridichiara cinquanta template identici, e siccome
+# Elasticsearch risponde "acknowledged": true a prescindere, non si distingue il
+# lancio che ha cambiato qualcosa da quello che non ha cambiato niente.
+
+- name: "{{ insieme.prefisso }}: leggi gli index template esistenti"
+  uri:
+    url: "{{ logging_es_url }}/_index_template/{{ item.indice }}"
+    method: GET
+    user: "{{ logging_es_user }}"
+    password: "{{ logging_es_password }}"
+    force_basic_auth: yes
+    validate_certs: "{{ true if logging_es_ca_file | length > 0 else logging_es_validate_certs | bool }}"
+    ca_path: "{{ logging_es_ca_file if logging_es_ca_file | length > 0 else omit }}"
+    timeout: "{{ logging_es_timeout }}"
+    status_code: [200, 404]
+  loop: "{{ logging_indici }}"
+  loop_control:
+    label: "{{ item.indice }}"
+  register: logging_tpl_stato
+  changed_when: false
+
+# Il corpo e' quello dello script, campo per campo. Le impostazioni si
+# confrontano con quelle gia' presenti: se coincidono, la PUT si salta.
+#
+# Il confronto legge le impostazioni in tutte e due le forme in cui
+# Elasticsearch le puo' restituire — annidate (index.lifecycle.name) e piatte
+# ("index.lifecycle.name" come chiave unica) — perche' dipende da come sono
+# state scritte la prima volta. Sbagliando, il ruolo riscriverebbe i template a
+# ogni esecuzione: rumoroso, non dannoso.
+- name: "{{ insieme.prefisso }}: crea o aggiorna gli index template"
+  uri:
+    url: "{{ logging_es_url }}/_index_template/{{ item.indice }}"
+    method: PUT
+    user: "{{ logging_es_user }}"
+    password: "{{ logging_es_password }}"
+    force_basic_auth: yes
+    validate_certs: "{{ true if logging_es_ca_file | length > 0 else logging_es_validate_certs | bool }}"
+    ca_path: "{{ logging_es_ca_file if logging_es_ca_file | length > 0 else omit }}"
+    timeout: "{{ logging_es_timeout }}"
+    body_format: json
+    body:
+      index_patterns:
+        - "{{ item.indice }}{{ logging_pattern_suffix }}"
+      priority: "{{ item.priorita | int }}"
+      template:
+        settings:
+          index:
+            lifecycle:
+              name: "{{ insieme.prefisso }}-{{ insieme.lifecycle }}"
+              rollover_alias: "{{ item.indice }}"
+            number_of_shards: "{{ insieme.shards }}"
+            number_of_replicas: "{{ insieme.replicas }}"
+    # 400 arriva quando due pattern si sovrappongono a pari priorita'. Non
+    # dovrebbe piu' succedere — le priorita' sono calcolate — ma se succede
+    # merita un messaggio suo invece di una traccia HTTP: vedi il task dopo.
+    status_code: [200, 400]
+  loop: "{{ logging_indici }}"
+  loop_control:
+    index_var: idx
+    label: "{{ item.indice }} (priorita' {{ item.priorita }})"
+  vars:
+    _ris: "{{ logging_tpl_stato.results[idx] }}"
+    _corrente: >-
+      {{ ((_ris.json | default({})).index_templates | default([]) | first
+          | default({})).index_template | default({}) }}
+    _set: "{{ (_corrente.template | default({})).settings | default({}) }}"
+    _idx: "{{ _set.index | default({}) }}"
+    _lc: "{{ _idx.lifecycle | default({}) }}"
+    _attuale:
+      - "{{ _corrente.index_patterns | default([]) | join(',') }}"
+      - "{{ _corrente.priority | default('') | string }}"
+      - "{{ _lc.name | default(_set['index.lifecycle.name'] | default('')) }}"
+      - "{{ _lc.rollover_alias | default(_set['index.lifecycle.rollover_alias'] | default('')) }}"
+      - "{{ _idx.number_of_shards | default(_set['index.number_of_shards'] | default('')) | string }}"
+      - "{{ _idx.number_of_replicas | default(_set['index.number_of_replicas'] | default('')) | string }}"
+    _atteso:
+      - "{{ item.indice }}{{ logging_pattern_suffix }}"
+      - "{{ item.priorita | string }}"
+      - "{{ insieme.prefisso }}-{{ insieme.lifecycle }}"
+      - "{{ item.indice }}"
+      - "{{ insieme.shards | string }}"
+      - "{{ insieme.replicas | string }}"
+  when: _attuale != _atteso
+  # Il task gira SOLO quando c'e' da scrivere, quindi "changed" e' la
+  # verita'. (Non si puo' guardare il codice della risposta: da
+  # ansible-core 2.19 i campi del risultato non sono piu' variabili nude
+  # dentro changed_when.)
+  changed_when: true
+  register: logging_tpl_scritti
+
+# Lo stesso errore che lo script intercetta con grep, ma detto per intero e
+# fatto fallire. Nello script il ramo "priorita' maggiore" e' un ramo normale:
+# il namespace viene messo da parte e il lancio finisce con esito 0, quindi da
+# fuori — da un cron, da un altro playbook — sembra riuscito.
+- name: "{{ insieme.prefisso }}: fermati sui pattern ancora in conflitto"
+  assert:
+    that:
+      - (item.status | default(200)) != 400
+    fail_msg: >-
+      Template {{ item.item.indice | default('?') }} rifiutato da
+      Elasticsearch. Se il messaggio parla di "same priority", due pattern si
+      contendono gli stessi indici e il calcolo delle priorita' non ha coperto
+      il caso: guarda quali template esistono gia' con
+      curl -k -u {{ logging_es_user }}:'<password>'
+      "{{ logging_es_url }}/_index_template/{{ insieme.prefisso }}-*?filter_path=index_templates.name,index_templates.index_template.priority,index_templates.index_template.index_patterns"
+      — il piu' probabile e' un template rimasto da un giro precedente a una
+      priorita' che adesso non torna. Risposta: {{ item.json | default(item.content | default('')) }}
+  loop: "{{ logging_tpl_scritti.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.indice | default('saltato') }}"
+  when: not (item.skipped | default(false))
+
+
+# ===========================================================================
+# INDICE DI PARTENZA E ALIAS DI SCRITTURA
+# ===========================================================================
+#
+# QUI STA LA DIFFERENZA PIU' IMPORTANTE RISPETTO ALLO SCRIPT.
+#
+# Lo script rifa' sempre due cose: PUT dell'indice <indice>-000001, e POST su
+# _aliases per attaccarci l'alias con is_write_index: true. La prima volta va
+# bene. La seconda volta, se nel frattempo ILM ha fatto un rollover e l'indice
+# di scrittura e' diventato -000002, quella POST chiede di rimettere il flag di
+# scrittura sul -000001: Elasticsearch la rifiuta perche' un alias non puo'
+# avere due indici di scrittura, lo script non guarda la risposta e prosegue.
+# Nel migliore dei casi non e' successo niente; in ogni caso il messaggio non
+# lo legge nessuno.
+#
+# Qui si guarda prima se l'alias esiste. Se esiste, l'insieme e' gia' avviato e
+# non si tocca: dove sta l'indice di scrittura lo decide ILM, non questo ruolo.
+
+- name: "{{ insieme.prefisso }}: verifica quali alias esistono gia'"
+  uri:
+    url: "{{ logging_es_url }}/_alias/{{ item.indice }}"
+    method: GET
+    user: "{{ logging_es_user }}"
+    password: "{{ logging_es_password }}"
+    force_basic_auth: yes
+    validate_certs: "{{ true if logging_es_ca_file | length > 0 else logging_es_validate_certs | bool }}"
+    ca_path: "{{ logging_es_ca_file if logging_es_ca_file | length > 0 else omit }}"
+    timeout: "{{ logging_es_timeout }}"
+    status_code: [200, 404]
+  loop: "{{ logging_indici }}"
+  loop_control:
+    label: "{{ item.indice }}"
+  register: logging_alias_stato
+  changed_when: false
+
+- name: "{{ insieme.prefisso }}: verifica quali indici -000001 esistono gia'"
+  uri:
+    url: "{{ logging_es_url }}/{{ item.indice }}-000001"
+    method: HEAD
+    user: "{{ logging_es_user }}"
+    password: "{{ logging_es_password }}"
+    force_basic_auth: yes
+    validate_certs: "{{ true if logging_es_ca_file | length > 0 else logging_es_validate_certs | bool }}"
+    ca_path: "{{ logging_es_ca_file if logging_es_ca_file | length > 0 else omit }}"
+    timeout: "{{ logging_es_timeout }}"
+    status_code: [200, 404]
+  loop: "{{ logging_indici }}"
+  loop_control:
+    label: "{{ item.indice }}"
+  register: logging_indice_stato
+  changed_when: false
+
+# Indice e alias in una chiamata sola, invece delle due dello script. Non e'
+# eleganza: fra la PUT dell'indice e la POST dell'alias lo script ha una
+# finestra in cui l'indice esiste senza alias di scrittura, e se il lancio si
+# interrompe li' (Ctrl-C, rete che cade) quell'indice resta orfano — al lancio
+# dopo la PUT fallisce con resource_already_exists_exception e lo script tira
+# dritto senza mai attaccare l'alias. Con gli alias dentro alla creazione,
+# l'indice o nasce completo o non nasce.
+#
+# Il nome DEVE finire con -000001: il rollover di ILM incrementa il numero in
+# coda, e su un indice che non finisce con un numero non sa da dove ripartire.
+- name: "{{ insieme.prefisso }}: crea gli indici -000001 con l'alias di scrittura"
+  uri:
+    url: "{{ logging_es_url }}/{{ item.indice }}-000001"
+    method: PUT
+    user: "{{ logging_es_user }}"
+    password: "{{ logging_es_password }}"
+    force_basic_auth: yes
+    validate_certs: "{{ true if logging_es_ca_file | length > 0 else logging_es_validate_certs | bool }}"
+    ca_path: "{{ logging_es_ca_file if logging_es_ca_file | length > 0 else omit }}"
+    timeout: "{{ logging_es_timeout }}"
+    body_format: json
+    # Il nome dell'alias e' una CHIAVE, e Ansible non applica i template alle
+    # chiavi dei dizionari: scritto come "{{ item.indice }}:" arriverebbe a
+    # Elasticsearch con quelle parentesi dentro, e l'indice nascerebbe con un
+    # alias chiamato "{{ item.indice }}". Un dizionario costruito in Jinja
+    # invece la chiave la calcola.
+    body:
+      aliases: "{{ { item.indice: { 'is_write_index': true } } }}"
+    status_code: [200]
+  loop: "{{ logging_indici }}"
+  loop_control:
+    index_var: idx
+    label: "{{ item.indice }}-000001"
+  when:
+    - logging_alias_stato.results[idx].status == 404
+    - logging_indice_stato.results[idx].status == 404
+  # Il task gira SOLO quando c'e' da scrivere, quindi "changed" e' la
+  # verita'. (Non si puo' guardare il codice della risposta: da
+  # ansible-core 2.19 i campi del risultato non sono piu' variabili nude
+  # dentro changed_when.)
+  changed_when: true
+
+# Il caso di sopra: indice gia' li' ma senza alias, cioe' un lancio precedente
+# interrotto a meta'. Lo script non lo ripara mai.
+- name: "{{ insieme.prefisso }}: attacca l'alias agli indici che ne sono rimasti senza"
+  uri:
+    url: "{{ logging_es_url }}/_aliases"
+    method: POST
+    user: "{{ logging_es_user }}"
+    password: "{{ logging_es_password }}"
+    force_basic_auth: yes
+    validate_certs: "{{ true if logging_es_ca_file | length > 0 else logging_es_validate_certs | bool }}"
+    ca_path: "{{ logging_es_ca_file if logging_es_ca_file | length > 0 else omit }}"
+    timeout: "{{ logging_es_timeout }}"
+    body_format: json
+    body:
+      actions:
+        - add:
+            index: "{{ item.indice }}-000001"
+            alias: "{{ item.indice }}"
+            is_write_index: true
+    status_code: [200]
+  loop: "{{ logging_indici }}"
+  loop_control:
+    index_var: idx
+    label: "{{ item.indice }} -> {{ item.indice }}-000001"
+  when:
+    - logging_alias_stato.results[idx].status == 404
+    - logging_indice_stato.results[idx].status == 200
+  # Il task gira SOLO quando c'e' da scrivere, quindi "changed" e' la
+  # verita'. (Non si puo' guardare il codice della risposta: da
+  # ansible-core 2.19 i campi del risultato non sono piu' variabili nude
+  # dentro changed_when.)
+  changed_when: true
+
+- name: "{{ insieme.prefisso }}: riepilogo di indici e alias"
+  debug:
+    msg: >-
+      {{ insieme.prefisso }}:
+      {{ logging_alias_stato.results | selectattr('status', 'equalto', 200) | list | length }}
+      insiemi erano gia' avviati (alias e indice di scrittura non toccati: dove
+      sta l'indice di scrittura lo decide ILM con il rollover),
+      {{ logging_alias_stato.results | selectattr('status', 'equalto', 404) | list | length }}
+      creati o riparati adesso.
+  when: logging_indici | length > 0

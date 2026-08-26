@@ -1024,3 +1024,180 @@ es_extra_settings: {}
 # contengono password finirebbe in chiaro dentro ansible.log. Mettilo a false
 # solo per capire perche' un task fallisce.
 es_hide_secrets: true
+
+
+# ===========================================================================
+# LOGGING ELASTIC: INDICI DEI NAMESPACE  ->  ruolo loggingElastic
+# ===========================================================================
+# Automatizza i due script che si lanciano a mano dal nodo manager:
+#
+#   namespace-listing.sh   divide i namespace fra infrastrutturali (progetto
+#                          "system" di Rancher) e applicativi
+#   create-index.sh        per ognuno crea index template, indice -000001 e
+#                          alias di scrittura su Elasticsearch
+#
+#   ansible-playbook -i inventory.ini playbooks/70-logging.yml
+#
+# NON installa Elasticsearch (quello e' playbooks/60-elasticsearch.yml) e NON
+# configura il collector: prepara il posto dove il collector scrivera'. Perche'
+# i log ci arrivino davvero, il nome dell'indice che il collector compone deve
+# coincidere con l'alias creato qui.
+
+# Gruppo di inventario da cui si parla con Kubernetes e con Elasticsearch: il
+# nodo manager, quello da cui oggi si lanciano gli script. Il playbook prende
+# solo il PRIMO host del gruppo.
+logging_group: "new_managers"
+
+# --- Rancher ----------------------------------------------------------------
+# projectId del progetto "system". OBBLIGATORIO, e non ha un default sensato.
+#
+# Si legge dalla LABEL di un namespace che sta in quel progetto:
+#   kubectl get ns cattle-system \
+#     -o jsonpath='{.metadata.labels.field\.cattle\.io/projectId}'
+#
+# NELLA SCHERMATA "Edit YAML" DI RANCHER SI VEDE ALTRO. Il campo piu' visibile
+# e' l'ANNOTAZIONE con lo stesso nome, che vale "<clusterId>:<projectId>"
+# (c-m-4kzrlq7x:p-dkknq): qui va SOLO la seconda meta'.
+#
+# Copiando la stringa intera, lo script a mano non se ne accorge — kubectl
+# fallisce, lui non guarda il codice di uscita e prosegue — e il risultato e'
+# infra_namespaces.txt con una riga vuota dentro e TUTTI i namespace, compresi
+# cattle-system e kube-system, fra gli applicativi. Il ruolo si ferma prima.
+logging_system_project_id: ""
+
+# kubectl e kubeconfig sul manager: sono i percorsi che ci lascia kubectl_setup.
+logging_kubectl: "/usr/local/bin/kubectl"
+logging_kubeconfig: "/root/.kube/config"
+
+# Namespace da NON indicizzare, come espressioni regolari sul nome vero.
+#   logging_ns_exclude: [ '^kube-', '^default$' ]
+logging_ns_exclude: []
+
+# --- Dal nome del namespace al nome dell'indice -----------------------------
+# true = i trattini vengono tolti: "cattle-system" -> "cattlesystem", indice
+# "k8s-coll-infra-cattlesystem". E' quello che fa lo script a mano.
+#
+# DEVE COINCIDERE CON QUELLO CHE SCRIVE IL COLLECTOR: se il collector tiene i
+# trattini, i template creati qui non governano nessun indice.
+#
+# Ed e' anche la causa della prima delle due "collisioni" che si vedono
+# lanciando lo script: "my-app" e "myapp" diventano lo stesso "myapp", quindi lo
+# stesso indice, e i log dei due namespace si mescolano. Lo script non lo
+# segnala — la seconda PUT sovrascrive la prima e risponde "acknowledged": true.
+logging_strip_dashes: true
+
+# true = il ruolo si ferma elencando le collisioni. false = tiene il primo in
+# ordine alfabetico, come fa lo script.
+logging_fail_on_collision: true
+
+# --- Elasticsearch ----------------------------------------------------------
+# I primi quattro parametri di create-index.sh.
+logging_es_scheme: "https"
+logging_es_host: ""                      # OBBLIGATORIO, es. "10.10.111.24"
+logging_es_port: 9200
+logging_es_user: "elastic"
+logging_es_password: ""                  # OBBLIGATORIA. Valuta ansible-vault
+
+# Lo script usa "curl -k": non verifica il certificato. Valorizzando
+# logging_es_ca_file con il percorso della CA SUL MANAGER (la
+# /etc/elasticsearch/cert/ca/ca.crt del nodo Elasticsearch, copiata qui) la
+# verifica si accende da sola.
+logging_es_validate_certs: false
+logging_es_ca_file: ""
+
+# --- Insiemi di indici ------------------------------------------------------
+# Un elemento per ogni lancio di create-index.sh. Il primo e' quello della
+# guida:
+#
+#   ./create-index.sh https 10.10.111.24 elastic '<password>' k8s-coll-app \
+#       /root/logging-script/app_namespaces.txt 500 1 1 logs
+#
+# Il secondo fa lo stesso lavoro sull'elenco infrastrutturale. IL SUO PREFISSO
+# E' UN'IPOTESI: negli script forniti create-index.sh viene lanciato solo
+# sull'elenco applicativo, quindi "k8s-coll-infra" e' quello coerente con
+# "k8s-coll-app" ma non e' scritto da nessuna parte. Verificalo nella
+# configurazione del collector, oppure togli il blocco.
+logging_sets:
+  - nome: "applicativi"
+    prefisso: "k8s-coll-app"
+    sorgente: "app"
+    priorita: 500
+    shards: 1
+    replicas: 1
+    lifecycle: "logs"
+
+  - nome: "infrastrutturali"
+    prefisso: "k8s-coll-infra"
+    sorgente: "infra"
+    priorita: 500
+    shards: 1
+    replicas: 1
+    lifecycle: "logs"
+
+# Coda del pattern del template, dopo <prefisso>-<namespace>.
+#
+# "*"  e' quella dello script, ed e' l'origine della SECONDA collisione: il
+#      pattern "k8s-coll-app-foo*" matcha anche "k8s-coll-app-foobar-000001",
+#      quindi due namespace di cui uno e' prefisso dell'altro si contendono gli
+#      stessi indici. Elasticsearch rifiuta il secondo template
+#      ("...that have the same priority..."), lo script scrive il namespace in
+#      k8s-coll-app-template-priority-600 e VA RILANCIATO A MANO su quel file.
+#
+#      Il ruolo non ha bisogno di nessun rilancio: calcola prima quali nomi sono
+#      prefisso di quali altri e fa nascere il piu' specifico gia' alla
+#      priorita' giusta.
+#
+# "-*" fa sparire il problema alla radice: "k8s-coll-app-foo-*" non matcha
+#      "k8s-coll-app-foobar-000001", e gli indici del rollover si chiamano
+#      sempre <alias>-00000N, quindi il trattino c'e'. E' la scelta migliore, ma
+#      cambia quali indici il template governa: prima controlla che il collector
+#      non crei indici attaccati al prefisso senza trattino.
+logging_pattern_suffix: "*"
+logging_priority_step: 100
+
+# --- Policy ILM -------------------------------------------------------------
+# GLI SCRIPT NON LA CREANO. Il template la nomina
+# (index.lifecycle.name: k8s-coll-app-logs) ma se quella policy non esiste
+# Elasticsearch accetta il template lo stesso, l'indice viene creato lo stesso,
+# e il rollover non avviene MAI: il -000001 cresce finche' non finisce il disco.
+# E' l'unico difetto degli script che non da' nessun sintomo il giorno del
+# lancio.
+#
+# Qui la policy si crea se manca. Se c'e' gia' non si tocca, a meno di
+# logging_ilm_force_update=true: una policy tarata a mano dopo mesi di esercizio
+# non va sovrascritta dal default di un ruolo.
+logging_manage_ilm: true
+logging_ilm_force_update: false
+
+# Rotazione conservativa: si ruota a 50 GB di shard primario o dopo 30 giorni,
+# si cancella 90 giorni DOPO la rotazione (quindi un documento vive fra 90 e 120
+# giorni). max_primary_shard_size e' la condizione che conta: tiene gli shard in
+# una taglia sana comunque logghi il namespace. max_age serve a quelli che
+# loggano poco, altrimenti il loro indice non ruoterebbe mai.
+logging_ilm_phases:
+  hot:
+    actions:
+      rollover:
+        max_primary_shard_size: "50gb"
+        max_age: "30d"
+  delete:
+    min_age: "90d"
+    actions:
+      delete: {}
+
+# --- File sul nodo ----------------------------------------------------------
+# Gli elenchi dei namespace, negli stessi percorsi dello script a mano. Il ruolo
+# non li rilegge (lavora sui dati che ha in memoria): sono l'input dei lanci
+# manuali e la prima cosa da guardare quando il risultato non torna.
+logging_script_dir: "/root/logging-script"
+logging_infra_ns_file: "{{ logging_script_dir }}/infra_namespaces.txt"
+logging_app_ns_file: "{{ logging_script_dir }}/app_namespaces.txt"
+logging_write_ns_files: true
+
+# Deposita anche le due versioni CORRETTE degli script a mano, piu' un LEGGIMI
+# con i comandi gia' compilati. Il ruolo non le lancia e non ne dipende.
+logging_deploy_scripts: true
+
+# Verifica finale in sola lettura: rilegge template, alias e indici di scrittura
+# da Elasticsearch invece di fidarsi delle risposte alle PUT.
+logging_verify: true

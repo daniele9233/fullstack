@@ -1,0 +1,162 @@
+#!/bin/bash
+#
+# namespace-listing.sh — divide i namespace del cluster fra infrastrutturali
+# (progetto "system" di Rancher) e applicativi, e ne ricava i nomi degli indici.
+#
+#   ./namespace-listing.sh
+#     -> {{ logging_infra_ns_file | basename }}
+#     -> {{ logging_app_ns_file | basename }}
+#
+# SCRITTO DAL RUOLO loggingElastic — le modifiche fatte qui a mano vengono
+# sovrascritte al prossimo lancio di playbooks/70-logging.yml.
+#
+# Il ruolo fa gia' tutto questo da solo, senza passare da qui: questo script
+# serve per i giri a mano (un namespace nuovo, un controllo al volo) e per
+# vedere gli stessi elenchi da riga di comando.
+#
+# --- COSA CAMBIA RISPETTO ALLA VERSIONE DI PARTENZA ------------------------
+#
+# 1. Si ferma se kubectl fallisce. Prima no: un kubeconfig sbagliato o un
+#    projectId con dentro i ":" (quello dell'ANNOTAZIONE invece che della
+#    LABEL) facevano uscire kubectl con errore, e lo script proseguiva lo stesso
+#    scrivendo un elenco "di sistema" vuoto e mandando TUTTI i namespace fra gli
+#    applicativi.
+#
+# 2. Niente righe vuote nei file. Prima, con l'elenco di sistema vuoto,
+#    readarray produceva un array di un elemento vuoto e nel file finiva una
+#    riga vuota. create-index.sh la legge come un namespace senza nome e crea un
+#    template "<prefisso>-" con pattern "<prefisso>-*" a priorita' 500: un
+#    template jolly che si mette davanti a tutti gli altri.
+#
+# 3. Le collisioni vengono dette. Togliendo i trattini, "my-app" e "myapp"
+#    diventano lo stesso "myapp": un solo indice per due namespace, con i log
+#    mescolati dentro. Prima non se ne accorgeva nessuno — create-index.sh
+#    vedeva due righe identiche, sovrascriveva il template e tirava dritto.
+
+set -uo pipefail
+
+# projectId del progetto "system". E' il valore della LABEL
+# field.cattle.io/projectId, cioe' solo "p-xxxxx": nella schermata Edit YAML di
+# Rancher il campo piu' visibile e' l'ANNOTAZIONE, che vale
+# "<clusterId>:<projectId>" e qui non va.
+SYSTEM_PROJECT_ID="{{ logging_system_project_id }}"
+
+PROJECT_LABEL="{{ logging_project_label }}"
+KUBECTL="{{ logging_kubectl }}"
+export KUBECONFIG="{{ logging_kubeconfig }}"
+
+SYSTEM_NS_FILE="{{ logging_infra_ns_file }}"
+CUSTOM_NS_FILE="{{ logging_app_ns_file }}"
+
+# true = i trattini vengono tolti dal nome ("cattle-system" -> "cattlesystem").
+# DEVE COINCIDERE con quello che scrive il collector.
+STRIP_DASHES={{ 'true' if logging_strip_dashes | bool else 'false' }}
+
+JSONPATH='{range .items[*]}{.metadata.name}{"\n"}{end}'
+
+# --- Controlli --------------------------------------------------------------
+
+if [ -z "$SYSTEM_PROJECT_ID" ]; then
+  echo "ERRORE: SYSTEM_PROJECT_ID non e' valorizzato." >&2
+  exit 2
+fi
+
+case "$SYSTEM_PROJECT_ID" in
+  *:*)
+    echo "ERRORE: SYSTEM_PROJECT_ID vale \"$SYSTEM_PROJECT_ID\"." >&2
+    echo "        Quello e' il valore dell'ANNOTAZIONE, <clusterId>:<projectId>." >&2
+    echo "        Qui va solo la seconda meta': ${SYSTEM_PROJECT_ID##*:}" >&2
+    echo "        (i \":\" non sono ammessi nel valore di una label, quindi la" >&2
+    echo "         query non tornerebbe niente e tutti i namespace finirebbero" >&2
+    echo "         fra gli applicativi)." >&2
+    exit 2
+    ;;
+esac
+
+TEMP=$(mktemp -d)
+trap 'rm -rf "$TEMP"' EXIT
+
+# --- Lettura dal cluster ----------------------------------------------------
+# awk 'NF' toglie le righe vuote: e' la cintura che manca alla versione di
+# partenza.
+
+if ! "$KUBECTL" get ns -o jsonpath="$JSONPATH" 2>"$TEMP/errore" | awk 'NF' | sort > "$TEMP/tutti"; then
+  echo "ERRORE: \"$KUBECTL get ns\" non ha funzionato." >&2
+  cat "$TEMP/errore" >&2
+  exit 1
+fi
+
+if ! "$KUBECTL" get ns -l "$PROJECT_LABEL=$SYSTEM_PROJECT_ID" -o jsonpath="$JSONPATH" \
+     2>"$TEMP/errore" | awk 'NF' | sort > "$TEMP/sistema"; then
+  echo "ERRORE: \"$KUBECTL get ns -l $PROJECT_LABEL=$SYSTEM_PROJECT_ID\" non ha funzionato." >&2
+  cat "$TEMP/errore" >&2
+  exit 1
+fi
+
+if [ ! -s "$TEMP/tutti" ]; then
+  echo "ERRORE: il cluster non ha restituito nessun namespace." >&2
+  exit 1
+fi
+
+if [ ! -s "$TEMP/sistema" ]; then
+  echo "ERRORE: nessun namespace ha la label $PROJECT_LABEL=$SYSTEM_PROJECT_ID." >&2
+  echo "        Il projectId non corrisponde a nessun progetto di questo cluster." >&2
+  echo "        Si legge cosi':" >&2
+  echo "        $KUBECTL get ns cattle-system -o jsonpath='{.metadata.labels.$PROJECT_LABEL}'" >&2
+  exit 1
+fi
+
+# Applicativi = tutti meno quelli di sistema. comm vuole due file ordinati, e lo
+# sono entrambi.
+comm -23 "$TEMP/tutti" "$TEMP/sistema" > "$TEMP/applicativi"
+
+# --- Dal nome del namespace al nome dell'indice -----------------------------
+
+pulisci() {
+  if [ "$STRIP_DASHES" = "true" ]; then
+    printf '%s\n' "${1//-/}"
+  else
+    printf '%s\n' "$1"
+  fi
+}
+
+scrivi() {   # scrivi <file sorgente> <file destinazione> <etichetta>
+  local sorgente=$1 destinazione=$2 etichetta=$3
+  local coppie="$TEMP/$etichetta.coppie"
+  local ns
+
+  : > "$coppie"
+  while IFS= read -r ns; do
+    [ -n "$ns" ] || continue
+    printf '%s\t%s\n' "$(pulisci "$ns")" "$ns" >> "$coppie"
+  done < "$sorgente"
+
+  # Collisioni: due namespace che dopo la pulizia hanno lo stesso nome.
+  local doppi
+  doppi=$(cut -f1 "$coppie" | sort | uniq -d)
+  if [ -n "$doppi" ]; then
+    echo "ATTENZIONE ($etichetta): questi nomi di indice sono contesi da piu' namespace." >&2
+    local nome
+    while IFS= read -r nome; do
+      printf '  %s <- %s\n' \
+        "$nome" \
+        "$(awk -F'\t' -v n="$nome" '$1==n {printf "%s ", $2}' "$coppie")" >&2
+    done <<< "$doppi"
+    echo "  I loro log finirebbero mescolati in un indice solo." >&2
+    echo "  Vie d'uscita: STRIP_DASHES=false (se il collector tiene i trattini)," >&2
+    echo "  escludere uno dei due, oppure rinominare il namespace." >&2
+    COLLISIONI=1
+  fi
+
+  cut -f1 "$coppie" | sort -u > "$destinazione"
+}
+
+COLLISIONI=0
+scrivi "$TEMP/sistema"      "$SYSTEM_NS_FILE" "infrastrutturali"
+scrivi "$TEMP/applicativi"  "$CUSTOM_NS_FILE" "applicativi"
+
+echo "File creati:"
+echo "  - Namespace di sistema:     $SYSTEM_NS_FILE ($(wc -l < "$SYSTEM_NS_FILE") indici)"
+echo "  - Namespace personalizzati: $CUSTOM_NS_FILE ($(wc -l < "$CUSTOM_NS_FILE") indici)"
+
+exit "$COLLISIONI"

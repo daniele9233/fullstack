@@ -1,0 +1,10 @@
+---
+# Un giro per ogni elemento di logging_sets, cioe' per ogni lancio di
+# create-index.sh che si farebbe a mano.
+
+- name: "Crea template, indici e alias"
+  include_tasks: insieme.yml
+  loop: "{{ logging_sets }}"
+  loop_control:
+    loop_var: insieme
+    label: "{{ insieme.nome | default(insieme.prefisso) }} -> {{ insieme.prefisso }}-*"

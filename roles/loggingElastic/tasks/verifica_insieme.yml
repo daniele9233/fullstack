@@ -1,0 +1,108 @@
+---
+# Rilettura di un insieme: i template ci sono tutti, gli alias ci sono tutti, e
+# ogni alias ha UN indice di scrittura.
+
+- name: "{{ insieme.prefisso }}: nomi attesi"
+  set_fact:
+    logging_attesi_json: >-
+      {%- set out = [] -%}
+      {%- for nome in logging_nomi[insieme.sorgente] -%}
+      {%-   set _ = out.append(insieme.prefisso ~ '-' ~ nome) -%}
+      {%- endfor -%}
+      {{ out | sort | to_json }}
+
+- name: "{{ insieme.prefisso }}: converti in lista"
+  set_fact:
+    logging_attesi: "{{ logging_attesi_json | from_json }}"
+
+# --- Template ---------------------------------------------------------------
+
+- name: "{{ insieme.prefisso }}: rileggi i template"
+  uri:
+    url: "{{ logging_es_url }}/_index_template/{{ insieme.prefisso }}-*?filter_path=index_templates.name"
+    method: GET
+    user: "{{ logging_es_user }}"
+    password: "{{ logging_es_password }}"
+    force_basic_auth: yes
+    validate_certs: "{{ true if logging_es_ca_file | length > 0 else logging_es_validate_certs | bool }}"
+    ca_path: "{{ logging_es_ca_file if logging_es_ca_file | length > 0 else omit }}"
+    timeout: "{{ logging_es_timeout }}"
+    status_code: [200]
+  register: logging_tpl_riletti
+  changed_when: false
+
+- name: "{{ insieme.prefisso }}: verifica che i template ci siano tutti"
+  assert:
+    that:
+      - logging_attesi | difference(logging_tpl_trovati) | length == 0
+    fail_msg: >-
+      Mancano {{ logging_attesi | difference(logging_tpl_trovati) | length }}
+      index template su {{ logging_attesi | length }}:
+      {{ logging_attesi | difference(logging_tpl_trovati) | join(', ') }}.
+    success_msg: >-
+      {{ insieme.prefisso }}: {{ logging_attesi | length }} template presenti
+      {{ '(piu ' ~ (logging_tpl_trovati | difference(logging_attesi) | length | string) ~ ' che non corrispondono a nessun namespace attuale: '
+         ~ (logging_tpl_trovati | difference(logging_attesi) | join(', ')) ~ ')'
+         if (logging_tpl_trovati | difference(logging_attesi) | length) > 0 else '' }}
+  vars:
+    logging_tpl_trovati: >-
+      {{ (logging_tpl_riletti.json | default({})).index_templates | default([])
+         | map(attribute='name') | list | sort }}
+
+# --- Alias ------------------------------------------------------------------
+
+- name: "{{ insieme.prefisso }}: rileggi gli alias"
+  uri:
+    url: "{{ logging_es_url }}/_cat/aliases/{{ insieme.prefisso }}-*?format=json&h=alias,index,is_write_index"
+    method: GET
+    user: "{{ logging_es_user }}"
+    password: "{{ logging_es_password }}"
+    force_basic_auth: yes
+    validate_certs: "{{ true if logging_es_ca_file | length > 0 else logging_es_validate_certs | bool }}"
+    ca_path: "{{ logging_es_ca_file if logging_es_ca_file | length > 0 else omit }}"
+    timeout: "{{ logging_es_timeout }}"
+    status_code: [200]
+  register: logging_alias_riletti
+  changed_when: false
+
+- name: "{{ insieme.prefisso }}: verifica che gli alias ci siano tutti"
+  assert:
+    that:
+      - logging_attesi | difference(logging_alias_trovati) | length == 0
+    fail_msg: >-
+      Mancano {{ logging_attesi | difference(logging_alias_trovati) | length }}
+      alias su {{ logging_attesi | length }}:
+      {{ logging_attesi | difference(logging_alias_trovati) | join(', ') }}.
+      Senza alias il collector non ha dove scrivere: gli manca il nome a cui
+      indirizzare i documenti, e ILM non ha un rollover_alias su cui ruotare.
+    success_msg: >-
+      {{ insieme.prefisso }}: {{ logging_attesi | length }} alias presenti.
+  vars:
+    logging_alias_trovati: >-
+      {{ logging_alias_riletti.json | default([])
+         | map(attribute='alias') | list | unique | sort }}
+
+# Un alias senza indice di scrittura accetta le letture e RIFIUTA le scritture
+# ("no write index is defined for alias"). Capita se qualcuno ha aggiunto un
+# secondo indice all'alias a mano dimenticando il flag.
+- name: "{{ insieme.prefisso }}: verifica che ogni alias abbia un indice di scrittura"
+  assert:
+    that:
+      - logging_alias_senza_scrittura | length == 0
+    fail_msg: >-
+      {{ logging_alias_senza_scrittura | length }} alias non hanno nessun indice
+      di scrittura: {{ logging_alias_senza_scrittura | join(', ') }}.
+      Il collector che ci scrive contro riceve "no write index is defined for
+      alias". Si ripara indicando quale indice deve prendere le scritture:
+      curl -k -u {{ logging_es_user }}:'<password>' -XPOST
+      '{{ logging_es_url }}/_aliases' -H 'Content-Type: application/json'
+      -d '{"actions":[{"add":{"index":"<alias>-00000N","alias":"<alias>","is_write_index":true}}]}'
+    success_msg: >-
+      {{ insieme.prefisso }}: ogni alias ha il suo indice di scrittura.
+  vars:
+    logging_alias_con_scrittura: >-
+      {{ logging_alias_riletti.json | default([])
+         | selectattr('is_write_index', 'equalto', 'true')
+         | map(attribute='alias') | list | unique }}
+    logging_alias_senza_scrittura: >-
+      {{ logging_attesi | difference(logging_alias_con_scrittura) | sort }}

@@ -1,0 +1,88 @@
+---
+# Le due versioni CORRETTE degli script a mano, depositate sul nodo manager.
+#
+# Il ruolo non le lancia e non ne dipende: fa tutto da solo con l'API di
+# Elasticsearch. Stanno li' perche' il lavoro a mano continua a servire — un
+# namespace nuovo da aggiungere fuori orario, un controllo al volo — e perche'
+# avere accanto lo script giusto e' meglio che averne accanto uno che sbaglia in
+# silenzio.
+#
+# Con logging_deploy_scripts=false non vengono nemmeno scritti.
+
+- name: "Crea {{ logging_script_dir }}"
+  file:
+    path: "{{ logging_script_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Deposita namespace-listing.sh
+  template:
+    src: namespace-listing.sh.j2
+    dest: "{{ logging_script_dir }}/namespace-listing.sh"
+    owner: root
+    group: root
+    mode: "0750"
+    # Uno script che riscrive gli elenchi dei namespace, non un file di
+    # configurazione: se non regge la validazione non deve nemmeno arrivare sul
+    # nodo.
+    validate: "bash -n %s"
+
+- name: Deposita create-index.sh
+  copy:
+    src: create-index.sh
+    dest: "{{ logging_script_dir }}/create-index.sh"
+    owner: root
+    group: root
+    mode: "0750"
+    validate: "bash -n %s"
+
+# Il promemoria dei comandi, con la password come segnaposto: non si scrive una
+# password dentro a un file che sta in una directory di lavoro.
+- name: Deposita il promemoria dei comandi
+  copy:
+    content: |
+      Questi due script li scrive il ruolo loggingElastic: le modifiche fatte
+      qui a mano vengono sovrascritte al prossimo lancio di
+      playbooks/70-logging.yml.
+
+      Il playbook fa gia' tutto quello che fanno loro, e in piu' crea la policy
+      ILM e calcola le priorita' dei template invece di scoprirle dagli errori:
+
+        ansible-playbook -i inventory.ini playbooks/70-logging.yml
+
+      Gli script servono per i giri a mano.
+
+      1) Riscrivere gli elenchi dei namespace
+         (progetto system: {{ logging_system_project_id }})
+
+           {{ logging_script_dir }}/namespace-listing.sh
+
+         -> {{ logging_app_ns_file }}
+         -> {{ logging_infra_ns_file }}
+
+      2) Creare template, indici e alias
+      {% for insieme in logging_sets %}
+
+         {{ insieme.nome | default(insieme.prefisso) }}:
+
+           {{ logging_script_dir }}/create-index.sh {{ logging_es_scheme }} {{ logging_es_host }}{{ ':' ~ logging_es_port if logging_es_port | int != 9200 else '' }} {{ logging_es_user }} '<password>' \
+               {{ insieme.prefisso }} {{ logging_app_ns_file if insieme.sorgente == 'app' else logging_infra_ns_file }} \
+               {{ insieme.priorita }} {{ insieme.shards }} {{ insieme.replicas }} {{ insieme.lifecycle }}
+      {% endfor %}
+
+         LA PASSWORD VA FRA APICI SINGOLI: contiene un "*", e senza apici la
+         shell prova a espanderlo come nome di file prima che lo script lo veda.
+
+      3) Se lo script segnala dei namespace da rilanciare, il file da usare e'
+         quello che scrive lui, accanto all'elenco:
+
+           <prefisso>-template-priority-<priorita' successiva>.txt
+
+         e si rilancia lo stesso comando con quel file al posto dell'elenco e la
+         priorita' scritta nel nome. Il playbook non ha bisogno di questo giro.
+    dest: "{{ logging_script_dir }}/LEGGIMI"
+    owner: root
+    group: root
+    mode: "0640"

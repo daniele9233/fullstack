@@ -1,0 +1,102 @@
+---
+# LA POLICY ILM: il pezzo che negli script non c'e'.
+#
+# create-index.sh compone il nome della policy come "<PREFISSO>-<LIFECYCLE_END>"
+# (k8s-coll-app + logs = k8s-coll-app-logs) e lo scrive nel template come
+#   index.lifecycle.name: k8s-coll-app-logs
+#   index.lifecycle.rollover_alias: k8s-coll-app-<namespace>
+# ma NON CREA LA POLICY. Se quel nome non esiste gia' in Elasticsearch:
+#
+#   - il template viene accettato lo stesso, senza una parola;
+#   - l'indice viene creato lo stesso;
+#   - ILM prova a far girare la policy, non la trova, e mette l'indice in
+#     errore. Il rollover non avviene MAI: l'indice -000001 continua a crescere
+#     finche' qualcuno non se ne accorge — di solito guardando il disco pieno,
+#     non i log.
+#
+# E' l'unico difetto degli script che non produce nessun sintomo il giorno in
+# cui li si lancia.
+#
+# Qui la policy si crea se manca. Se c'e' gia' NON si tocca: una policy tarata a
+# mano dopo mesi di esercizio non va sovrascritta dal default di un ruolo. Per
+# riallinearla di proposito:
+#   ansible-playbook playbooks/70-logging.yml -e logging_ilm_force_update=true
+
+- name: Ricava i nomi delle policy ILM dagli insiemi
+  set_fact:
+    logging_policy_ilm: >-
+      {{ logging_sets
+         | map(attribute='prefisso')
+         | zip(logging_sets | map(attribute='lifecycle'))
+         | map('join', '-')
+         | list | unique | sort }}
+
+- name: Verifica quali policy ILM esistono gia'
+  uri:
+    url: "{{ logging_es_url }}/_ilm/policy/{{ item }}"
+    method: GET
+    user: "{{ logging_es_user }}"
+    password: "{{ logging_es_password }}"
+    force_basic_auth: yes
+    validate_certs: "{{ true if logging_es_ca_file | length > 0 else logging_es_validate_certs | bool }}"
+    ca_path: "{{ logging_es_ca_file if logging_es_ca_file | length > 0 else omit }}"
+    timeout: "{{ logging_es_timeout }}"
+    # 404 = la policy non c'e'. E' una risposta, non un guasto: e' esattamente
+    # quello che si sta chiedendo.
+    status_code: [200, 404]
+  loop: "{{ logging_policy_ilm }}"
+  register: logging_ilm_stato
+  changed_when: false
+
+- name: Crea le policy ILM mancanti
+  uri:
+    url: "{{ logging_es_url }}/_ilm/policy/{{ item.item }}"
+    method: PUT
+    user: "{{ logging_es_user }}"
+    password: "{{ logging_es_password }}"
+    force_basic_auth: yes
+    validate_certs: "{{ true if logging_es_ca_file | length > 0 else logging_es_validate_certs | bool }}"
+    ca_path: "{{ logging_es_ca_file if logging_es_ca_file | length > 0 else omit }}"
+    timeout: "{{ logging_es_timeout }}"
+    body_format: json
+    body:
+      policy:
+        phases: "{{ logging_ilm_phases }}"
+    status_code: [200]
+  loop: "{{ logging_ilm_stato.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.status == 404 or (logging_ilm_force_update | bool)
+  # Il task gira SOLO quando c'e' da scrivere, quindi "changed" e' la
+  # verita'. (Non si puo' guardare il codice della risposta: da
+  # ansible-core 2.19 i campi del risultato non sono piu' variabili nude
+  # dentro changed_when.)
+  changed_when: true
+
+- name: Mostra lo stato delle policy ILM
+  debug:
+    msg: >-
+      Policy {{ item.item }}:
+      {{ 'creata adesso' if item.status == 404
+         else ('riscritta da logging_ilm_phases (logging_ilm_force_update)'
+               if logging_ilm_force_update | bool
+               else 'esisteva gia, lasciata com era') }}
+  loop: "{{ logging_ilm_stato.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+# I template scrivono index.lifecycle.rollover_alias su OGNI indice: e' la
+# forma classica, in cui l'indice ruota quando la policy esegue l'azione
+# rollover. Se la policy non ce l'ha, l'alias di scrittura resta li' a puntare
+# per sempre sul -000001 e la rotazione non avviene: la stessa fine che fa senza
+# policy, con la differenza che qui sembra tutto configurato.
+- name: Verifica che la policy preveda il rollover
+  assert:
+    that:
+      - "'rollover' in ((logging_ilm_phases.hot | default({})).actions | default({}))"
+    fail_msg: >-
+      logging_ilm_phases non ha l'azione "rollover" nella fase hot, ma ogni
+      template scrive index.lifecycle.rollover_alias. Senza rollover l'alias di
+      scrittura resta agganciato al -000001 e l'indice non ruota mai: rimetti il
+      rollover, oppure togli l'alias dal template.
+  run_once: true

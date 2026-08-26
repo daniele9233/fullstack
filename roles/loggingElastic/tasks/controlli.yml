@@ -1,0 +1,247 @@
+---
+# Quello che, se manca o e' sbagliato, fa fallire il lavoro a meta' — o, peggio,
+# lo fa RIUSCIRE producendo la cosa sbagliata. Meglio fermarsi qui.
+
+# --- Parametri obbligatori --------------------------------------------------
+
+- name: Verifica che il projectId del progetto system sia dichiarato
+  assert:
+    that:
+      - logging_system_project_id | length > 0
+    fail_msg: >-
+      logging_system_project_id e' vuota. E' il projectId del progetto "system"
+      di Rancher, l'unica cosa che distingue i namespace infrastrutturali dagli
+      applicativi. Si legge dalla label di un namespace che sta in quel
+      progetto:
+      kubectl get ns cattle-system
+      -o jsonpath='{.metadata.labels.field\.cattle\.io/projectId}'
+  run_once: true
+
+# L'ERRORE PIU' FACILE DA FARE, e quello che non si vede.
+#
+# Nella schermata "Edit YAML" di Rancher il campo piu' visibile e'
+# l'ANNOTAZIONE field.cattle.io/projectId, che vale "<clusterId>:<projectId>"
+# (c-m-4kzrlq7x:p-dkknq). La LABEL con lo stesso nome vale solo "p-dkknq", ed e'
+# quella su cui si filtra.
+#
+# Copiando la stringa intera: i ":" non sono ammessi nel valore di una label,
+# quindi "kubectl get ns -l field.cattle.io/projectId=c-m-...:p-..." fallisce.
+# Lo script a mano non controlla il codice di uscita di kubectl: si ritrova
+# system_namespaces vuota, readarray ne fa un array di un elemento vuoto, e il
+# risultato e' infra_namespaces.txt con dentro una RIGA VUOTA e
+# app_namespaces.txt con dentro TUTTI i namespace, cattle-system compreso.
+#
+# E la riga vuota non e' innocua: create-index.sh la legge come namespace ""
+# e crea un template chiamato "k8s-coll-infra-" con pattern "k8s-coll-infra-*"
+# a priorita' 500, cioe' un template jolly che si mette davanti a tutti gli
+# altri di quell'insieme.
+- name: Verifica che il projectId sia il valore della label e non quello dell'annotazione
+  assert:
+    that:
+      - logging_system_project_id is match('^p-[a-z0-9]+$')
+    fail_msg: >-
+      logging_system_project_id vale "{{ logging_system_project_id }}", che non
+      ha la forma di un projectId ("p-" seguito da lettere e cifre).
+      {{ 'Sembra il valore dell ANNOTAZIONE <clusterId>:<projectId>: qui va solo
+      la seconda meta, cioe "'
+      ~ (logging_system_project_id.split(':') | last) ~ '".'
+      if ':' in logging_system_project_id else '' }}
+      La label si legge cosi':
+      kubectl get ns cattle-system
+      -o jsonpath='{.metadata.labels.field\.cattle\.io/projectId}'
+    success_msg: >-
+      Progetto system: {{ logging_system_project_id }}
+  run_once: true
+
+- name: Verifica i parametri di Elasticsearch
+  assert:
+    that:
+      - logging_es_host | length > 0
+      - logging_es_user | length > 0
+      - logging_es_password | length > 0
+      - logging_es_scheme in ['http', 'https']
+    fail_msg: >-
+      Servono logging_es_host, logging_es_user e logging_es_password, e
+      logging_es_scheme deve essere http o https (adesso vale
+      "{{ logging_es_scheme }}"). Sono i primi quattro parametri di
+      create-index.sh.
+  run_once: true
+
+# --- Insiemi di indici ------------------------------------------------------
+
+- name: Verifica che ci sia almeno un insieme di indici da creare
+  assert:
+    that:
+      - logging_sets | length > 0
+    fail_msg: >-
+      logging_sets e' vuota: non c'e' niente da creare. Ogni elemento
+      corrisponde a un lancio di create-index.sh (prefisso, elenco, priorita',
+      shard, repliche, lifecycle).
+  run_once: true
+
+- name: Verifica che ogni insieme sia completo
+  assert:
+    that:
+      - item.prefisso | default('') | length > 0
+      - item.sorgente | default('') in ['app', 'infra']
+      - item.priorita | default(0) | int > 0
+      - item.shards | default(0) | int > 0
+      - item.replicas | default(-1) | int >= 0
+      - item.lifecycle | default('') | length > 0
+    fail_msg: >-
+      Insieme "{{ item.nome | default(item.prefisso | default('senza nome')) }}"
+      incompleto: servono prefisso, sorgente ("app" o "infra"), priorita' > 0,
+      shards > 0, replicas >= 0 e lifecycle.
+      Ricevuto: {{ item }}
+  loop: "{{ logging_sets }}"
+  loop_control:
+    label: "{{ item.nome | default(item.prefisso | default('?')) }}"
+  run_once: true
+
+# Due insiemi con lo stesso prefisso scriverebbero gli stessi template a partire
+# da elenchi diversi: il secondo sovrascrive il primo e meta' dei namespace
+# resta senza.
+- name: Verifica che i prefissi degli insiemi siano distinti
+  assert:
+    that:
+      - (logging_sets | map(attribute='prefisso') | list | unique | length)
+        == (logging_sets | length)
+    fail_msg: >-
+      Due insiemi in logging_sets hanno lo stesso prefisso
+      ({{ logging_sets | map(attribute='prefisso') | list | join(', ') }}).
+      Scriverebbero gli stessi template partendo da elenchi diversi: il secondo
+      sovrascriverebbe il primo.
+  run_once: true
+
+- name: Verifica la coda del pattern dei template
+  assert:
+    that:
+      - logging_pattern_suffix in ['*', '-*']
+    fail_msg: >-
+      logging_pattern_suffix vale "{{ logging_pattern_suffix }}": sono previsti
+      solo "*" (come lo script a mano) e "-*" (che elimina alla radice i
+      conflitti fra un nome e i nomi che lo contengono).
+  run_once: true
+
+# --- kubectl ----------------------------------------------------------------
+
+- name: Verifica che kubectl ci sia
+  stat:
+    path: "{{ logging_kubectl }}"
+  register: logging_kubectl_stat
+
+- name: Fermati se kubectl non c'e'
+  assert:
+    that:
+      - logging_kubectl_stat.stat.exists | default(false)
+      - logging_kubectl_stat.stat.executable | default(false)
+    fail_msg: >-
+      {{ inventory_hostname }}: {{ logging_kubectl }} non c'e' o non e'
+      eseguibile. Su un nodo RKE2 il binario sta in
+      /var/lib/rancher/rke2/bin/kubectl e il ruolo kubectl_setup lo copia in
+      /usr/local/bin. Se questo non e' un nodo del cluster, cambia
+      logging_group: il ruolo va eseguito da dove kubectl funziona.
+
+- name: Verifica che il kubeconfig ci sia
+  stat:
+    path: "{{ logging_kubeconfig }}"
+  register: logging_kubeconfig_stat
+
+- name: Fermati se il kubeconfig non c'e'
+  assert:
+    that:
+      - logging_kubeconfig_stat.stat.exists | default(false)
+    fail_msg: >-
+      {{ inventory_hostname }}: {{ logging_kubeconfig }} non esiste. Su un nodo
+      RKE2 e' la copia di /etc/rancher/rke2/rke2.yaml che fa kubectl_setup.
+
+# Non basta che kubectl esista: deve anche parlare con un cluster. Senza questo
+# controllo, un kubeconfig che punta a un server spento produce due elenchi
+# vuoti e il ruolo proseguirebbe "senza namespace da indicizzare", che sembra un
+# esito e invece e' un guasto.
+- name: Verifica che il cluster risponda
+  command: "{{ logging_kubectl }} get ns --no-headers"
+  environment:
+    KUBECONFIG: "{{ logging_kubeconfig }}"
+  register: logging_kubectl_prova
+  changed_when: false
+  failed_when: false
+
+- name: Fermati se il cluster non risponde
+  assert:
+    that:
+      - logging_kubectl_prova.rc == 0
+      - logging_kubectl_prova.stdout_lines | length > 0
+    fail_msg: >-
+      {{ inventory_hostname }}: "{{ logging_kubectl }} get ns" e' uscito con
+      rc={{ logging_kubectl_prova.rc }}
+      {{ 'senza elencare nessun namespace' if logging_kubectl_prova.rc == 0 else '' }}.
+      Con KUBECONFIG={{ logging_kubeconfig }}.
+      Errore: {{ logging_kubectl_prova.stderr | default('') | trim }}
+    success_msg: >-
+      Cluster raggiungibile:
+      {{ logging_kubectl_prova.stdout_lines | length }} namespace totali.
+
+# --- Elasticsearch ----------------------------------------------------------
+
+- name: Segnala che i certificati non vengono verificati
+  debug:
+    msg: >-
+      ATTENZIONE: le chiamate a {{ logging_es_url }} non verificano il
+      certificato (e' quello che fa "curl -k" nello script a mano). Con la CA
+      interna del nodo Elasticsearch copiata qui sul manager e dichiarata in
+      logging_es_ca_file, la verifica si accende da sola.
+  when:
+    - logging_es_scheme == 'https'
+    - logging_es_ca_file | length == 0
+    - not (logging_es_validate_certs | bool)
+  run_once: true
+
+- name: Interroga Elasticsearch
+  uri:
+    url: "{{ logging_es_url }}/"
+    method: GET
+    user: "{{ logging_es_user }}"
+    password: "{{ logging_es_password }}"
+    force_basic_auth: yes
+    validate_certs: "{{ true if logging_es_ca_file | length > 0 else logging_es_validate_certs | bool }}"
+    ca_path: "{{ logging_es_ca_file if logging_es_ca_file | length > 0 else omit }}"
+    timeout: "{{ logging_es_timeout }}"
+    return_content: yes
+    # 401 non e' un errore da far esplodere qui: e' la risposta che dice "la
+    # password non e' questa", e merita un messaggio suo invece di una traccia
+    # HTTP.
+    status_code: [200, 401]
+  register: logging_es_root
+  changed_when: false
+  failed_when: false
+
+- name: Verifica che le credenziali di Elasticsearch siano giuste
+  assert:
+    that:
+      - (logging_es_root.status | default(0)) != 401
+    fail_msg: >-
+      {{ logging_es_url }} risponde ma rifiuta l'utente
+      "{{ logging_es_user }}" con la password di logging_es_password.
+      Se la password contiene caratteri come * o $, controlla di non averla
+      persa fra le virgolette: e' lo stesso inciampo che, sulla riga di comando
+      di create-index.sh, fa arrivare allo script una password diversa da quella
+      scritta.
+
+- name: Verifica che Elasticsearch risponda
+  assert:
+    that:
+      - (logging_es_root.status | default(0)) == 200
+    fail_msg: >-
+      {{ logging_es_url }} ha risposto
+      "{{ logging_es_root.status | default('nessuna risposta') }}".
+      Da {{ inventory_hostname }}, con
+      verifica del certificato
+      {{ 'attiva (CA: ' ~ logging_es_ca_file ~ ')' if logging_es_ca_file | length > 0
+         else ('attiva senza CA dichiarata' if logging_es_validate_certs | bool else 'disattivata') }}.
+      Risposta: {{ logging_es_root.msg | default(logging_es_root.content | default('')) }}
+    success_msg: >-
+      Elasticsearch
+      {{ ((logging_es_root.json | default({})).version | default({})).number | default('?') }}
+      su {{ logging_es_url }}, cluster
+      {{ (logging_es_root.json | default({})).cluster_name | default('?') }}

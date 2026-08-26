@@ -1,0 +1,39 @@
+---
+# Verifica in sola lettura: si rilegge da Elasticsearch quello che si e' appena
+# scritto, invece di fidarsi delle risposte alle PUT.
+#
+# Non e' pedanteria. Lo script guarda una frase dentro il corpo della risposta e
+# nient'altro: un 401 a meta' elenco, un nodo che smette di rispondere, un JSON
+# rifiutato passano inosservati e il lancio finisce con esito 0. L'unico modo di
+# saperlo davvero e' richiedere l'elenco e contarlo.
+
+- name: Verifica insieme per insieme
+  include_tasks: verifica_insieme.yml
+  loop: "{{ logging_sets }}"
+  loop_control:
+    loop_var: insieme
+    label: "{{ insieme.nome | default(insieme.prefisso) }}"
+
+- name: Come guardare le cose a mano
+  debug:
+    msg:
+      - "Elasticsearch: {{ logging_es_url }} (utente {{ logging_es_user }})"
+      - "Elenchi dei namespace sul nodo: {{ logging_app_ns_file }} e {{ logging_infra_ns_file }}"
+      - >-
+        Template:
+        curl -k -u {{ logging_es_user }}:'<password>'
+        '{{ logging_es_url }}/_index_template/{{ logging_sets | map(attribute='prefisso') | first }}-*?filter_path=index_templates.name,index_templates.index_template.priority'
+      - >-
+        Alias e indici di scrittura:
+        curl -k -u {{ logging_es_user }}:'<password>'
+        '{{ logging_es_url }}/_cat/aliases/{{ logging_sets | map(attribute='prefisso') | first }}-*?v&h=alias,index,is_write_index'
+      - >-
+        Stato di ILM su un indice (e' qui che si vede una policy che manca o
+        che va in errore):
+        curl -k -u {{ logging_es_user }}:'<password>'
+        '{{ logging_es_url }}/{{ logging_sets | map(attribute='prefisso') | first }}-*/_ilm/explain?filter_path=indices.*.step,indices.*.phase,indices.*.step_info'
+      - >-
+        Policy ILM:
+        curl -k -u {{ logging_es_user }}:'<password>'
+        '{{ logging_es_url }}/_ilm/policy/{{ logging_policy_ilm | default([]) | join(',') }}'
+  run_once: true

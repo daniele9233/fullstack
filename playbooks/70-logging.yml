@@ -1,0 +1,79 @@
+---
+# LOGGING ELASTIC: dai namespace di Kubernetes agli indici di Elasticsearch.
+#
+# Eseguibile da solo:
+#   ansible-playbook playbooks/70-logging.yml
+#
+# Gira sul NODO MANAGER / CONTROL PLANE — il primo host del gruppo indicato da
+# logging_group, [new_managers] salvo diverso avviso — perche' e' li' che c'e'
+# kubectl con un kubeconfig valido, ed e' da li' che
+# oggi si lanciano a mano namespace-listing.sh e create-index.sh. Solo il primo
+# host: creare template e indici e' un'operazione sul cluster Elasticsearch, non
+# sul nodo, e ripeterla da tre manager significherebbe farla tre volte in
+# parallelo sugli stessi oggetti.
+#
+# NON tocca il nodo Elasticsearch: ci parla soltanto, con l'utente elastic.
+# Il nodo lo installa playbooks/60-elasticsearch.yml, che e' un'altra cosa e non
+# e' un prerequisito — questo playbook funziona anche contro un Elasticsearch
+# installato altrove, purche' raggiungibile dal manager.
+#
+# NON installa e non configura il collector (Fluent Bit, Logstash, Filebeat):
+# prepara il posto dove scrivera'. Perche' i log ci arrivino davvero, il nome
+# dell'indice che il collector compone deve coincidere con l'alias creato qui —
+# <prefisso>-<namespace senza trattini>. E' l'unica cosa che questo playbook non
+# puo' verificare da solo.
+#
+# COSA CREA, per ogni namespace del cluster:
+#
+#   index template  <prefisso>-<namespace>          priorita' calcolata
+#   indice          <prefisso>-<namespace>-000001   1 shard, 1 replica
+#   alias           <prefisso>-<namespace>          di scrittura, per il rollover
+#
+# piu' la policy ILM <prefisso>-<lifecycle>, che gli script a mano non creano.
+#
+# PRIMA DI LANCIARE servono, in group_vars/all.yml:
+#   logging_system_project_id   projectId del progetto "system" di Rancher
+#   logging_es_host             indirizzo del nodo Elasticsearch
+#   logging_es_password         password dell'utente elastic
+#
+# VARIANTI UTILI
+#
+# (--check qui non serve a niente: il modulo uri non lo supporta, quindi in
+# check mode NON viene interrogato niente e il playbook si ferma appena una task
+# cerca un risultato che non c'e'. Per vedere cosa verrebbe fatto senza toccare
+# Elasticsearch, lancia namespace-listing.sh sul manager e guarda i due elenchi.)
+#
+#   # solo gli indici applicativi, senza gli infrastrutturali
+#   ansible-playbook playbooks/70-logging.yml \
+#     -e '{"logging_sets":[{"nome":"applicativi","prefisso":"k8s-coll-app","sorgente":"app","priorita":500,"shards":1,"replicas":1,"lifecycle":"logs"}]}'
+#
+#   # riallinea le policy ILM a logging_ilm_phases. Attenzione: sovrascrive
+#   # quelle tarate a mano
+#   ansible-playbook playbooks/70-logging.yml -e logging_ilm_force_update=true
+#
+#   # prosegui anche con due namespace che collassano sullo stesso indice,
+#   # come fa lo script a mano
+#   ansible-playbook playbooks/70-logging.yml -e logging_fail_on_collision=false
+#
+#   # pattern <indice>-* invece di <indice>*: fa sparire alla radice i conflitti
+#   # fra un nome e i nomi che lo contengono
+#   ansible-playbook playbooks/70-logging.yml -e logging_pattern_suffix='-*'
+
+- name: Indici di logging su Elasticsearch
+  hosts: "{{ logging_group | default('new_managers') }}[0]"
+  become: yes
+  gather_facts: no
+  roles:
+    - role: loggingElastic
+  post_tasks:
+    - name: Riepilogo
+      debug:
+        msg:
+          - "Eseguito da {{ inventory_hostname }} verso {{ logging_es_url }}"
+          - "Progetto system: {{ logging_system_project_id }} — {{ logging_nomi.infra | length }} namespace infrastrutturali, {{ logging_nomi.app | length }} applicativi"
+          - "Nome dell'indice: <prefisso>-<namespace{{ ' senza trattini' if logging_strip_dashes | bool else '' }}>, pattern <indice>{{ logging_pattern_suffix }}"
+          - "Insiemi creati: {{ logging_sets | map(attribute='prefisso') | join(', ') }}"
+          - "Policy ILM: {{ logging_policy_ilm | default([]) | join(', ') }} — rotazione {{ (logging_ilm_phases.hot.actions.rollover | default({})).max_primary_shard_size | default('?') }} o {{ (logging_ilm_phases.hot.actions.rollover | default({})).max_age | default('?') }}, cancellazione dopo {{ (logging_ilm_phases.delete | default({})).min_age | default('mai') }}"
+          - "Elenchi dei namespace sul nodo: {{ logging_app_ns_file }}, {{ logging_infra_ns_file }}"
+          - "Script a mano corretti: {{ logging_script_dir }}/ (namespace-listing.sh, create-index.sh, LEGGIMI)"
+          - "RESTA DA FARE: il collector deve scrivere sull'alias <prefisso>-<namespace>. Se compone il nome in un altro modo, questi template non lo governano."

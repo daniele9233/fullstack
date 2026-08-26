@@ -1073,3 +1073,153 @@ completo e' in /var/log/elasticsearch/<nome del cluster>.log.
 5. path.repo NON viene montato, solo creato.
    Le directory degli snapshot nascono con il proprietario giusto, ma il mount
    resta a carico dell'operatore, come tutti i dischi di questo repository.
+
+
+LOGGING ELASTIC: GLI INDICI DEI NAMESPACE
+
+  ansible-playbook -i inventory.ini playbooks/70-logging.yml
+
+Legge i namespace del cluster Kubernetes, li divide fra infrastrutturali
+(progetto "system" di Rancher) e applicativi, e su Elasticsearch prepara per
+ciascuno il posto in cui il collector scrivera' i log:
+
+  index template  <prefisso>-<namespace>          priorita' calcolata
+  indice          <prefisso>-<namespace>-000001   1 shard, 1 replica
+  alias           <prefisso>-<namespace>          di scrittura, per il rollover
+  policy ILM      <prefisso>-<lifecycle>          rotazione e cancellazione
+
+Gira sul NODO MANAGER — il primo host di [new_managers], o del gruppo indicato
+da logging_group — perche' e' li' che c'e' kubectl con un kubeconfig valido, ed
+e' da li' che la stessa cosa si faceva a mano con due script.
+
+NON installa Elasticsearch: quello e' playbooks/60-elasticsearch.yml, e non e'
+un prerequisito — questo playbook funziona anche contro un Elasticsearch
+installato altrove, purche' il manager lo raggiunga.
+
+NON installa e non configura il collector (Fluent Bit, Logstash, Filebeat).
+Prepara il posto: perche' i log ci arrivino davvero, il nome dell'indice che il
+collector compone deve coincidere con l'alias creato qui. E' l'unica cosa che il
+playbook non puo' verificare da solo, ed e' la prima da guardare quando gli
+indici restano vuoti.
+
+
+  CHE COSA VA SISTEMATO PRIMA DI LANCIARE
+
+  logging_system_project_id   projectId del progetto "system" di Rancher.
+                              OBBLIGATORIO, e nasce vuoto: finche' lo e',
+                              site.yml salta questo playbook
+  logging_es_host             indirizzo del nodo Elasticsearch
+  logging_es_password         password dell'utente elastic
+  logging_sets                prefissi degli indici. Quello applicativo
+                              (k8s-coll-app) viene dalla guida; quello
+                              infrastrutturale (k8s-coll-infra) e' un'IPOTESI
+                              coerente, da verificare nella configurazione del
+                              collector
+  logging_strip_dashes        true = i trattini spariscono dal nome dell'indice
+                              (cattle-system -> cattlesystem). DEVE COINCIDERE
+                              con quello che scrive il collector
+
+Il projectId si legge dalla LABEL di un namespace del progetto system:
+
+  kubectl get ns cattle-system \
+    -o jsonpath='{.metadata.labels.field\.cattle\.io/projectId}'
+
+NELLA SCHERMATA "Edit YAML" DI RANCHER SI VEDE ALTRO. Il campo piu' visibile e'
+l'ANNOTAZIONE con lo stesso nome, che vale "<clusterId>:<projectId>"
+(c-m-4kzrlq7x:p-dkknq): qui va SOLO la seconda meta'. E' l'errore piu' facile da
+fare e, con gli script a mano, il piu' silenzioso.
+
+
+  I DUE SCRIPT DI PARTENZA, E DOVE SBAGLIANO
+
+Il ruolo automatizza namespace-listing.sh e create-index.sh, che si lanciavano a
+mano dal manager. Le versioni CORRETTE dei due script vengono depositate in
+/root/logging-script/ insieme a un LEGGIMI con i comandi gia' compilati: il
+ruolo non le lancia e non ne dipende, ma i giri a mano continuano a servire e
+avere accanto lo script giusto e' meglio che averne accanto uno che sbaglia in
+silenzio.
+
+Difetti della versione di partenza, in ordine di quanto sono difficili da
+accorgersene:
+
+1. LA POLICY ILM NON VIENE CREATA — e non da' nessun sintomo.
+   create-index.sh scrive nel template index.lifecycle.name:
+   <prefisso>-<lifecycle>, ma quella policy non la crea nessuno. Se non esiste,
+   Elasticsearch accetta il template lo stesso e crea l'indice lo stesso: solo
+   che ILM non ha niente da eseguire, il rollover non avviene MAI e il -000001
+   cresce finche' il disco non finisce. Il giorno del lancio sembra tutto a
+   posto. Il ruolo la crea; lo script corretto si ferma se non la trova.
+
+2. HOME=/root/elk-scripts, e da li' in poi il rilevamento dei conflitti non
+   funziona piu'.
+   Lo script si riassegna $HOME e ci scrive dentro il file d'appoggio della
+   risposta. Lanciandolo da /root/logging-script quella directory non esiste,
+   "tee" fallisce, il file non viene creato, e il "grep" che cerca il conflitto
+   di priorita' fallisce anche lui: lo script prende SEMPRE il ramo "nessun
+   conflitto" e crea l'indice anche quando il template e' stato RIFIUTATO.
+   Quell'indice nasce senza template, quindi senza ILM.
+   Nello stesso posto finisce il file dei rilanci, che si chiama
+   <prefisso>-template-priority-600 SENZA .txt e in una directory diversa da
+   quella da cui si lancia: il nome che si scrive per rilanciare
+   (/root/logging-script/k8s-coll-app-template-priority-600.txt) non e' quello
+   che lo script ha prodotto.
+
+3. DUE NAMESPACE, UN INDICE SOLO — senza nessun errore.
+   Togliendo i trattini, "my-app" e "myapp" diventano lo stesso "myapp": due
+   righe identiche nell'elenco. La seconda PUT del template SOVRASCRIVE la
+   prima e risponde "acknowledged": true, la PUT dell'indice fallisce con
+   resource_already_exists_exception (che nessuno guarda) e i log dei due
+   namespace finiscono mescolati nello stesso indice. Non e' un problema di
+   priorita', e non produce nessun file di rilancio.
+   Il ruolo se ne accorge PRIMA di scrivere e si ferma elencando le coppie
+   (logging_fail_on_collision).
+
+4. IL GIRO DELLE PRIORITA' A MANO.
+   Questo invece un errore lo da', ed e' quello che si vede: il pattern
+   "k8s-coll-app-foo*" matcha anche "k8s-coll-app-foobar-000001", quindi due
+   namespace di cui uno e' prefisso dell'altro si contendono gli stessi indici.
+   Elasticsearch rifiuta il secondo template ("...that have the same
+   priority..."), lo script mette il namespace da parte e VA RILANCIATO a
+   priorita' 600. Con tre nomi incastrati, i rilanci diventano due.
+   Il ruolo calcola i conflitti prima di scrivere e fa nascere ogni template
+   gia' alla priorita' giusta: un lancio solo, e nessun namespace che resta
+   indietro perche' il file di rilancio e' passato inosservato.
+   Con logging_pattern_suffix='-*' il problema sparisce alla radice
+   ("k8s-coll-app-foo-*" non matcha "k8s-coll-app-foobar-000001"), ma cambia
+   quali indici il template governa: prima va controllato il collector.
+
+5. RILANCIARLO DOPO IL PRIMO ROLLOVER NON E' INNOCUO.
+   Lo script rifa' sempre la PUT dell'indice -000001 e ri-aggiunge l'alias con
+   is_write_index: true. A rollover avvenuto l'indice di scrittura e' il
+   -000002, e quella richiesta prova a riportarlo indietro: Elasticsearch la
+   rifiuta, lo script non guarda la risposta e prosegue. Il ruolo tocca indice e
+   alias SOLO se l'alias non esiste ancora.
+
+6. KUBECTL PUO' FALLIRE SENZA CHE NESSUNO SE NE ACCORGA.
+   namespace-listing.sh non controlla il codice di uscita. Con un projectId
+   sbagliato — per esempio quello dell'annotazione, con i ":" dentro, che come
+   valore di label non e' nemmeno ammesso — kubectl esce in errore, gli array
+   restano vuoti e il risultato e' infra_namespaces.txt con dentro UNA RIGA
+   VUOTA e tutti i namespace, cattle-system compreso, fra gli applicativi.
+   La riga vuota poi diventa un template "<prefisso>-" con pattern
+   "<prefisso>-*" a priorita' 500: un jolly che si mette davanti a tutti gli
+   altri di quell'insieme.
+
+7. La password sulla riga di comando va fra APICI SINGOLI.
+   Quella dell'esempio finisce con "*": senza apici la shell prova a espanderla
+   come nome di file prima che lo script la veda. Se in quel momento la
+   directory contiene un file che combacia, allo script arriva una password
+   diversa da quella scritta — e l'errore che si legge parla di autenticazione.
+
+
+  RILANCIARLO E' SICURO
+
+Il ruolo rilegge prima di scrivere: i template si toccano solo se pattern,
+priorita', lifecycle, shard o repliche non corrispondono; indice e alias solo se
+l'alias non esiste ancora; la policy ILM solo se manca (con
+logging_ilm_force_update=true si riallinea di proposito, ma sovrascrive quelle
+tarate a mano). Su un'infrastruttura gia' a posto il secondo lancio non cambia
+niente.
+
+Alla fine rilegge da Elasticsearch template, alias e indici di scrittura e
+controlla che ci siano tutti, invece di fidarsi delle risposte alle PUT.

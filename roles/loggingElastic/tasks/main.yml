@@ -1,0 +1,74 @@
+---
+# LOGGING ELASTIC: dai namespace di Kubernetes agli indici di Elasticsearch.
+#
+# Automatizza la procedura a mano fatta di due script lanciati dal nodo manager:
+#
+#   ./namespace-listing.sh
+#       -> infra_namespaces.txt   namespace del progetto "system" di Rancher
+#       -> app_namespaces.txt     tutti gli altri
+#
+#   ./create-index.sh https 10.10.111.24 elastic '<password>' k8s-coll-app \
+#       /root/logging-script/app_namespaces.txt 500 1 1 logs
+#       -> per ogni namespace: index template + indice -000001 + alias di
+#          scrittura, pronti per il rollover ILM
+#
+# --- DIFFERENZE VOLUTE RISPETTO AGLI SCRIPT --------------------------------
+#
+# 1. IL GIRO DELLE PRIORITA' NON C'E' PIU'.
+#    Lo script scopre i conflitti fra pattern DALL'ERRORE di Elasticsearch
+#    ("...that have the same priority..."), scrive i namespace rimasti fuori in
+#    <prefisso>-template-priority-600 e va rilanciato a mano su quel file. Se i
+#    livelli di conflitto sono due, si rilancia due volte.
+#    Qui i conflitti si calcolano PRIMA di scrivere: un nome che ha altri N nomi
+#    come prefisso nasce direttamente a priorita' base + N * 100. Stesso
+#    risultato, un lancio solo, e nessun namespace che resta indietro perche' il
+#    file di rilancio e' passato inosservato.
+#
+# 2. LE COLLISIONI VERE VENGONO DETTE, NON SUBITE.
+#    Togliendo i trattini dal nome ("my-app" e "myapp" -> "myapp") due namespace
+#    diversi finiscono sullo stesso indice. Lo script non se ne accorge: la
+#    seconda PUT del template sovrascrive la prima e risponde "acknowledged":
+#    true, e i log dei due namespace si mescolano in un indice solo. Qui la
+#    collisione si rileva prima di toccare Elasticsearch, e il ruolo si ferma
+#    elencando le coppie (logging_fail_on_collision).
+#
+# 3. LA POLICY ILM VIENE CREATA.
+#    Il template degli script punta a "<prefisso>-<lifecycle>" ma nessuno la
+#    crea. Senza policy ILM non gira, il rollover non avviene mai e l'indice
+#    -000001 cresce finche' il disco non finisce. Non e' un errore visibile:
+#    Elasticsearch accetta il template lo stesso.
+#
+# 4. RILANCIARLO E' SICURO ANCHE DOPO IL PRIMO ROLLOVER.
+#    Lo script rifa sempre la PUT dell'indice -000001 e ri-aggiunge l'alias con
+#    is_write_index: true. A rollover gia' avvenuto l'indice di scrittura e'
+#    -000002, e quella POST tenta di riportare l'alias indietro: Elasticsearch
+#    la rifiuta ("has more than one write index") e lo script prosegue senza
+#    dirlo. Qui l'indice e l'alias si toccano SOLO se l'alias non esiste
+#    ancora — l'insieme gia' avviato non viene sfiorato.
+#
+# 5. GLI ERRORI SI VEDONO.
+#    Lo script cerca una frase dentro il corpo della risposta: qualunque altro
+#    fallimento (401, host irraggiungibile, JSON rifiutato) non viene notato e
+#    l'indice viene creato lo stesso, senza template e quindi senza ILM. Qui
+#    ogni chiamata e' controllata sul codice di stato.
+
+- name: Controlli preliminari
+  import_tasks: controlli.yml
+
+- name: Elenco dei namespace e nomi degli indici
+  import_tasks: namespaces.yml
+
+- name: Policy ILM
+  import_tasks: ilm.yml
+  when: logging_manage_ilm | bool
+
+- name: Template, indici e alias
+  import_tasks: insiemi.yml
+
+- name: Script corretti sul nodo manager
+  import_tasks: script.yml
+  when: logging_deploy_scripts | bool
+
+- name: Verifica
+  import_tasks: verifica.yml
+  when: logging_verify | bool
