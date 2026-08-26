@@ -152,6 +152,22 @@
 #
 # master_node_ip va PASSATO: in group_vars vale
 # hostvars[groups['masters'][0]].ansible_host, e qui [masters] e' vuoto.
+#
+# QUANDO QUESTO PLAY PARTE, RKE2 SUL NODO DOWNSTREAM PUO' NON ESSERCI ANCORA, e
+# non e' un caso raro: il play prima aspetta che le MACCHINE compaiano in
+# Rancher, cioe' che si registri il rancher-system-agent — che e' la prima cosa
+# che succede. RKE2 lo tira giu' lui, dopo, e ci mette minuti. Il ruolo adesso
+# aspetta kubectl, il kubeconfig e l'API server invece di darli per scontati
+# (prima falliva sul primo task con "Source .../rke2/bin/kubectl not found").
+#
+# Se il cluster e' gia' su e serve solo rimettere a posto questo, senza rifare
+# Rancher:
+#
+#   ansible-playbook playbooks/21-rancher-single.yml --limit new_managers
+#
+# --limit lascia fuori [rancher_single], quindi girano solo i due play che
+# toccano i manager downstream: /etc/hosts e gli hostAliases. Si puo' rilanciare
+# quante volte si vuole, il patch e' idempotente.
 - name: DNS dell'agent nel cluster downstream
   hosts: new_managers
   become: yes

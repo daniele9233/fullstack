@@ -1,177 +1,59 @@
 ---
-- name: Copy kubectl binary to system path
-  copy:
-    src: /var/lib/rancher/rke2/bin/kubectl
-    dest: /usr/local/bin/kubectl
-    mode: '0755'
-    owner: root
-    group: root
-    remote_src: yes
+# kubectl SUL NODO + IL DNS DELL'AGENT DEL CLUSTER DOWNSTREAM.
+#
+# Gira sui [new_managers] dopo master1_create_cluster, in tutti e due i
+# percorsi: playbooks/20-rancher.yml (Rancher su 3 master) e
+# playbooks/21-rancher-single.yml (Rancher su un nodo solo). Che cosa fa e
+# perche' e' scritto in defaults/main.yml.
+#
+# In breve: prima aspetta che RKE2 abbia messo kubectl e il kubeconfig sul nodo
+# — non li da' piu' per scontati, ed e' la correzione che serviva — poi scrive
+# hostAliases sui deployment degli agent, che e' l'unico modo che quei pod
+# hanno di risolvere il dominio di Rancher.
 
-- name: Create .kube directory for root
-  file:
-    path: /root/.kube
-    state: directory
-    mode: '0755'
-    owner: root
-    group: root
+# master_node_ip e rancher_domain sono l'indirizzo e il nome che finiscono
+# dentro agli hostAliases: senza, questo ruolo non ha niente da scrivere.
+#
+# Il controllo sta in un block/rescue e non in un assert secco perche' il modo
+# in cui master_node_ip manca non e' "non c'e'": in group_vars/all.yml vale
+# hostvars[groups['masters'][0]]['ansible_host'], e con [masters] vuoto — il
+# caso del nodo singolo, dove Rancher sta in [rancher_single] — non e'
+# indefinita, e' una espressione che ESPLODE con "list object has no element 0".
+# default() non lo intercetta, il rescue si'.
+- name: Verifica di sapere nome e indirizzo di Rancher
+  block:
+    - name: Nome e indirizzo di Rancher
+      assert:
+        that:
+          - master_node_ip | default('') | string | length > 0
+          - rancher_domain | default('') | length > 0
+        fail_msg: >-
+          Servono rancher_domain e master_node_ip (l'indirizzo a cui risponde
+          la console di Rancher): finiscono negli hostAliases del pod
+          cattle-cluster-agent.
+        quiet: yes
 
-- name: Copy RKE2 kubeconfig to root .kube directory
-  copy:
-    src: /etc/rancher/rke2/rke2.yaml
-    dest: /root/.kube/config
-    mode: '0600'
-    owner: root
-    group: root
-    remote_src: yes
+  rescue:
+    - name: Spiega che master_node_ip va passata
+      fail:
+        msg: >-
+          Non so a quale indirizzo risponde Rancher. In group_vars/all.yml
+          master_node_ip vale hostvars[groups['masters'][0]]['ansible_host'], e
+          qui il gruppo [masters] e' vuoto: e' il caso dell'installazione su un
+          nodo solo, dove Rancher sta in [rancher_single]. Passala al ruolo —
+          e' quello che fa playbooks/21-rancher-single.yml — oppure valorizza
+          master_node_ip.
 
-- name: Verify kubectl is working
-  shell: kubectl get nodes
-  register: kubectl_test
-  environment:
-    KUBECONFIG: /root/.kube/config
+- name: kubectl e kubeconfig sul nodo
+  import_tasks: attesa.yml
 
-- name: Show kubectl test result
-  debug:
-    msg: |
-      Kubectl test result:
-      {{ kubectl_test.stdout }}
-
-- name: Wait 60 seconds before applying DNS fix
-  pause:
-    seconds: 60
-
-- name: Wait for cattle-system namespace to exist
-  shell: kubectl get namespace cattle-system
-  register: namespace_check
-  environment:
-    KUBECONFIG: /root/.kube/config
-  retries: 20
-  delay: 30
-  until: namespace_check.rc == 0
-  ignore_errors: yes
-
-- name: Show namespace status
-  debug:
-    msg: |
-      Cattle-system namespace: {{ 'Found' if namespace_check.rc == 0 else 'Not found' }}
-
-- name: Wait for cattle-cluster-agent deployment to exist
-  shell: kubectl get deployment cattle-cluster-agent -n cattle-system
-  register: deployment_check
-  environment:
-    KUBECONFIG: /root/.kube/config
-  retries: 30
-  delay: 30
-  until: deployment_check.rc == 0
-  ignore_errors: yes
-
-- name: Show deployment availability
-  debug:
-    msg: |
-      Cattle-cluster-agent deployment: {{ 'Found' if deployment_check.rc == 0 else 'Not found' }}
-      {% if deployment_check.rc != 0 %}
-      This is normal if nodes haven't fully registered with Rancher yet.
-      You may need to run this role again later.
-      {% endif %}
-
-- name: Check current cattle-cluster-agent deployment
-  shell: kubectl get deployment cattle-cluster-agent -n cattle-system -o yaml
-  register: current_deployment
-  environment:
-    KUBECONFIG: /root/.kube/config
-  when: deployment_check.rc == 0
-
-- name: Show current deployment (before changes)
-  debug:
-    var: current_deployment.stdout
-  when: deployment_check.rc == 0 and current_deployment is defined
-
-- name: Apply DNS fix to cattle-cluster-agent deployment
-  shell: |
-    kubectl patch deployment cattle-cluster-agent -n cattle-system --type='merge' -p='
-    {
-      "spec": {
-        "template": {
-          "spec": {
-            "hostAliases": [
-              {
-                "hostnames": ["{{ rancher_domain | regex_replace("^https?://", "") }}"],
-                "ip": "{{ master_node_ip }}"
-              }
-            ],
-            "dnsPolicy": "ClusterFirst"
-          }
-        }
-      }
-    }'
-  register: patch_result
-  environment:
-    KUBECONFIG: /root/.kube/config
-  when: deployment_check.rc == 0
-
-- name: Show patch result
-  debug:
-    msg: |
-      Patch applied: {{ 'Yes' if patch_result.rc == 0 else 'No' }}
-      Output: {{ patch_result.stdout }}
-      Error: {{ patch_result.stderr if patch_result.stderr is defined else 'No error' }}
-  when: deployment_check.rc == 0 and patch_result is defined
-
-- name: Wait for deployment rollout to complete
-  shell: kubectl rollout status deployment/cattle-cluster-agent -n cattle-system --timeout=300s
-  register: rollout_status
-  environment:
-    KUBECONFIG: /root/.kube/config
-  ignore_errors: yes
-  when: deployment_check.rc == 0 and patch_result is defined and patch_result.rc == 0
-
-- name: Show rollout status
-  debug:
-    var: rollout_status.stdout
-  when: deployment_check.rc == 0 and rollout_status is defined
-
-- name: Verify final deployment configuration
-  shell: kubectl get deployment cattle-cluster-agent -n cattle-system -o yaml | grep -A 10 hostAliases
-  register: final_config
-  environment:
-    KUBECONFIG: /root/.kube/config
-  ignore_errors: yes
-  when: deployment_check.rc == 0
-
-- name: Show final configuration
-  debug:
-    msg: |
-      Final hostAliases configuration:
-      {{ final_config.stdout if final_config.stdout != '' else 'No hostAliases found' }}
-  when: deployment_check.rc == 0 and final_config is defined
-
-- name: Check cattle-cluster-agent pods status
-  shell: kubectl get pods -n cattle-system -l app=cattle-cluster-agent
-  register: pods_status
-  environment:
-    KUBECONFIG: /root/.kube/config
-  when: deployment_check.rc == 0
-
-- name: Show pods status
-  debug:
-    msg: |
-      Cattle cluster agent pods:
-      {{ pods_status.stdout }}
-  when: deployment_check.rc == 0 and pods_status is defined
-
-- name: Show summary
-  debug:
-    msg: |
-      === KUBECTL SETUP SUMMARY ===
-      ✅ Kubectl configured: Yes
-      ✅ Kubeconfig copied: Yes
-      🔍 Cattle-system namespace: {{ 'Found' if namespace_check.rc == 0 else 'Not found' }}
-      🔍 Cattle-cluster-agent deployment: {{ 'Found' if deployment_check.rc == 0 else 'Not found' }}
-      🔧 DNS Fix applied: {{ 'Yes' if (deployment_check.rc == 0 and patch_result is defined and patch_result.rc == 0) else 'No' }}
-      
-      {% if deployment_check.rc != 0 %}
-      ⏳ The cattle-cluster-agent deployment doesn't exist yet.
-      This is normal - it will be created when nodes fully register with Rancher.
-      You can run this role again later to apply the DNS fix.
-      {% endif %}
+# Un ciclo e non tre copie degli stessi task: i deployment da sistemare sono
+# una lista in ks_agent_deployments, e ce ne sono due (cattle-cluster-agent e
+# fleet-agent) che vanno trattati allo stesso modo ma non aspettati allo stesso
+# modo.
+- name: Risoluzione del dominio Rancher dentro ai pod degli agent
+  include_tasks: agente.yml
+  loop: "{{ ks_agent_deployments }}"
+  loop_control:
+    loop_var: agente
+    label: "{{ agente.namespace }}/{{ agente.nome }}"

@@ -1,0 +1,118 @@
+---
+# UN DEPLOYMENT AGENT: aspettalo (se e' di quelli che devono esserci), mettici
+# hostAliases, aspetta che i pod ripartano.
+#
+# Invocato in ciclo da main.yml: "agente" e' un elemento di
+# ks_agent_deployments.
+
+- name: "Cerca il deployment {{ agente.nome }} in {{ agente.namespace }}"
+  command: "{{ ks_kubectl_bin }} -n {{ agente.namespace }} get deployment {{ agente.nome }}"
+  environment:
+    KUBECONFIG: "{{ ks_kubeconfig }}"
+  register: ks_dep
+  changed_when: false
+  # Non trovarlo non e' un errore di per se': con attendi: false e' il caso
+  # normale, e anche con attendi: true e' meglio dirlo che morire qui.
+  failed_when: false
+  retries: "{{ ks_dep_retries if agente.attendi | default(false) | bool else 1 }}"
+  delay: "{{ ks_dep_delay if agente.attendi | default(false) | bool else 1 }}"
+  until: ks_dep.rc == 0
+
+- name: "{{ agente.nome }} non c'e' ancora, e va bene cosi'"
+  debug:
+    msg: >-
+      {{ agente.namespace }}/{{ agente.nome }} non esiste ancora su questo
+      cluster: arrivera' quando il cluster agent si sara' collegato, e un
+      secondo giro di questo playbook gli mettera' gli hostAliases. Il cluster
+      intanto sale lo stesso.
+  when:
+    - ks_dep.rc != 0
+    - not (agente.attendi | default(false) | bool)
+
+- name: "{{ agente.nome }} NON C'E', e questo e' un problema"
+  debug:
+    msg: >-
+      {{ agente.namespace }}/{{ agente.nome }} non esiste dopo
+      {{ ks_dep_retries | int * ks_dep_delay | int }} secondi di attesa, e
+      dovrebbe: lo installa Rancher nel cluster downstream appena la macchina
+      si registra. Senza di lui non c'e' niente da sistemare qui, ma il cluster
+      non si agganciera'. Guarda in Rancher lo stato del cluster downstream, e
+      sul nodo "journalctl -u rancher-system-agent -n 200".
+  when:
+    - ks_dep.rc != 0
+    - agente.attendi | default(false) | bool
+
+# Da qui in giu' solo se il deployment esiste.
+- name: "hostAliases su {{ agente.nome }}"
+  when: ks_dep.rc == 0
+  block:
+    # argv e non shell: il patch e' JSON, pieno di virgolette e parentesi
+    # graffe. Passato a una shell andrebbe protetto a mano, e basta un dominio
+    # con un carattere strano per rompere tutto. Cosi' il JSON lo costruisce
+    # Jinja da un dizionario e non lo tocca nessuno.
+    #
+    # dnsPolicy: ClusterFirst e' quello di default, ma va riscritto: se qualcuno
+    # ha messo il pod su Default o su None, hostAliases funzionerebbe lo stesso
+    # ma tutto il resto (i servizi interni) no.
+    - name: "Applica il patch a {{ agente.nome }}"
+      command:
+        argv:
+          - "{{ ks_kubectl_bin }}"
+          - "-n"
+          - "{{ agente.namespace }}"
+          - "patch"
+          - "deployment"
+          - "{{ agente.nome }}"
+          - "--type=merge"
+          - "-p"
+          - "{{ ks_patch | to_json }}"
+      vars:
+        ks_patch:
+          spec:
+            template:
+              spec:
+                hostAliases:
+                  - ip: "{{ master_node_ip }}"
+                    hostnames:
+                      - "{{ rancher_domain | regex_replace('^https?://', '') }}"
+                dnsPolicy: "ClusterFirst"
+      environment:
+        KUBECONFIG: "{{ ks_kubeconfig }}"
+      register: ks_patch_out
+      # kubectl scrive "deployment.apps/... patched (no change)" quando il patch
+      # c'era gia': rilanciare il playbook non deve risultare "changed".
+      changed_when: "'no change' not in ks_patch_out.stdout"
+
+    - name: "Attendi che {{ agente.nome }} riparta"
+      command: >-
+        {{ ks_kubectl_bin }} -n {{ agente.namespace }}
+        rollout status deployment/{{ agente.nome }}
+        --timeout={{ ks_rollout_timeout }}s
+      environment:
+        KUBECONFIG: "{{ ks_kubeconfig }}"
+      register: ks_rollout
+      changed_when: false
+      # Il rollout puo' non chiudersi: il pod nuovo prova a collegarsi a Rancher
+      # e ci mette un po'. Non e' un motivo per fermare il playbook — il patch
+      # e' fatto, ed e' quello che conta.
+      failed_when: false
+
+    - name: "Stato di {{ agente.nome }}"
+      command: "{{ ks_kubectl_bin }} -n {{ agente.namespace }} get pods -l app={{ agente.nome }}"
+      environment:
+        KUBECONFIG: "{{ ks_kubeconfig }}"
+      register: ks_pods
+      changed_when: false
+      failed_when: false
+
+    - name: "Esito su {{ agente.nome }}"
+      debug:
+        msg: >-
+          {{ [ agente.namespace ~ '/' ~ agente.nome ~ ': hostAliases '
+               ~ (rancher_domain | regex_replace('^https?://', ''))
+               ~ ' -> ' ~ master_node_ip
+               ~ (' (era gia a posto)' if not ks_patch_out.changed else ' (scritti ora)'),
+               'rollout: ' ~ (ks_rollout.stdout | default('') | trim
+                              if ks_rollout.rc == 0
+                              else 'non ancora concluso, il pod sta ripartendo') ]
+             + (ks_pods.stdout_lines | default([])) }}

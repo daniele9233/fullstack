@@ -118,20 +118,26 @@
   roles:
     - role: master1_create_cluster
 
-# PAUSA dopo la creazione del cluster
-- name: "Pausa dopo creazione cluster"
-  hosts: localhost
-  gather_facts: no
-  tasks:
-    - name: Attendi 180 secondi prima setup kubectl
-      pause:
-        seconds: 180
-        prompt: "Attendendo 60 secondi dopo creazione cluster..."
-
 # Setup kubectl e fix DNS Cattle-System sui nuovi manager.
 # Il ruolo kubectl_setup esegue gia' sia il setup di kubectl sia il patch
 # hostAliases su cattle-cluster-agent: eseguirlo due volte riapplicava lo
 # stesso patch e faceva scadere una seconda volta il rollout (~10 min persi).
+#
+# QUI C'ERA UNA PAUSA CIECA DI 180 SECONDI, ed e' stata tolta.
+#
+# Serviva perche' quando questo play parte i nodi downstream hanno appena
+# eseguito system-agent-install.sh: il rancher-system-agent si e' registrato,
+# ma RKE2 lo scarica e lo installa DOPO. kubectl_setup copiava
+# /var/lib/rancher/rke2/bin/kubectl dandolo per scontato, e quei 180 secondi
+# erano la speranza che nel frattempo comparisse. Quando bastavano andava,
+# quando non bastavano il playbook moriva sul primo task con
+# "Source /var/lib/rancher/rke2/bin/kubectl not found" — e senza quel ruolo il
+# patch degli hostAliases non veniva applicato, quindi il cluster downstream
+# non si agganciava mai.
+#
+# Adesso l'attesa sta dentro al ruolo, che aspetta il file finche' arriva
+# (ks_attesa_timeout) invece di sperarci: chi ci mette meno non perde 3 minuti,
+# chi ci mette di piu' non si rompe.
 - hosts: new_managers
   become: yes
   gather_facts: no

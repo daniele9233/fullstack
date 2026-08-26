@@ -1375,6 +1375,32 @@ resto di questo repository.
   # versione RKE2 fissata invece dell'ultima
   ansible-playbook playbooks/21-rancher-single.yml -e rsn_rke2_version=v1.33.11+rke2r1
 
+  # solo i nodi del cluster downstream: /etc/hosts e il DNS dell'agent, senza
+  # ritoccare Rancher (--limit lascia fuori [rancher_single])
+  ansible-playbook playbooks/21-rancher-single.yml --limit new_managers
+
+
+  SE IL CLUSTER DOWNSTREAM RESTA IN "waiting for cluster agent to connect"
+
+E' il guasto che si vede in Rancher come
+
+  Configuring bootstrap node(s) custom-xxxxxxxx: Waiting for Cluster control
+  plane to be initialized, waiting for cluster agent to connect
+
+e sul manager downstream come un pod cattle-cluster-agent in CrashLoopBackOff
+che nei log dice
+
+  ERROR: https://<rancher_domain>/ping is not accessible (Could not resolve host)
+
+Sono DUE cluster con DUE CoreDNS: quello del cluster downstream non sa niente di
+rancher_domain, e /etc/hosts del nodo non c'entra — un pod non lo legge. La cura
+sono gli hostAliases sul deployment, che mette kubectl_setup: il comando qui
+sopra con --limit new_managers li riapplica senza toccare altro.
+
+Se invece il ruolo si ferma dicendo che kubectl non e' comparso, il problema e'
+piu' indietro: RKE2 non si e' installato su quel nodo. Sul nodo,
+"journalctl -u rancher-system-agent -n 200".
+
 Per azzerare e ripartire, il playbook e' lo stesso di sempre:
 
   ansible-playbook playbooks/99-azzera.yml --limit <nodo> -e azzera_conferma=AZZERA

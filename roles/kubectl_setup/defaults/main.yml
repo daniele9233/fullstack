@@ -1,0 +1,102 @@
+---
+# ks_ = Kubectl Setup.
+#
+# Questo ruolo gira sui nodi manager del cluster DOWNSTREAM ([new_managers]),
+# subito dopo che master1_create_cluster li ha agganciati a Rancher, e fa due
+# cose:
+#
+#   1. mette kubectl e il kubeconfig al loro posto sul nodo, cosi' ci si entra
+#      in ssh e si lavora (ed e' quello che si aspettano gli altri ruoli:
+#      loggingElastic cerca /usr/local/bin/kubectl e /root/.kube/config);
+#
+#   2. scrive hostAliases sul deployment cattle-cluster-agent — ed e' il motivo
+#      vero per cui il ruolo esiste.
+#
+# IL PUNTO 2, PERCHE' SERVE. L'agent del cluster downstream parla con Rancher
+# PER NOME (https://<rancher_domain>/ping). Quel nome lo risolve il CoreDNS del
+# cluster DOWNSTREAM, che e' un altro cluster con un altro CoreDNS e di
+# rancher_domain non sa niente. /etc/hosts del nodo non c'entra: un pod non lo
+# legge. Senza hostAliases il pod va in CrashLoopBackOff con
+#   ERROR: https://<dominio>/ping is not accessible (Could not resolve host)
+# e il cluster resta per sempre in "Waiting for Cluster control plane to be
+# initialized, waiting for cluster agent to connect".
+
+
+# ===========================================================================
+# 1. ATTESA DI RKE2 SUL NODO
+# ===========================================================================
+#
+# QUI STAVA IL GUASTO. Il ruolo copiava /var/lib/rancher/rke2/bin/kubectl
+# dandolo per scontato, e si fermava con
+#
+#   fatal: [k8smanager01c]: FAILED! => "Source /var/lib/rancher/rke2/bin/kubectl not found"
+#
+# Non era un percorso sbagliato: quel file ANCORA NON C'ERA. Quando questo ruolo
+# parte, sul nodo downstream e' appena passato system-agent-install.sh: il
+# rancher-system-agent si e' registrato — ed e' quella la "macchina" che
+# master1_create_cluster vede comparire in Rancher — ma RKE2 lo scarica e lo
+# installa DOPO, e ci mette minuti. Nel percorso a 3 nodi la cosa era mascherata
+# da una pausa cieca di 180 secondi nel playbook: quando bastavano andava,
+# quando non bastavano il playbook moriva sul primo task.
+#
+# E moriva nel punto peggiore: senza questo ruolo il patch degli hostAliases non
+# viene applicato, quindi il cluster downstream non si aggancia MAI.
+#
+# Adesso il file si aspetta invece di sperarci.
+ks_kubectl_rke2: "/var/lib/rancher/rke2/bin/kubectl"
+ks_kubeconfig_rke2: "/etc/rancher/rke2/rke2.yaml"
+
+# Un kubectl gia' presente va bene lo stesso: se il ruolo e' gia' girato una
+# volta, o se la macchina ne ha uno suo, non c'e' niente da aspettare.
+# L'ordine conta: il primo che esiste vince.
+ks_kubectl_candidati:
+  - "/var/lib/rancher/rke2/bin/kubectl"
+  - "/usr/local/bin/kubectl"
+  - "/usr/bin/kubectl"
+
+# Quanto aspettare kubectl e il kubeconfig, in secondi. Sono i minuti che RKE2
+# impiega a scaricare le immagini dei componenti di sistema la prima volta: su
+# rete lenta 15 minuti non sono tanti.
+ks_attesa_timeout: 900
+
+# Dove il ruolo lascia le cose.
+ks_kubectl_bin: "/usr/local/bin/kubectl"
+ks_kubeconfig: "/root/.kube/config"
+
+# Attesa che l'API server del cluster downstream risponda. Il binario c'e'
+# prima che il cluster sia in piedi: sono due cose diverse e vanno aspettate
+# tutte e due.
+ks_api_retries: 60
+ks_api_delay: 10
+
+
+# ===========================================================================
+# 2. I DEPLOYMENT DEGLI AGENT
+# ===========================================================================
+
+# Attesa che il deployment compaia (solo per quelli con attendi: true).
+ks_dep_retries: 40
+ks_dep_delay: 15
+
+# Attesa del rollout dopo il patch.
+ks_rollout_timeout: 300
+
+# I pod che devono risolvere rancher_domain.
+#
+#   attendi: true   il deployment DEVE esserci: si aspetta. E' il caso di
+#                   cattle-cluster-agent, che Rancher installa nel cluster
+#                   downstream appena la macchina si registra.
+#
+#   attendi: false  se c'e' lo si sistema, se non c'e' si tira dritto. E' il
+#                   caso di fleet-agent: nel cluster downstream arriva solo
+#                   DOPO che il cluster agent si e' collegato, quindi al primo
+#                   giro non esiste ancora e aspettarlo sarebbe un quarto d'ora
+#                   buttato. Quando esistera', un secondo giro del playbook lo
+#                   sistema — e intanto il cluster e' gia' su.
+ks_agent_deployments:
+  - namespace: "cattle-system"
+    nome: "cattle-cluster-agent"
+    attendi: true
+  - namespace: "cattle-fleet-system"
+    nome: "fleet-agent"
+    attendi: false

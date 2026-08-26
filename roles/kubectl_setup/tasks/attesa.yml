@@ -1,0 +1,110 @@
+---
+# kubectl E IL KUBECONFIG SUL NODO — ASPETTANDOLI, NON DANDOLI PER SCONTATI.
+#
+# Vedi defaults/main.yml per il perche': quando questo ruolo parte, RKE2 sul
+# nodo downstream puo' essere ancora in installazione.
+
+- name: Cerca un kubectl gia' presente sul nodo
+  shell: |
+    for p in {{ ks_kubectl_candidati | join(' ') }}; do
+      if [ -x "$p" ]; then echo "$p"; exit 0; fi
+    done
+    exit 1
+  register: ks_kubectl_trovato
+  changed_when: false
+  # Non trovarlo NON e' un errore: e' il caso normale al primo giro, e si
+  # aspetta nel task dopo.
+  failed_when: false
+
+- name: Attendi che RKE2 finisca di installarsi su questo nodo
+  when: ks_kubectl_trovato.rc != 0
+  block:
+    - name: "Attesa di {{ ks_kubectl_rke2 }}"
+      wait_for:
+        path: "{{ ks_kubectl_rke2 }}"
+        timeout: "{{ ks_attesa_timeout }}"
+
+  rescue:
+    # wait_for direbbe solo "Timeout when waiting for file": qui si dice che
+    # cosa guardare, perche' la causa sta fuori da Ansible.
+    - name: Spiega perche' kubectl non e' arrivato
+      fail:
+        msg: >-
+          Dopo {{ ks_attesa_timeout }} secondi su questo nodo non e' comparso
+          {{ ks_kubectl_rke2 }}: RKE2 non si e' installato. Il nodo si e'
+          registrato in Rancher (altrimenti non saremmo qui), quindi il
+          rancher-system-agent c'e' ed e' lui che deve tirare giu' RKE2.
+          Sul nodo: "systemctl status rancher-system-agent" e
+          "journalctl -u rancher-system-agent -n 200". Le due cause solite sono
+          la rete verso i registry delle immagini e uno stato RKE2 rimasto da
+          un'installazione precedente su questa stessa macchina.
+
+- name: Rileva il kubectl da usare
+  set_fact:
+    # Se ne era gia' stato trovato uno si usa quello, altrimenti e' arrivato
+    # quello di RKE2 che abbiamo appena aspettato.
+    ks_kubectl_sorgente: >-
+      {{ ks_kubectl_trovato.stdout | trim
+         if ks_kubectl_trovato.rc == 0
+         else ks_kubectl_rke2 }}
+
+- name: Copia kubectl in {{ ks_kubectl_bin }}
+  copy:
+    src: "{{ ks_kubectl_sorgente }}"
+    dest: "{{ ks_kubectl_bin }}"
+    mode: '0755'
+    owner: root
+    group: root
+    remote_src: yes
+  when: ks_kubectl_sorgente != ks_kubectl_bin
+
+- name: Attendi il kubeconfig di RKE2
+  wait_for:
+    path: "{{ ks_kubeconfig_rke2 }}"
+    timeout: "{{ ks_attesa_timeout }}"
+
+- name: Crea /root/.kube
+  file:
+    path: "{{ ks_kubeconfig | dirname }}"
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Copia il kubeconfig di RKE2 in {{ ks_kubeconfig }}
+  copy:
+    src: "{{ ks_kubeconfig_rke2 }}"
+    dest: "{{ ks_kubeconfig }}"
+    mode: '0600'
+    owner: root
+    group: root
+    remote_src: yes
+
+# Il binario c'e' e il file di configurazione pure: sono due cose diverse
+# dall'avere un cluster che risponde. Al primo avvio l'API server arriva minuti
+# dopo il binario, quindi si aspetta anche questo.
+- name: Attendi che il cluster risponda
+  block:
+    - name: kubectl get nodes
+      command: "{{ ks_kubectl_bin }} get nodes"
+      environment:
+        KUBECONFIG: "{{ ks_kubeconfig }}"
+      register: kubectl_test
+      changed_when: false
+      retries: "{{ ks_api_retries }}"
+      delay: "{{ ks_api_delay }}"
+      until: kubectl_test.rc == 0
+
+  rescue:
+    - name: Spiega perche' il cluster non risponde
+      fail:
+        msg: >-
+          kubectl c'e' ma l'API server di questo nodo non risponde dopo
+          {{ ks_api_retries | int * ks_api_delay | int }} secondi. Sul nodo:
+          "systemctl status rke2-server" e
+          "journalctl -u rke2-server -n 200". Ultimo errore visto:
+          {{ kubectl_test.stderr | default('nessuno') | trim }}
+
+- name: Nodi visti dal cluster downstream
+  debug:
+    msg: "{{ kubectl_test.stdout_lines }}"
