@@ -1,0 +1,13 @@
+# File che NON sono codice e che non devono stare in git.
+#
+# ansible.log lo scrive ansible.cfg (log_path = ./ansible.log) a ogni lancio:
+# essendo versionato, sul server risultava SEMPRE modificato e "git pull" si
+# rifiutava di andare avanti. Il danno non e' il file: e' che il pull fallisce,
+# uno non se ne accorge e rilancia il playbook con il codice VECCHIO credendo
+# di avere l'ultimo. E' successo davvero.
+#
+# I .pem dei certificati restano versionati come sono sempre stati: li' li
+# cerca master1_helm_cert_manager_install, e ignorarli farebbe sparire in
+# silenzio quelli aggiunti dopo.
+ansible.log
+*.retry
