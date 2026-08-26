@@ -75,6 +75,13 @@
   vars:
     rke2_disable: "{{ rsn_disable_effettivo }}"
 
+# traefik_install non blocca di proposito (e' il ruolo condiviso con i 3 nodi).
+# Qui pero' proseguire senza Traefik non ha senso: l'Ingress di Rancher non lo
+# servirebbe nessuno e la verifica finale fallirebbe dieci minuti dopo parlando
+# di Rancher invece che di Traefik.
+- name: Verifica che Traefik sia pronto
+  import_tasks: traefik_verifica.yml
+
 - name: cert-manager
   import_tasks: certmanager.yml
   when: rsn_tls_source == 'rancher'

@@ -169,6 +169,18 @@ rsn_pretendi_nodo_pulito: true
 rsn_kubeconfig: "/root/.kube/config"
 rsn_install_helm: true
 
+# kubectl con cui il ruolo interroga il cluster. Il percorso pieno di RKE2, non
+# "kubectl" e basta: nei primi task di questo ruolo /usr/local/bin/kubectl puo'
+# non esistere ancora.
+rsn_kubectl: "/var/lib/rancher/rke2/bin/kubectl"
+
+# Attesa che Traefik sia pronto, subito dopo averlo installato. Il chart arriva
+# da traefik.github.io e lo scarica un POD: se i pod non risolvono i nomi, il
+# job resta li' a riprovare per sempre — e' il guasto che ha bloccato
+# l'installazione a 3 nodi.
+rsn_traefik_retries: 60
+rsn_traefik_delay: 10
+
 
 # ===========================================================================
 # 5. RANCHER

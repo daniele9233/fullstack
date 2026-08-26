@@ -1,0 +1,121 @@
+---
+# Traefik e' pronto? Se no, ci si ferma QUI.
+#
+# traefik_install non blocca di proposito: e' il ruolo condiviso con
+# l'installazione a 3 nodi, dove il chart puo' metterci piu' del previsto e il
+# playbook prosegue. Qui pero' proseguire non ha senso: senza Traefik l'Ingress
+# di Rancher non lo serve nessuno, quindi la console non rispondera' MAI, e la
+# verifica finale fallirebbe dieci minuti piu' avanti con un messaggio che parla
+# di Rancher invece che di Traefik.
+#
+# Meglio fallire adesso, dove il guasto e', e con sotto il log del job che lo ha
+# causato.
+
+- name: Attendi che il DaemonSet di Traefik compaia
+  command:
+    argv:
+      - "{{ rsn_kubectl | default('/var/lib/rancher/rke2/bin/kubectl') }}"
+      - --kubeconfig
+      - "{{ rsn_kubeconfig }}"
+      - -n
+      - "{{ traefik_namespace | default('traefik') }}"
+      - get
+      - daemonset/traefik
+      - -o
+      - name
+  register: rsn_traefik_ds
+  until: rsn_traefik_ds.rc == 0
+  retries: "{{ rsn_traefik_retries }}"
+  delay: "{{ rsn_traefik_delay }}"
+  changed_when: false
+  failed_when: false
+
+# rollout status esce 0 solo quando tutti i pod voluti sono pronti. Niente
+# jsonpath: gli argomenti passano in forma argv e non c'e' niente da citare.
+- name: Attendi che i pod di Traefik siano pronti
+  command:
+    argv:
+      - "{{ rsn_kubectl | default('/var/lib/rancher/rke2/bin/kubectl') }}"
+      - --kubeconfig
+      - "{{ rsn_kubeconfig }}"
+      - -n
+      - "{{ traefik_namespace | default('traefik') }}"
+      - rollout
+      - status
+      - daemonset/traefik
+      - "--timeout={{ rsn_traefik_retries | int * rsn_traefik_delay | int }}s"
+  register: rsn_traefik_pronto
+  changed_when: false
+  failed_when: false
+  when: rsn_traefik_ds.rc == 0
+
+# --- Diagnosi ---------------------------------------------------------------
+# Il chart di Traefik arriva da traefik.github.io, cioe' da internet, e lo
+# scarica un POD: se i pod non risolvono i nomi, il job resta li' a riprovare
+# per sempre. E' il guasto che ha bloccato l'installazione a 3 nodi, ed e' la
+# prima cosa da guardare nel log del job.
+
+- name: Raccogli la diagnosi se Traefik non e' pronto
+  block:
+    - name: Log del job che installa Traefik
+      shell: >-
+        set -o pipefail;
+        {{ rsn_kubectl | default('/var/lib/rancher/rke2/bin/kubectl') }}
+        --kubeconfig {{ rsn_kubeconfig }}
+        -n kube-system logs job/helm-install-traefik --tail=25 2>&1 | tail -25
+      args:
+        executable: /bin/bash
+      register: rsn_traefik_job
+      changed_when: false
+      failed_when: false
+
+    - name: Pod nel namespace di Traefik
+      command:
+        argv:
+          - "{{ rsn_kubectl | default('/var/lib/rancher/rke2/bin/kubectl') }}"
+          - --kubeconfig
+          - "{{ rsn_kubeconfig }}"
+          - -n
+          - "{{ traefik_namespace | default('traefik') }}"
+          - get
+          - pods
+          - -o
+          - wide
+      register: rsn_traefik_pods
+      changed_when: false
+      failed_when: false
+  when: rsn_traefik_pronto.rc | default(1) != 0
+
+- name: Fermati se Traefik non e' pronto
+  fail:
+    msg: |
+      Traefik non e' pronto dopo
+      {{ rsn_traefik_retries | int * rsn_traefik_delay | int }} secondi.
+
+      Senza Traefik l'Ingress di Rancher non lo serve nessuno: la console non
+      risponderebbe comunque, quindi ci si ferma qui invece di installare
+      Rancher e scoprirlo dopo.
+
+      {% if rsn_traefik_ds.rc != 0 %}
+      Il DaemonSet "traefik" non esiste proprio: il chart non e' stato
+      installato. Il motivo sta nel log del job qui sotto — se ci leggi un
+      timeout su "traefik.github.io", i POD non risolvono i nomi e il chart non
+      si puo' scaricare.
+      {% else %}
+      Il DaemonSet c'e' ma i suoi pod non sono pronti. Su un nodo solo la causa
+      quasi sempre e' che le porte 80 o 443 del nodo sono di qualcun altro:
+      Traefik le vuole come hostPort.
+      {% endif %}
+
+      Log del job helm-install-traefik:
+      {{ rsn_traefik_job.stdout | default('non leggibile') }}
+
+      Pod nel namespace {{ traefik_namespace | default('traefik') }}:
+      {{ rsn_traefik_pods.stdout | default('nessuno') }}
+  when: rsn_traefik_pronto.rc | default(1) != 0
+
+- name: Traefik pronto
+  debug:
+    msg: >-
+      Traefik e' su e serve le porte 80 e 443 del nodo: l'Ingress di Rancher
+      avra' chi lo serve.
