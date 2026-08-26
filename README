@@ -1223,3 +1223,130 @@ niente.
 
 Alla fine rilegge da Elasticsearch template, alias e indici di scrittura e
 controlla che ci siano tutti, invece di fidarsi delle risposte alle PUT.
+
+
+RANCHER SU UN NODO SOLO
+
+  ansible-playbook -i inventory.ini playbooks/21-rancher-single.yml
+
+RKE2 + Traefik + Rancher su una macchina sola, sul gruppo [rancher_single].
+
+E' L'ALTERNATIVA a playbooks/20-rancher.yml, non un suo complemento. Quello
+installa il cluster a 3 master e ci aggancia un cluster downstream con manager,
+worker e nodi ingress; questo mette tutto su un host e non crea nessun cluster
+downstream. NON vanno tenuti su insieme: sarebbero due Rancher che si
+contendono lo stesso rancher_domain. Se usi [rancher_single], lascia [masters]
+vuoto — e viceversa. Per questo site.yml importa il 20 e non il 21.
+
+Condivide con l'installazione a 3 nodi tutto quello che ha senso condividere:
+rancher_domain, rancher_password, rancher_version, helm_version e i .pem dei
+certificati restano dichiarati in cima a group_vars/all.yml. Sullo stesso
+dominio non esistono due verita', e Traefik e' LO STESSO RUOLO — traefik_install
+— non una copia per il nodo singolo.
+
+
+  NIENTE /etc/hosts DA COMPILARE SULLE MACCHINE
+
+E' la differenza pratica piu' grossa. A 3 nodi ogni host deve risolvere il
+dominio Rancher, l'elenco lo mantiene update_hosts_file e chi aggiunge una
+macchina se lo deve ricordare.
+
+Qui il nodo e' uno, quindi la riga da scrivere e' una. Il ruolo la mette nei
+tre posti in cui serve, e sono tre meccanismi diversi:
+
+  sul NODO           /etc/hosts, una riga. E toglie anche il "127.0.1.1
+                     <hostname>" che Ubuntu mette di serie: su un nodo
+                     Kubernetes fa risolvere il nome della macchina a un
+                     loopback, e chi risolve il proprio nome per annunciarsi si
+                     annuncia li'
+
+  dentro ai POD      hostAliases su cattle-cluster-agent e fleet-agent. E'
+                     l'unico posto che /etc/hosts del nodo NON copre: i pod
+                     hanno un loro resolver, e su rete chiusa rancher_domain non
+                     esiste in nessun DNS. Senza, gli agent restano in
+                     CrashLoopBackOff con "no such host" e il cluster "local"
+                     risulta Unavailable nella console — pur essendo il cluster
+                     su cui Rancher gira
+
+  sul CONTROL NODE   la scrive il ruolo (serve root li'). Con
+                     rsn_update_control_node_hosts=false non la scrive e la
+                     stampa nel riepilogo, da incollare a mano
+
+L'unica cosa che resta a mano e' la stessa riga sulla postazione da cui apri il
+browser, se non e' il control node.
+
+
+  CHE COSA CAMBIA RISPETTO AI 3 NODI
+
+1. Niente quorum, niente serial: 1, niente token da leggere.
+   A 3 master ogni nodo si unisce al primo e il playbook li porta su uno alla
+   volta, aspettando che etcd promuova ciascuno da learner a votante. Qui
+   config.yaml non ha la direttiva "server:" e il nodo bootstrappa e basta.
+
+2. Niente cluster downstream.
+   master1_create_cluster non viene invocato: Rancher gestisce solo "local".
+
+3. UNA replica di Rancher, non tre.
+   Il chart ne vuole 3 di default e le distribuisce su nodi diversi con una
+   anti-affinity: su un nodo solo due resterebbero Pending per sempre e il
+   deployment non diventerebbe mai pronto. E' l'errore che fa sembrare rotta
+   un'installazione che invece e' stata solo chiesta male.
+
+4. Il nome del nodo e' SCRITTO, non dedotto.
+   config.yaml contiene node-name e node-ip. RKE2 fissa il nome alla PRIMA
+   registrazione e non lo cambia piu': su una macchina riusata, con l'hostname
+   rimasto da un'installazione precedente, il nodo entrerebbe con quel nome e ci
+   resterebbe — e il nome sbagliato si porta dietro tutto quello che a quel nome
+   e' agganciato. La verifica finale controlla che il nodo si sia registrato con
+   il nome dichiarato, e se non e' cosi' lo dice invece di lasciarlo passare.
+
+5. resolv-conf scritto in config.yaml.
+   Su Ubuntu /etc/resolv.conf e' il link allo stub di systemd-resolved e contiene
+   "nameserver 127.0.0.53". CoreDNS eredita quel file: dentro al suo pod quel
+   127.0.0.53 e' il pod stesso, quindi inoltra a se' stesso e ogni risoluzione
+   esterna va in timeout. RKE2 se ne accorge e ripiega su 8.8.8.8, che su una
+   rete aziendale chiusa non risponde comunque. Qui si punta al resolv.conf vero,
+   /run/systemd/resolve/resolv.conf, e solo se esiste davvero sul nodo.
+
+6. Controlla PRIMA chi tiene le porte 80 e 443.
+   Traefik e' un DaemonSet con hostPort 80 e 443: su una macchina che ha gia' un
+   nginx o un haproxy sopra il pod non parte, l'Ingress di Rancher resta senza
+   nessuno che lo serva e la console non risponde. Il ruolo si ferma prima,
+   dicendo quale processo tiene le porte.
+
+
+  CHE COSA VA SISTEMATO PRIMA DI LANCIARE
+
+  inventory.ini            l'host di [rancher_single], commentato. Il NOME di
+                           inventario e' node-name, cioe' il nome con cui il
+                           nodo entra nel cluster; ansible_host e' l'indirizzo a
+                           cui punta rancher_domain
+  rancher_domain           il nome con cui si aprira' la console
+  rancher_password         password di bootstrap dell'utente admin (min 12 car.)
+  rsn_tls_source           "secret" (i .pem forniti, come a 3 nodi) oppure
+                           "rancher" (Rancher si firma da solo con cert-manager,
+                           che il ruolo installa: nessun file da procurarsi, ma
+                           il browser avvisa)
+
+Il disco si prepara e si monta A MANO su /var/lib/rancher, come per tutto il
+resto di questo repository.
+
+
+  VARIANTI
+
+  # senza certificati propri
+  ansible-playbook playbooks/21-rancher-single.yml -e rsn_tls_source=rancher
+
+  # canal invece di calico: un chart in meno, e su un nodo solo il CNI non deve
+  # far passare niente fra macchine
+  ansible-playbook playbooks/21-rancher-single.yml -e '{"rsn_cni":[]}'
+
+  # non toccare /etc/hosts del control node (postazione senza sudo)
+  ansible-playbook playbooks/21-rancher-single.yml -e rsn_update_control_node_hosts=false
+
+  # versione RKE2 fissata invece dell'ultima
+  ansible-playbook playbooks/21-rancher-single.yml -e rsn_rke2_version=v1.33.11+rke2r1
+
+Per azzerare e ripartire, il playbook e' lo stesso di sempre:
+
+  ansible-playbook playbooks/99-azzera.yml --limit <nodo> -e azzera_conferma=AZZERA

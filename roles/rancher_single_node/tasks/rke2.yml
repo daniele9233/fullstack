@@ -1,0 +1,142 @@
+---
+# Installazione e avvio di RKE2. Rispetto ai 3 nodi manca tutto quello che
+# serviva a metterli in fila: niente token da leggere dal primo master, niente
+# barriera sulla promozione etcd, niente serial: 1. Un nodo che bootstrappa.
+
+- name: Verifica se rke2-server e' gia' attivo
+  systemd:
+    name: rke2-server
+  register: rsn_service_state
+  failed_when: false
+
+- name: Verifica se il binario RKE2 c'e' gia'
+  stat:
+    path: /usr/local/bin/rke2
+  register: rsn_rke2_bin
+
+# Lo script di get.rke2.io e' idempotente ma scarica ogni volta. Con il binario
+# gia' presente e nessuna versione richiesta, si salta.
+- name: Installa RKE2
+  shell: curl -sfL https://get.rke2.io | sh -
+  environment:
+    INSTALL_RKE2_VERSION: "{{ rsn_rke2_version }}"
+  when: >-
+    not (rsn_rke2_bin.stat.exists | default(false))
+    or rsn_rke2_version | length > 0
+
+# --- Configurazione ---------------------------------------------------------
+
+- name: Crea la directory di configurazione RKE2
+  file:
+    path: /etc/rancher/rke2
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# La riga resolv-conf si scrive solo se il file esiste davvero: su una macchina
+# senza systemd-resolved punterebbe nel vuoto e il kubelet non partirebbe.
+- name: Verifica se il resolv.conf di systemd-resolved esiste
+  stat:
+    path: "{{ rsn_resolv_conf }}"
+  register: rsn_resolv_stat
+
+- name: Prepara i valori calcolati della configurazione
+  set_fact:
+    rsn_resolv_conf_presente: "{{ rsn_resolv_stat.stat.exists | default(false) }}"
+    # canal si disabilita SOLO se il CNI e' un altro. Con rsn_cni vuoto il CNI
+    # e' proprio canal, e disabilitarlo lascerebbe il nodo senza rete.
+    rsn_disable_effettivo: >-
+      {{ (['rke2-canal'] if (rsn_cni | length > 0 and 'canal' not in rsn_cni) else [])
+         + (['rke2-ingress-nginx'] if rsn_disable_ingress_nginx | bool else []) }}
+
+- name: Scrivi /etc/rancher/rke2/config.yaml
+  template:
+    src: config.yaml.j2
+    dest: /etc/rancher/rke2/config.yaml
+    owner: root
+    group: root
+    mode: '0600'
+  register: rsn_config
+
+- name: Mostra la configurazione decisa
+  debug:
+    msg:
+      - "Nodo {{ rsn_node_name }} ({{ rsn_node_ip }}), cluster su un nodo solo"
+      - "CNI: {{ rsn_cni | join(', ') | default('canal (default RKE2)', true) }}"
+      - "Componenti disabilitati: {{ rsn_disable_effettivo | join(', ') | default('nessuno', true) }}"
+      - >-
+        resolv-conf:
+        {{ rsn_resolv_conf ~ ' (CoreDNS inoltrera li)' if rsn_resolv_conf_presente
+           else 'non scritto, ' ~ rsn_resolv_conf ~ ' non esiste su questo nodo' }}
+
+# --- Avvio ------------------------------------------------------------------
+# block/rescue: se rke2-server non parte, systemd dice solo "exited with error
+# code". Il motivo sta nel journal, che qui viene raccolto e stampato invece di
+# lasciare il fallimento cieco.
+
+- name: Avvio di rke2-server
+  block:
+    - name: Abilita e avvia rke2-server
+      systemd:
+        name: rke2-server
+        enabled: yes
+        state: started
+        daemon_reload: yes
+  rescue:
+    - name: Raccogli gli ultimi log di rke2-server
+      command: journalctl -u rke2-server --no-pager -n 80
+      register: rsn_journal
+      failed_when: false
+      changed_when: false
+
+    - name: Interrompi mostrando il motivo del fallimento
+      fail:
+        msg: |
+          Avvio di rke2-server fallito su {{ inventory_hostname }}.
+          Ultime righe del journal:
+          {{ rsn_journal.stdout }}
+
+# Il task sopra non riavvia un servizio gia' in esecuzione: senza questo, una
+# modifica alla configurazione su un nodo gia' attivo resterebbe senza effetto.
+- name: Riavvia rke2-server se la configurazione e' cambiata
+  systemd:
+    name: rke2-server
+    state: restarted
+  when:
+    - rsn_config is changed
+    - rsn_service_state.status.ActiveState | default('inactive') == 'active'
+
+# --- Attesa -----------------------------------------------------------------
+# Al primo avvio RKE2 scarica le immagini dei componenti di sistema: etcd,
+# l'API server, il CNI, CoreDNS. Su una rete lenta sono minuti.
+
+- name: Attendi che il nodo sia Ready
+  command: >-
+    /var/lib/rancher/rke2/bin/kubectl
+    --kubeconfig /etc/rancher/rke2/rke2.yaml
+    get node {{ rsn_node_name }}
+    -o jsonpath={.status.conditions[?(@.type=="Ready")].status}
+  register: rsn_node_ready
+  until: rsn_node_ready.rc == 0 and rsn_node_ready.stdout | trim == 'True'
+  retries: "{{ rsn_ready_retries }}"
+  delay: "{{ rsn_ready_delay }}"
+  changed_when: false
+  failed_when: false
+
+- name: Fermati se il nodo non diventa Ready
+  assert:
+    that:
+      - rsn_node_ready.rc == 0
+      - rsn_node_ready.stdout | trim == 'True'
+    fail_msg: >-
+      Il nodo {{ rsn_node_name }} non e' diventato Ready dopo
+      {{ rsn_ready_retries | int * rsn_ready_delay | int }} secondi.
+      Se il comando non trova il nodo, RKE2 lo ha registrato con un ALTRO nome:
+      guarda "kubectl get nodes" — succede sulle macchine riusate, e da qui in
+      poi questo ruolo scrive node-name proprio per impedirlo.
+      Se invece il nodo c'e' ma non e' Ready, e' il CNI: i pod di
+      {{ rsn_cni | join(', ') | default('canal', true) }} devono essere Running.
+      journalctl -u rke2-server -n 80
+    success_msg: >-
+      Nodo {{ rsn_node_name }} Ready.

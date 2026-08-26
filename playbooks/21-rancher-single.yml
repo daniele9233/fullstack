@@ -1,0 +1,85 @@
+---
+# RANCHER SU UN NODO SOLO: RKE2 + Traefik + Rancher su una macchina sola.
+#
+#   ansible-playbook playbooks/21-rancher-single.yml
+#
+# E' l'ALTERNATIVA a playbooks/20-rancher.yml, non un suo complemento: quello
+# installa il cluster a 3 master e ci aggancia un cluster downstream con
+# manager, worker e nodi ingress. Questo mette tutto su un host solo, senza
+# cluster downstream. NON vanno lanciati e non vanno tenuti insieme: sarebbero
+# due Rancher che si contendono lo stesso dominio.
+#
+# Per questo site.yml importa il 20 e non il 21: chi vuole il nodo singolo lo
+# lancia da solo.
+#
+# CHE COSA SERVE PRIMA:
+#
+#   inventory.ini    un host in [rancher_single], con ansible_host
+#   rancher_domain   il nome con cui si aprira' la console
+#   rancher_password la password di bootstrap dell'utente admin
+#
+# E BASTA. In particolare NON serve compilare /etc/hosts sulle macchine: il
+# nodo e' uno, la riga e' una, e la scrive il ruolo — sul nodo, dentro ai pod
+# che ne hanno bisogno (hostAliases) e sul control node Ansible. Vedi
+# roles/rancher_single_node/tasks/nomi.yml.
+#
+# IL DISCO si prepara e si monta A MANO su /var/lib/rancher, come in tutto il
+# resto di questo repository: create_disk esiste ma non lo invoca nessuno.
+#
+# VARIANTI UTILI
+#
+#   # senza certificati propri: Rancher si firma da solo (il browser avvisa)
+#   ansible-playbook playbooks/21-rancher-single.yml -e rsn_tls_source=rancher
+#
+#   # canal invece di calico: un chart in meno, e su un nodo solo il CNI non
+#   # deve far passare niente fra macchine
+#   ansible-playbook playbooks/21-rancher-single.yml -e '{"rsn_cni":[]}'
+#
+#   # non toccare /etc/hosts del control node (postazione senza sudo)
+#   ansible-playbook playbooks/21-rancher-single.yml -e rsn_update_control_node_hosts=false
+#
+#   # versione RKE2 fissata invece dell'ultima
+#   ansible-playbook playbooks/21-rancher-single.yml -e rsn_rke2_version=v1.33.11+rke2r1
+
+- name: Prepara il nodo
+  hosts: "{{ rsn_group | default('rancher_single') }}"
+  become: yes
+  gather_facts: no
+  roles:
+    - role: host_prep
+
+
+# gather_facts: yes serve per la distribuzione rilevata e per l'indirizzo di
+# ripiego quando ansible_host non e' dichiarato.
+- name: RKE2 e Rancher su un nodo solo
+  hosts: "{{ rsn_group | default('rancher_single') }}"
+  become: yes
+  gather_facts: yes
+  roles:
+    # RKE2, kubectl, helm, la risoluzione del nome. Si ferma prima di Rancher.
+    - role: rancher_single_node
+
+    # Lo STESSO ruolo dei 3 nodi. Non ne esiste una copia per il nodo singolo:
+    # sarebbero due ingress da tenere allineati. rke2_disable gli viene passato
+    # calcolato dal ruolo qui sopra, perche' traefik_install si ferma se
+    # rke2-ingress-nginx non risulta disabilitato — e ha ragione: due ingress
+    # controller che vogliono entrambi le porte 80 e 443 non possono coesistere.
+    - role: traefik_install
+      vars:
+        rke2_disable: "{{ rsn_disable_effettivo }}"
+
+  post_tasks:
+    - name: Riepilogo
+      debug:
+        msg:
+          - "Console: https://{{ rancher_domain }}  (utente admin, password in rancher_password)"
+          - "Nodo: {{ rsn_node_name }} ({{ rsn_node_ip }}) — un solo nodo, nessun cluster downstream"
+          - "CNI: {{ rsn_cni | join(', ') | default('canal (default RKE2)', true) }} — Ingress: Traefik, IngressClass {{ rsn_ingress_class }}"
+          - "Certificato: {{ 'i .pem forniti (tls-rancher-ingress)' if rsn_tls_source == 'secret' else 'autofirmato da Rancher via cert-manager — il browser avvisera' }}"
+          - "kubectl e helm sono sul nodo, con KUBECONFIG gia' nel profilo di root: entra in ssh e usali."
+          - >-
+            /etc/hosts: la riga "{{ rsn_node_ip }} {{ rancher_domain }}" e' stata scritta
+            sul nodo{{ ' e sul control node' if rsn_update_control_node_hosts | bool else '' }}.
+            Se apri il browser da un'ALTRA macchina, quella riga serve anche li':
+            e' l'unica cosa da fare a mano.
+          - "Dentro ai pod il nome lo risolvono gli hostAliases sugli agent: nessun DNS da configurare."

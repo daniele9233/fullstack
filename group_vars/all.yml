@@ -1201,3 +1201,88 @@ logging_deploy_scripts: true
 # Verifica finale in sola lettura: rilegge template, alias e indici di scrittura
 # da Elasticsearch invece di fidarsi delle risposte alle PUT.
 logging_verify: true
+
+
+# ===========================================================================
+# RANCHER SU UN NODO SOLO  ->  gruppo [rancher_single], ruolo rancher_single_node
+# ===========================================================================
+# RKE2 + Traefik + Rancher su una macchina sola.
+#
+#   ansible-playbook -i inventory.ini playbooks/21-rancher-single.yml
+#
+# E' L'ALTERNATIVA a playbooks/20-rancher.yml (3 master + cluster downstream),
+# non un suo complemento: due Rancher sullo stesso rancher_domain non possono
+# stare su insieme. site.yml importa il 20; il nodo singolo si lancia da solo.
+#
+# CONDIVIDE con l'installazione a 3 nodi rancher_domain, rancher_password,
+# rancher_version, helm_version e i .pem dei certificati, che restano dichiarati
+# in cima a questo file: sullo stesso dominio non esistono due verita'.
+#
+# NIENTE /etc/hosts DA COMPILARE SULLE MACCHINE. A 3 nodi ogni host deve
+# risolvere il dominio e l'elenco lo si mantiene a mano. Qui il nodo e' uno, la
+# riga e' una, e la scrive il ruolo in tre posti:
+#   - sul nodo                (/etc/hosts, una riga)
+#   - dentro ai pod           (hostAliases su cattle-cluster-agent e fleet-agent:
+#                              e' l'unico posto che /etc/hosts del nodo NON copre)
+#   - sul control node        (rsn_update_control_node_hosts, serve root li')
+# L'unica cosa che resta a mano e' la stessa riga sulla postazione da cui si
+# apre il browser, se non e' il control node.
+
+rsn_group: "rancher_single"
+
+# --- Identita' del nodo -----------------------------------------------------
+# node-name viene SCRITTO in config.yaml invece di lasciare che RKE2 usi
+# l'hostname. RKE2 fissa il nome del nodo alla prima registrazione e non lo
+# cambia piu': su una macchina riusata, con l'hostname rimasto da
+# un'installazione precedente, il nodo entra con quel nome e ci resta — e il
+# nome sbagliato si porta dietro tutto quello che a quel nome e' agganciato.
+rsn_node_name: "{{ inventory_hostname }}"
+rsn_node_ip: "{{ ansible_host | default(ansible_default_ipv4.address | default(inventory_hostname)) }}"
+
+# --- Risoluzione del nome ---------------------------------------------------
+rsn_manage_node_hosts: true
+rsn_update_control_node_hosts: true
+rsn_patch_agent_hostaliases: true
+
+# Ubuntu mette di serie "127.0.1.1 <hostname>": su un nodo Kubernetes fa
+# risolvere il nome della macchina a un loopback, e chi risolve il proprio nome
+# per annunciarsi si annuncia li'.
+rsn_remove_127_0_1_1: true
+
+# --- RKE2 -------------------------------------------------------------------
+# Vuoto = ultima disponibile da get.rke2.io. Valorizzalo (es. "v1.33.11+rke2r1")
+# per rendere le installazioni ripetibili.
+rsn_rke2_version: ""
+
+# Lo stesso CNI dei 3 nodi, per non avere due standard. Su UN NODO SOLO la
+# scelta conta molto meno: non c'e' traffico fra nodi, quindi non c'e' overlay
+# VXLAN da far passare in mezzo a un firewall — che e' il modo in cui Calico si
+# rompe piu' spesso. Lista VUOTA = default RKE2 (canal), un chart in meno.
+rsn_cni:
+  - calico
+rsn_disable_ingress_nginx: true
+
+# Il resolv.conf VERO, non lo stub 127.0.0.53 di systemd-resolved a cui punta
+# /etc/resolv.conf su Ubuntu. CoreDNS eredita questo file: con lo stub
+# proverebbe a inoltrare le query a se' stesso dentro al proprio pod e ogni
+# risoluzione esterna andrebbe in timeout. La riga viene scritta solo se il file
+# esiste davvero sul nodo.
+rsn_resolv_conf: "/run/systemd/resolve/resolv.conf"
+
+# --- Rancher ----------------------------------------------------------------
+# Da dove viene il certificato del dominio:
+#   "secret"   i .pem in roles/master1_helm_cert_manager_install/files/, come
+#              nell'installazione a 3 nodi
+#   "rancher"  Rancher si genera una CA sua e firma da solo. Nessun file da
+#              procurarsi, ma serve cert-manager, che il ruolo installa. Il
+#              browser mostrera' un avviso di certificato non fidato.
+rsn_tls_source: "secret"
+
+# UNA replica. Il chart ne vuole 3 di default e le tiene su nodi diversi
+# (anti-affinity): su un nodo solo due resterebbero Pending per sempre e il
+# deployment non diventerebbe mai pronto. E' l'errore che fa sembrare rotta
+# un'installazione che invece e' stata solo chiesta male.
+rsn_rancher_replicas: 1
+
+rsn_rancher_wait_timeout: 900
+rsn_verify: true

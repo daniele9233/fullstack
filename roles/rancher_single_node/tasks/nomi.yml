@@ -1,0 +1,105 @@
+---
+# LA RISOLUZIONE DI rancher_domain, senza elenchi di host da mantenere a mano.
+#
+# Nell'installazione a 3 nodi il ruolo update_hosts_file scrive il dominio in
+# /etc/hosts di OGNI macchina, e chi aggiunge un nodo deve ricordarsi di
+# rifarlo. Qui il nodo e' uno: la riga da scrivere e' una, e i posti in cui
+# serve sono tre — ma due li fa il ruolo e il terzo e' il control node, cioe'
+# l'unica macchina che una persona guarda davvero.
+#
+#   1. SUL NODO. Serve a helm e kubectl quando parlano dell'Ingress, e a
+#      qualunque cosa sul nodo chiami il dominio. Una riga.
+#
+#   2. DENTRO AI POD. Questo /etc/hosts NON lo copre: i pod hanno il proprio
+#      resolver (CoreDNS), che su una rete chiusa il dominio non lo trova da
+#      nessuna parte. Ci pensano gli hostAliases in agenti.yml, dopo che
+#      Rancher e' su e i deployment degli agent esistono.
+#
+#   3. SUL CONTROL NODE. E' da li' che si apre il browser e da li' che gira
+#      Ansible. Con rsn_update_control_node_hosts (default true) la riga la
+#      scrive il ruolo; altrimenti viene stampata nel riepilogo, da incollare.
+#
+# NIENTE ELENCO DI NODI. Le righe scritte sono marcate con rsn_hosts_marker,
+# quindi cambiare indirizzo le RISCRIVE invece di aggiungerne un'altra sotto —
+# che e' il modo in cui un /etc/hosts diventa illeggibile e poi sbagliato.
+
+# --- Sul nodo ---------------------------------------------------------------
+
+# 127.0.1.1 e' la riga che Ubuntu mette di serie con dentro l'hostname della
+# macchina. Su un nodo Kubernetes fa risolvere il nome del nodo a un loopback:
+# chi risolve il proprio nome per annunciarsi si annuncia su 127.0.1.1, e il
+# guasto che ne segue parla d'altro.
+- name: Togli la riga 127.0.1.1 da /etc/hosts
+  lineinfile:
+    path: /etc/hosts
+    regexp: '^127\.0\.1\.1\s'
+    state: absent
+    backup: yes
+  when: rsn_remove_127_0_1_1 | bool
+
+- name: "Scrivi {{ rancher_domain }} in /etc/hosts sul nodo"
+  blockinfile:
+    path: /etc/hosts
+    marker: "# {mark} {{ rsn_hosts_marker }}"
+    block: |
+      {{ rsn_node_ip }} {{ rancher_domain }} {{ rsn_node_name }}
+    backup: yes
+  when: rsn_manage_node_hosts | bool
+
+# --- Sul control node -------------------------------------------------------
+# delegate_to: localhost e become: yes, perche' /etc/hosts la' e' di root come
+# ovunque. Se il control node e' la macchina da cui si apre anche il browser —
+# ed e' il caso quasi sempre — questa riga e' l'ultima che serve a chiunque.
+
+- name: "Scrivi {{ rancher_domain }} in /etc/hosts sul control node"
+  blockinfile:
+    path: /etc/hosts
+    marker: "# {mark} {{ rsn_hosts_marker }} ({{ inventory_hostname }})"
+    block: |
+      {{ rsn_node_ip }} {{ rancher_domain }}
+    backup: yes
+  delegate_to: localhost
+  become: yes
+  # Il control node puo' non essere amministrabile (una postazione senza sudo,
+  # una pipeline). In quel caso non e' un guasto: la riga viene stampata nel
+  # riepilogo e la incolla chi puo'.
+  failed_when: false
+  register: rsn_hosts_controller
+  when: rsn_update_control_node_hosts | bool
+
+- name: Dillo se sul control node non si e' potuto scrivere
+  debug:
+    msg: >-
+      Non ho potuto scrivere /etc/hosts sul control node
+      ({{ rsn_hosts_controller.msg | default('motivo non riportato') }}).
+      Aggiungi a mano questa riga sulla macchina da cui aprirai il browser:
+      "{{ rsn_node_ip }} {{ rancher_domain }}"
+  when:
+    - rsn_update_control_node_hosts | bool
+    - rsn_hosts_controller.failed | default(false)
+
+# --- Verifica ---------------------------------------------------------------
+# Dal nodo, e non con ping: l'ICMP fra le macchine e' spesso chiuso e un ping
+# che non passa non dice niente sul fatto che il nome risolva. Qui si guarda
+# solo la risoluzione, che e' l'unica cosa che questo file deve garantire.
+
+- name: Verifica che il nodo risolva il dominio
+  command: "getent hosts {{ rancher_domain }}"
+  register: rsn_getent
+  changed_when: false
+  failed_when: false
+
+- name: Fermati se il dominio non risolve sul nodo
+  assert:
+    that:
+      - rsn_getent.rc == 0
+      - rsn_node_ip in rsn_getent.stdout
+    fail_msg: >-
+      Su {{ inventory_hostname }} "{{ rancher_domain }}" risolve a
+      "{{ rsn_getent.stdout | default('niente') | trim }}" invece che a
+      {{ rsn_node_ip }}.
+      {{ 'Con rsn_manage_node_hosts=false la riga in /etc/hosts non la scrive il ruolo: mettila, o correggi il DNS.'
+         if not (rsn_manage_node_hosts | bool)
+         else 'La riga in /etc/hosts c e, quindi qualcosa la precede: un DNS che risponde per quel nome con un altro indirizzo, o unaltra riga piu su nel file.' }}
+    success_msg: >-
+      {{ rancher_domain }} -> {{ rsn_node_ip }} sul nodo.

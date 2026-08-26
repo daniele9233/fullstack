@@ -1,0 +1,87 @@
+---
+# kubectl e helm sul nodo. Stessa cosa che fanno master1_kubectl e la prima
+# meta' di master1_helm_cert_manager_install, con due differenze: si salta
+# quello che c'e' gia', e KUBECONFIG viene messo nel profilo di root — cosi'
+# entrando in ssh "kubectl get nodes" funziona senza esportare niente, che e'
+# la prima cosa che si prova quando qualcosa non va.
+
+- name: Copia kubectl in /usr/local/bin
+  copy:
+    remote_src: yes
+    src: /var/lib/rancher/rke2/bin/kubectl
+    dest: /usr/local/bin/kubectl
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Crea /root/.kube
+  file:
+    path: "{{ rsn_kubeconfig | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Copia il kubeconfig di RKE2
+  copy:
+    remote_src: yes
+    src: /etc/rancher/rke2/rke2.yaml
+    dest: "{{ rsn_kubeconfig }}"
+    owner: root
+    group: root
+    mode: '0600'
+
+# Senza questo, in una sessione ssh kubectl cerca ~/.kube/config e lo trova —
+# ma helm no, e i comandi helm falliscono con "Kubernetes cluster unreachable".
+- name: Metti KUBECONFIG e PATH nel profilo di root
+  blockinfile:
+    path: /root/.bashrc
+    marker: "# {mark} {{ rsn_hosts_marker }}"
+    block: |
+      export KUBECONFIG={{ rsn_kubeconfig }}
+      export PATH=$PATH:/var/lib/rancher/rke2/bin
+    create: yes
+
+# --- helm -------------------------------------------------------------------
+
+- name: Verifica se helm c'e' gia'
+  command: helm version --short
+  register: rsn_helm_ver
+  changed_when: false
+  failed_when: false
+  when: rsn_install_helm | bool
+
+- name: Installa helm
+  block:
+    - name: Scarica helm
+      get_url:
+        url: "https://get.helm.sh/helm-{{ helm_version }}-linux-amd64.tar.gz"
+        dest: /tmp/helm.tar.gz
+        mode: '0600'
+
+    - name: Scompatta helm
+      unarchive:
+        src: /tmp/helm.tar.gz
+        dest: /tmp
+        remote_src: true
+
+    - name: Metti helm in /usr/local/bin
+      copy:
+        remote_src: yes
+        src: /tmp/linux-amd64/helm
+        dest: /usr/local/bin/helm
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Togli i file di transito
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/helm.tar.gz
+        - /tmp/linux-amd64
+  when:
+    - rsn_install_helm | bool
+    # Manca del tutto, oppure c'e' ma non e' la versione dichiarata.
+    - (rsn_helm_ver.rc | default(1) != 0) or (helm_version not in (rsn_helm_ver.stdout | default('')))

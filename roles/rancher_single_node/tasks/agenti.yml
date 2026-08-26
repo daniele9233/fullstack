@@ -1,0 +1,90 @@
+---
+# IL DOMINIO RANCHER DENTRO AI POD.
+#
+# /etc/hosts del nodo non arriva qui: i pod hanno un loro resolver (CoreDNS), e
+# su una rete chiusa rancher_domain non esiste in nessun DNS. Gli agent di
+# Rancher — cattle-cluster-agent e fleet-agent — si collegano a Rancher PER NOME
+# (CATTLE_SERVER=https://<rancher_domain>), quindi senza questo restano in
+# CrashLoopBackOff con "no such host" e il cluster "local" resta Unavailable
+# nella console, pur essendo il cluster su cui Rancher stesso gira.
+#
+# La cura sono gli hostAliases: una riga di /etc/hosts iniettata nel pod dal
+# kubelet. E' la stessa cosa che il ruolo kubectl_setup fa sui manager del
+# cluster downstream, qui applicata dove serve su un nodo solo.
+#
+# Su una rete dove rancher_domain sta in un DNS vero non serve niente di tutto
+# questo: rsn_patch_agent_hostaliases a false.
+
+# I deployment nascono dopo che Rancher e' su, e non tutti insieme: fleet-agent
+# arriva quando Fleet ha finito di installarsi. Si aspetta, senza far fallire
+# niente se uno dei due non compare — su alcune versioni di Rancher il local
+# cluster non ha cattle-cluster-agent, e non e' un guasto.
+- name: Attendi che i deployment degli agent compaiano
+  command: >-
+    kubectl -n {{ item.namespace }} get deploy {{ item.nome }} -o name
+  environment:
+    KUBECONFIG: "{{ rsn_kubeconfig }}"
+  register: rsn_agent_presenti
+  until: rsn_agent_presenti.rc == 0
+  retries: "{{ rsn_agent_wait_retries }}"
+  delay: "{{ rsn_agent_wait_delay }}"
+  changed_when: false
+  failed_when: false
+  loop: "{{ rsn_agent_deployments }}"
+  loop_control:
+    label: "{{ item.namespace }}/{{ item.nome }}"
+
+# Il patch e' strategico e idempotente: riapplicato con lo stesso contenuto non
+# fa ripartire il pod. Per questo si confronta prima quello che c'e' gia',
+# invece di patchare a ogni esecuzione e far girare un rollout per niente.
+- name: Leggi gli hostAliases gia' presenti
+  command: >-
+    kubectl -n {{ item.item.namespace }} get deploy {{ item.item.nome }}
+    -o jsonpath={.spec.template.spec.hostAliases}
+  environment:
+    KUBECONFIG: "{{ rsn_kubeconfig }}"
+  register: rsn_alias_attuali
+  changed_when: false
+  failed_when: false
+  loop: "{{ rsn_agent_presenti.results }}"
+  loop_control:
+    label: "{{ item.item.namespace }}/{{ item.item.nome }}"
+  when: item.rc == 0
+
+- name: "Aggiungi {{ rancher_domain }} agli hostAliases degli agent"
+  command: >-
+    kubectl -n {{ item.item.item.namespace }} patch deploy {{ item.item.item.nome }}
+    --type=merge
+    -p {{ corpo | to_json | quote }}
+  environment:
+    KUBECONFIG: "{{ rsn_kubeconfig }}"
+  vars:
+    corpo:
+      spec:
+        template:
+          spec:
+            hostAliases:
+              - ip: "{{ rsn_node_ip }}"
+                hostnames:
+                  - "{{ rancher_domain }}"
+  loop: "{{ rsn_alias_attuali.results }}"
+  loop_control:
+    label: "{{ item.item.item.namespace }}/{{ item.item.item.nome }}"
+  when:
+    - not (item.skipped | default(false))
+    - item.rc | default(1) == 0
+    # Gia' a posto: ci sono sia l'indirizzo sia il nome. Ripatchare farebbe
+    # ripartire l'agent a ogni esecuzione del playbook.
+    - not (rsn_node_ip in (item.stdout | default('')) and rancher_domain in (item.stdout | default('')))
+  register: rsn_alias_patch
+
+- name: Riepilogo degli agent
+  debug:
+    msg: >-
+      {{ item.item.namespace }}/{{ item.item.nome }}:
+      {{ 'non presente su questa versione di Rancher, niente da fare'
+         if item.rc != 0
+         else 'hostAliases ' ~ rancher_domain ~ ' -> ' ~ rsn_node_ip ~ ' a posto' }}
+  loop: "{{ rsn_agent_presenti.results }}"
+  loop_control:
+    label: "{{ item.item.namespace }}/{{ item.item.nome }}"
