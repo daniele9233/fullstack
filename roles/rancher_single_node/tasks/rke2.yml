@@ -107,9 +107,113 @@
     - rsn_config is changed
     - rsn_service_state.status.ActiveState | default('inactive') == 'active'
 
-# --- Attesa -----------------------------------------------------------------
-# Al primo avvio RKE2 scarica le immagini dei componenti di sistema: etcd,
-# l'API server, il CNI, CoreDNS. Su una rete lenta sono minuti.
+# --- Attesa, IN TRE TAPPE ---------------------------------------------------
+#
+# Prima era un'attesa sola: dieci minuti a interrogare il nodo, e alla fine un
+# messaggio che elencava le cause possibili. Inutile — quando fallisce, chi
+# guarda vuole sapere QUALE delle tre cose non e' successa, e vederne la prova.
+#
+#   1. il servizio resta su?     se no, il motivo e' nel journal
+#   2. l'API risponde?           se no, o etcd non forma quorum o l'API server
+#                                non parte: sempre journal, ma un'altra parte
+#   3. il nodo e' Ready?         qui l'API c'e' gia', quindi e' il kubelet o il
+#                                CNI, e si guardano i pod
+#
+# Ogni tappa ha la sua attesa, il suo messaggio e la sua diagnosi raccolta sul
+# posto. Al primo avvio RKE2 scarica le immagini dei componenti di sistema, per
+# questo i minuti sono tanti: ma se il servizio muore, la tappa 1 se ne accorge
+# in un minuto invece che in dieci.
+
+# --- 1. Il servizio resta su ------------------------------------------------
+# rke2-server puo' partire e morire subito dopo: systemd lo riavvia, e a un
+# controllo istantaneo sembra sempre "activating". Si guarda per un minuto.
+
+- name: Verifica che rke2-server resti attivo
+  command: systemctl is-active rke2-server
+  register: rsn_attivo
+  until: rsn_attivo.stdout | trim == 'active'
+  retries: 12
+  delay: 5
+  changed_when: false
+  failed_when: false
+
+- name: Raccogli il journal se il servizio non regge
+  command: journalctl -u rke2-server --no-pager -n 60
+  register: rsn_journal_servizio
+  changed_when: false
+  failed_when: false
+  when: rsn_attivo.stdout | default('') | trim != 'active'
+
+- name: Fermati se rke2-server non resta attivo
+  fail:
+    msg: |
+      rke2-server su {{ inventory_hostname }} non resta attivo
+      (systemctl is-active dice "{{ rsn_attivo.stdout | default('niente') | trim }}").
+
+      Ultime righe del journal:
+      {{ rsn_journal_servizio.stdout | default('journal non leggibile') }}
+  when: rsn_attivo.stdout | default('') | trim != 'active'
+
+# --- 2. L'API server risponde -----------------------------------------------
+# E' qui che si vede lo stato lasciato da un'installazione precedente: con un
+# datastore etcd di un cluster a piu' nodi, etcd cerca gli altri membri, non
+# trova il quorum e l'API server non parte MAI. Il servizio intanto risulta
+# attivo, quindi la tappa 1 passa e questa no.
+
+- name: Attendi che l'API server risponda
+  command: >-
+    /var/lib/rancher/rke2/bin/kubectl
+    --kubeconfig /etc/rancher/rke2/rke2.yaml
+    get --raw /readyz
+  register: rsn_api
+  until: rsn_api.rc == 0
+  retries: "{{ rsn_api_retries }}"
+  delay: "{{ rsn_api_delay }}"
+  changed_when: false
+  failed_when: false
+
+- name: Raccogli la diagnosi se l'API non risponde
+  block:
+    - name: Journal di rke2-server
+      command: journalctl -u rke2-server --no-pager -n 80
+      register: rsn_journal_api
+      changed_when: false
+      failed_when: false
+
+    - name: Guarda se c'e' un datastore etcd precedente
+      stat:
+        path: /var/lib/rancher/rke2/server/db/etcd
+      register: rsn_etcd_dir
+  when: rsn_api.rc | default(1) != 0
+
+- name: Fermati se l'API server non risponde
+  fail:
+    msg: |
+      L'API server di {{ inventory_hostname }} non risponde dopo
+      {{ rsn_api_retries | int * rsn_api_delay | int }} secondi. Il servizio e'
+      attivo, quindi non e' un problema di avvio: e' quello che c'e' dentro.
+
+      Errore di kubectl:
+      {{ rsn_api.stderr | default(rsn_api.stdout) | default('') | trim }}
+
+      {% if rsn_etcd_dir.stat.exists | default(false) %}
+      SU QUESTA MACCHINA C'E' GIA' UN DATASTORE ETCD
+      (/var/lib/rancher/rke2/server/db/etcd). Se viene da un cluster a piu'
+      nodi, etcd sta cercando gli altri membri, non trova il quorum e l'API
+      server non partira' MAI. Una macchina che e' gia' stata master di un
+      altro cluster va azzerata prima:
+
+        ansible-playbook playbooks/99-azzera.yml \
+          --limit {{ inventory_hostname }} -e azzera_conferma=AZZERA
+
+      {% endif %}
+      Ultime righe del journal:
+      {{ rsn_journal_api.stdout | default('journal non leggibile') }}
+  when: rsn_api.rc | default(1) != 0
+
+# --- 3. Il nodo diventa Ready -----------------------------------------------
+# Da qui in poi l'API c'e': se il nodo non e' Ready, il motivo e' il kubelet o
+# il CNI, e i pod lo dicono.
 
 - name: Attendi che il nodo sia Ready
   command: >-
@@ -124,19 +228,59 @@
   changed_when: false
   failed_when: false
 
+- name: Raccogli la diagnosi se il nodo non e' Ready
+  block:
+    - name: Quali nodi vede il cluster
+      command: >-
+        /var/lib/rancher/rke2/bin/kubectl
+        --kubeconfig /etc/rancher/rke2/rke2.yaml get nodes -o wide
+      register: rsn_nodi_visti
+      changed_when: false
+      failed_when: false
+
+    - name: Quali pod di sistema non stanno girando
+      shell: >-
+        set -o pipefail;
+        /var/lib/rancher/rke2/bin/kubectl
+        --kubeconfig /etc/rancher/rke2/rke2.yaml get pods -A -o wide
+        | grep -Ev '\s(Running|Completed)\s' || true
+      args:
+        executable: /bin/bash
+      register: rsn_pod_ko
+      changed_when: false
+      failed_when: false
+  when: not (rsn_node_ready.rc | default(1) == 0 and rsn_node_ready.stdout | default('') | trim == 'True')
+
 - name: Fermati se il nodo non diventa Ready
-  assert:
-    that:
-      - rsn_node_ready.rc == 0
-      - rsn_node_ready.stdout | trim == 'True'
-    fail_msg: >-
-      Il nodo {{ rsn_node_name }} non e' diventato Ready dopo
+  fail:
+    msg: |
+      Il nodo {{ rsn_node_name }} non e' Ready dopo
       {{ rsn_ready_retries | int * rsn_ready_delay | int }} secondi.
-      Se il comando non trova il nodo, RKE2 lo ha registrato con un ALTRO nome:
-      guarda "kubectl get nodes" — succede sulle macchine riusate, e da qui in
-      poi questo ruolo scrive node-name proprio per impedirlo.
-      Se invece il nodo c'e' ma non e' Ready, e' il CNI: i pod di
-      {{ rsn_cni | join(', ') | default('canal', true) }} devono essere Running.
-      journalctl -u rke2-server -n 80
-    success_msg: >-
-      Nodo {{ rsn_node_name }} Ready.
+      L'API server risponde, quindi il cluster c'e': manca il nodo.
+
+      Errore di kubectl:
+      {{ rsn_node_ready.stderr | default('') | trim }}
+
+      Nodi che il cluster vede:
+      {{ rsn_nodi_visti.stdout | default('') }}
+
+      {% if rsn_node_name not in (rsn_nodi_visti.stdout | default('')) %}
+      IL NODO "{{ rsn_node_name }}" NON C'E'. RKE2 lo ha registrato con un
+      altro nome — succede sulle macchine riusate, dove l'hostname e' quello
+      di un'installazione precedente. node-name in config.yaml vale solo alla
+      PRIMA registrazione: su un nodo gia' entrato non lo rinomina. Si azzera
+      e si rifa' entrare:
+
+        ansible-playbook playbooks/99-azzera.yml \
+          --limit {{ inventory_hostname }} -e azzera_conferma=AZZERA
+      {% else %}
+      Il nodo c'e' ma non e' Ready: e' il CNI o il kubelet. Pod che non stanno
+      girando:
+      {{ rsn_pod_ko.stdout | default('nessuno') }}
+      {% endif %}
+  when: not (rsn_node_ready.rc | default(1) == 0 and rsn_node_ready.stdout | default('') | trim == 'True')
+
+- name: Nodo pronto
+  debug:
+    msg: >-
+      Nodo {{ rsn_node_name }} Ready, API server su, servizio attivo.

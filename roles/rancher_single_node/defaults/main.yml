@@ -130,10 +130,36 @@ rsn_extra_tls_san: []
 
 rsn_write_kubeconfig_mode: "0644"
 
-# Attesa che il nodo sia Ready dopo l'avvio. Al primo avvio RKE2 deve scaricare
-# le immagini dei componenti di sistema: qui i minuti sono 10.
+# L'avvio si aspetta in TRE tappe, ognuna con la sua diagnosi: il servizio resta
+# su, l'API server risponde, il nodo diventa Ready. Un'attesa sola non
+# distingueva "rke2 e' morto" da "il CNI non parte", e falliva dopo dieci minuti
+# elencando le cause possibili invece di mostrare quella vera.
+#
+# L'API server e' la tappa in cui si vede lo stato lasciato da un'installazione
+# precedente: con un datastore etcd di un cluster a piu' nodi, etcd cerca gli
+# altri membri, non trova il quorum e l'API non parte mai — mentre il servizio
+# risulta attivo.
+rsn_api_retries: 60
+rsn_api_delay: 5
+
+# Attesa che il nodo sia Ready. Al primo avvio RKE2 deve scaricare le immagini
+# dei componenti di sistema: qui i minuti sono 10.
 rsn_ready_retries: 60
 rsn_ready_delay: 10
+
+# true = il ruolo si RIFIUTA di installare su una macchina che ha gia' uno stato
+# RKE2 di un'altra installazione, invece di provarci e fallire mezz'ora dopo.
+#
+# E' il controllo che in questo repository esiste gia' per Kafka (un nodo con
+# dati o con un node.id diverso non si riformatta) e per Elasticsearch. Qui
+# serve per la stessa ragione: una macchina che e' stata master di un cluster a
+# 3 nodi conserva il datastore etcd di QUEL cluster, e riaccendendo rke2-server
+# etcd si mette a cercare gli altri due membri.
+#
+# Lo stato precedente viene ignorato quando l'API server risponde gia': quello
+# non e' un residuo, e' l'installazione di questo stesso nodo, e rilanciare il
+# playbook su un nodo che funziona deve restare innocuo.
+rsn_pretendi_nodo_pulito: true
 
 
 # ===========================================================================

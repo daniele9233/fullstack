@@ -99,9 +99,81 @@
       i pacchetti non tornano.
   when: ansible_distribution | default('') != 'Ubuntu'
 
+# --- Stato lasciato da un'installazione precedente --------------------------
+#
+# QUESTO E' IL CONTROLLO CHE MANCAVA. Una macchina che e' gia' stata master di
+# un cluster a 3 nodi conserva in /var/lib/rancher/rke2/server/db/etcd il
+# datastore di QUEL cluster. Riaccendendo rke2-server, etcd si mette a cercare
+# gli altri due membri: non li trova, non forma il quorum, e l'API server non
+# parte MAI. Il servizio intanto risulta attivo, quindi da fuori sembra tutto a
+# posto e l'installazione muore mezz'ora dopo, aspettando un nodo che non
+# diventera' Ready.
+#
+# E' lo stesso controllo che kafka_cluster fa prima di riformattare un nodo con
+# dei dati sopra, e per la stessa ragione: qui non si distrugge niente, ci si
+# ferma prima.
+#
+# Se l'API risponde gia', lo stato non e' un residuo: e' questo stesso nodo che
+# funziona, e rilanciare il playbook deve restare innocuo.
+
+- name: Guarda se c'e' gia' un datastore etcd sul nodo
+  stat:
+    path: /var/lib/rancher/rke2/server/db/etcd
+  register: rsn_etcd_precedente
+
+# Sempre, non solo quando c'e' etcd: serve anche piu' sotto per sapere se le
+# porte 80 e 443 sono di un ingress NOSTRO gia' in esercizio.
+- name: Verifica se l'API server risponde gia'
+  command: >-
+    /var/lib/rancher/rke2/bin/kubectl
+    --kubeconfig /etc/rancher/rke2/rke2.yaml get --raw /readyz
+  register: rsn_api_gia_su
+  changed_when: false
+  failed_when: false
+
+- name: Fermati se il nodo porta lo stato di un'installazione precedente
+  fail:
+    msg: |
+      {{ inventory_hostname }} ha gia' un datastore etcd in
+      /var/lib/rancher/rke2/server/db/etcd, e l'API server non risponde.
+
+      E' lo stato di un'installazione RKE2 precedente. Se quella macchina e'
+      stata master di un cluster a piu' nodi, riaccendendo rke2-server etcd si
+      mette a cercare gli altri membri: non li trova, non forma il quorum, e
+      l'API server non parte mai. Il servizio resta "active" e l'installazione
+      muore molto piu' avanti, aspettando un nodo che non diventera' Ready.
+
+      La macchina va azzerata prima:
+
+        ansible-playbook playbooks/99-azzera.yml \
+          --limit {{ inventory_hostname }} -e azzera_conferma=AZZERA
+
+      (dalla dashboard: Operazioni distruttive -> Azzera il nodo, con il filtro
+      su {{ inventory_hostname }}).
+
+      Se sei sicuro che quello stato sia di un nodo singolo sano e vuoi provarci
+      lo stesso, rilancia con -e rsn_pretendi_nodo_pulito=false.
+  when:
+    - rsn_pretendi_nodo_pulito | bool
+    - rsn_etcd_precedente.stat.exists | default(false)
+    - rsn_api_gia_su.rc | default(1) != 0
+
+- name: Dillo se il nodo era gia' installato e funziona
+  debug:
+    msg: >-
+      {{ inventory_hostname }} ha gia' un cluster RKE2 attivo e l'API risponde:
+      il playbook prosegue in riconciliazione, non reinstalla niente da capo.
+  when:
+    - rsn_etcd_precedente.stat.exists | default(false)
+    - rsn_api_gia_su.rc | default(1) == 0
+
 # Traefik e Rancher pretendono le porte 80 e 443 del nodo. Su una macchina che
 # ha gia' un nginx o un haproxy sopra, il DaemonSet di Traefik non parte e
 # l'attesa fallisce con un messaggio che parla di pod, non di porte.
+#
+# Il controllo si salta quando l'API server risponde gia': li' quelle porte sono
+# quasi certamente del NOSTRO Traefik, e far fallire il rilancio del playbook su
+# un nodo che funziona sarebbe assurdo.
 - name: Guarda chi tiene le porte 80 e 443
   shell: >-
     ss -lntp | awk '$4 ~ /:(80|443)$/' || true
@@ -109,6 +181,7 @@
     executable: /bin/bash
   register: rsn_porte
   changed_when: false
+  when: rsn_api_gia_su.rc | default(1) != 0
 
 - name: Fermati se le porte dell'ingress sono gia' occupate
   fail:
