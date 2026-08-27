@@ -1,5 +1,11 @@
 {{ '#' }} {{ ansible_managed }} - roles/master1_config/templates/config_master1.yaml.j2
 {% set first_master = groups['masters'][0] %}
+{{ '#' }} Nome e indirizzo con cui il nodo entra nel cluster. Scritti a mano e non
+{{ '#' }} lasciati dedurre a RKE2: l'hostname di una macchina riusata e' quello
+{{ '#' }} della sua vita precedente, e RKE2 fissa il nome alla prima
+{{ '#' }} registrazione senza cambiarlo mai piu'.
+node-name: {{ rke2_node_name }}
+node-ip: {{ rke2_node_ip }}
 {% if rke2_effective_token is defined and rke2_effective_token %}
 token: {{ rke2_effective_token }}
 {% else %}

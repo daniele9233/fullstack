@@ -17,6 +17,58 @@
   register: rke2_service_state
   failed_when: false
 
+# --- Identita' del nodo -------------------------------------------------------
+# Un nodo gia' registrato ha il suo nome scolpito in /var/lib/rancher/rke2: RKE2
+# lo fissa alla prima registrazione e non lo cambia piu'. Se quel nome non e'
+# quello che stiamo per scrivere in config.yaml, riavviare il servizio non
+# rinomina il nodo — ne registra uno NUOVO, lasciando il vecchio come fantasma
+# nel cluster, con l'aggravante che il certificato del kubelet e' intestato al
+# nome vecchio.
+#
+# Meglio fermarsi qui e dirlo, che proseguire e scoprirlo mezz'ora dopo davanti
+# a un "kubectl get nodes" che non somiglia all'inventario.
+- name: Cerca il certificato del kubelet, che porta il nome del nodo
+  stat:
+    path: /var/lib/rancher/rke2/agent/client-kubelet.crt
+  register: rke2_cert_kubelet
+
+- name: Rileva il nome con cui il nodo e' gia' registrato
+  shell: >-
+    set -o pipefail;
+    openssl x509 -noout -subject
+    -in /var/lib/rancher/rke2/agent/client-kubelet.crt
+    | sed -n 's#.*CN *= *system:node:##p' | tr -d ' \n'
+  args:
+    executable: /bin/bash
+  register: rke2_nome_effettivo
+  failed_when: false
+  changed_when: false
+  when: rke2_cert_kubelet.stat.exists
+
+- name: Fermati se il nodo e' gia' nel cluster con un altro nome
+  fail:
+    msg: |
+      {{ inventory_hostname }} ({{ rke2_node_ip }}) e' gia' registrato nel
+      cluster come "{{ rke2_nome_effettivo.stdout }}", non come
+      "{{ rke2_node_name }}".
+
+      RKE2 fissa il nome del nodo alla prima registrazione e non lo cambia piu':
+      cambiare l'hostname adesso non rinomina il nodo, ne crea un secondo e
+      lascia il primo come fantasma. Il certificato del kubelet e' per di piu'
+      intestato a "system:node:{{ rke2_nome_effettivo.stdout }}".
+
+      La macchina va azzerata e rifatta entrare, non rinominata:
+
+        ansible-playbook playbooks/20-rancher.yml -e clean_nodes_before_join=true
+
+      Se il cluster contiene gia' nodi buoni che non vuoi perdere, azzera solo
+      questo: --limit {{ inventory_hostname }} -e clean_nodes_before_join=true
+      e poi rilancia il playbook intero.
+  when:
+    - rke2_nome_effettivo.stdout is defined
+    - rke2_nome_effettivo.stdout | length > 0
+    - rke2_nome_effettivo.stdout != rke2_node_name
+
 # --- Token del cluster -------------------------------------------------------
 # Con rke2_token valorizzato si usa quello su tutti i master. Con rke2_token
 # vuoto (default) il primo master bootstrappa senza token, RKE2 gliene genera

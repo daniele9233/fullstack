@@ -122,6 +122,32 @@ rke2_token: ""
 # NON e' 6443 (API server): usare 6443 qui e' l'errore piu' comune su RKE2.
 rke2_supervisor_port: 9345
 
+# --- Identita' dei nodi master ----------------------------------------------
+# node-name viene SCRITTO in config.yaml invece di lasciare che RKE2 usi
+# l'hostname della macchina. E' la stessa scelta gia' fatta per il nodo singolo
+# con rsn_node_name, e qui mancava: e' costata un cluster intero.
+#
+# RKE2 fissa il nome del nodo alla PRIMA registrazione e non lo cambia mai piu'.
+# Su una macchina riusata, con l'hostname rimasto da un'installazione
+# precedente, il nodo entra nel cluster con quel nome e ci resta. E' successo
+# davvero: 10.205.166.218, che l'inventario chiama rancher03c, aveva ancora
+# l'hostname "balancer02c" di quando faceva il bilanciatore, ed e' entrato nel
+# cluster come "balancer02c" — tre master a posto secondo etcd, ma uno con
+# l'identita' di un'altra macchina, e "kubectl get nodes" che non corrispondeva
+# piu' all'inventario.
+#
+# Cambiare l'hostname DOPO non ripara niente: il nome nel cluster resta quello,
+# mentre il kubelet al riavvio prova a registrarsi con il nome nuovo. Per questo
+# host_prep tiene set_hostname_from_inventory a false. La cura e' qui, prima del
+# primo avvio.
+rke2_node_name: "{{ inventory_hostname }}"
+
+# node-ip: l'indirizzo con cui il nodo si annuncia agli altri. Senza, RKE2 lo
+# deduce dall'interfaccia di default, che su una macchina con piu' interfacce
+# (un ex bilanciatore con i VIP di keepalived, per dire) puo' non essere quella
+# su cui gli altri nodi lo raggiungono.
+rke2_node_ip: "{{ ansible_host | default(ansible_default_ipv4.address | default(inventory_hostname)) }}"
+
 # Versione RKE2 del cluster locale. Vuoto = ultima disponibile da get.rke2.io.
 # Valorizzare (es. "v1.33.11+rke2r1") per fissarla e rendere i run ripetibili.
 rke2_version: ""
