@@ -65,7 +65,23 @@ remote_cert_path: "/root"
 # Cluster configuration (cluster DOWNSTREAM creato via API Rancher)
 cluster_name: "iacdevops"
 cluster_k8s_version: "v1.33.11+rke2r1"
-cluster_cni: "calico"
+# CNI del cluster DOWNSTREAM: canal, non calico. E' la scelta provata qui.
+#
+# Il downstream e' multi-nodo per costruzione (manager + ingress, e i worker
+# quando ci sono), quindi il traffico fra pod attraversa le macchine sul serio —
+# a differenza del cluster locale, che qui gira su un nodo solo.
+#
+# Con canal quel traffico passa: e' la configurazione con cui questo stesso
+# ambiente ha sempre girato, con sei nodi downstream e sopra NFS provisioner,
+# pgadmin e Prometheus, tutta roba che senza rete fra i pod non starebbe in
+# piedi. Con calico no: sul cluster locale a tre nodi un pod su una macchina non
+# raggiunge CoreDNS su un'altra, e non e' la porta VXLAN (provate 4789 e 8472,
+# stesso esito). Finche' quel comportamento di Calico non e' spiegato, il
+# cluster che deve attraversare i nodi usa quello che qui funziona.
+#
+# Il cluster LOCALE resta su Calico (rke2_cni piu' sopra): con un nodo solo non
+# incapsula niente e la differenza non si presenta.
+cluster_cni: "canal"
 
 # Componenti packaged da non installare sul cluster downstream, stesso standard
 # del cluster locale (vedi rke2_disable). L'ingress e' Traefik.
@@ -171,32 +187,29 @@ rke2_disable:
   - rke2-canal
   - rke2-ingress-nginx
 
-# PORTA VXLAN DI CALICO. Vale per il cluster locale E per quello downstream.
+# PORTA VXLAN DI CALICO. Disattivato: vuoto = decide Calico (4789).
 #
-# Calico incapsula il traffico fra i pod di nodi diversi in VXLAN su UDP 4789
-# (il numero IANA). Flannel, e quindi canal, usa la 8472. Stessa tecnica, porta
-# diversa — e per una rete che filtra per porta sono due cose distinte.
+# Serve a forzare la porta UDP su cui Calico incapsula il traffico fra i pod di
+# nodi diversi. Calico usa la 4789, flannel e canal la 8472, e su una rete che
+# filtra per porta la differenza conta.
 #
-# QUI SERVE LA 8472, e non e' una preferenza: e' la porta che questa rete lascia
-# passare. Il playbook precedente girava con canal (cluster_cni: "canal", e
-# nessuna riga cni: sui master), quindi sulla 8472, e ha sempre funzionato. La
-# 4789 non l'ha mai usata nessuno e non e' mai stata aperta.
+# QUI NON ERA QUESTO, e lo si e' verificato invece di dedurlo: sul cluster
+# locale a tre nodi il traffico fra pod di macchine diverse non passa ne' con la
+# 4789 ne' con la 8472. Cambiata la porta e riavviato calico-node, il job che
+# scarica il chart di Traefik e' morto identico, con lo stesso i/o timeout verso
+# CoreDNS. La causa vera del comportamento di Calico qui non e' ancora nota.
 #
-# Cosa succede lasciando il default di Calico: il CNI si installa, tutti i nodi
-# risultano Ready, i pod sullo stesso nodo si parlano, e il traffico fra pod di
-# nodi diversi sparisce senza un errore. Il primo a caderci e' il job che scarica
-# il chart di Traefik, perche' gli tocca CoreDNS su un altro nodo: fallisce con
-# "i/o timeout" su traefik.github.io, cioe' dando la colpa a Internet mentre il
-# guasto e' fra due macchine dello stesso rack. Il nodo singolo
-# (21-rancher-single.yml) non se ne accorge mai: con un nodo solo il traffico
-# non lascia la macchina e non si incapsula niente.
+# La variabile e il ruolo calico_vxlan_port restano perche' su un'altra rete
+# quella porta e' una spiegazione plausibile e provarla costa un minuto. Il
+# sintomo da cui partire: tutti i nodi Ready, i pod sullo stesso nodo si parlano,
+# e il traffico fra nodi diversi sparisce senza un errore. Si distingue cosi':
 #
-# Come si verifica in un minuto, a cluster acceso: un pod sullo stesso nodo di
-# CoreDNS risolve, uno su un altro nodo va in timeout. Se falliscono ENTRAMBI
-# non e' questo, e' il resolv.conf (vedi rke2_resolv_conf piu' sotto).
+#   kubectl run t --rm -i --restart=Never --image=busybox:1.36 \
+#     --overrides='{"spec":{"nodeName":"<NODO>"}}' -- nslookup github.com
 #
-# Vuoto = lascia decidere a Calico (4789). Da usare solo su reti che la aprono.
-calico_vxlan_port: 8472
+# lanciato sul nodo di CoreDNS e su un altro. Uno risolve e l'altro no = e' la
+# rete fra i nodi. Falliscono entrambi = e' il resolv.conf (rke2_resolv_conf).
+calico_vxlan_port: ""
 
 # SAN aggiuntivi nel certificato dell'API server. Il dominio Rancher e gli IP
 # di tutti i master sono gia' inclusi automaticamente dal template: qui vanno
