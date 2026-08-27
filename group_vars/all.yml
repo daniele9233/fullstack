@@ -190,7 +190,7 @@ master_node_user: "root"
 # IP a cui far puntare rancher_domain in /etc/hosts su tutti i nodi.
 # Di default il primo master. Con 3 master in HA conviene puntarlo all'IP del
 # bilanciatore nginx, altrimenti la caduta del primo master isola tutti gli altri.
-# rancher_endpoint_ip: "10.205.166.221"
+rancher_endpoint_ip: "10.205.166.214"
 
 # ---------------------------------------------------------------------------
 # TRAEFIK: ingress controller standard su ENTRAMBI i cluster

@@ -1,0 +1,1 @@
+ssh -i C:\Users\D.Pascolini\Desktop\IAC-pem\DeliveryAutomation.pem -L 8081:localhost:8081 ubuntu@10.205.166.213
