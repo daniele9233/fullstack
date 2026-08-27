@@ -6,18 +6,39 @@
   meta: end_host
   when: inventory_hostname != ansible_play_hosts_all[0]
 
+# jsonpath SENZA {range}...{end} e senza {"\n"}, e argv invece della forma a
+# stringa. Il motivo e' lo stesso in entrambi i casi: "command" spezza sugli
+# spazi e toglie le virgolette, quindi {"\n"} arrivava a kubectl come {\n} e il
+# suo parser si fermava con "unrecognized character in action: U+005C".
+# {.items[*].metadata.name} restituisce i nomi separati da spazio: per dei nomi
+# di nodo va benissimo, e non ha niente da quotare.
 - name: Elenca i nodi del cluster
-  command: >-
-    {{ rpv_kubectl }} --kubeconfig {{ rpv_kubeconfig }}
-    get nodes -o jsonpath={range.items[*]}{.metadata.name}{"\n"}{end}
+  command:
+    argv:
+      - "{{ rpv_kubectl }}"
+      - "--kubeconfig"
+      - "{{ rpv_kubeconfig }}"
+      - "get"
+      - "nodes"
+      - "-o"
+      - "jsonpath={.items[*].metadata.name}"
   register: rpv_nodi
   changed_when: false
 
 - name: Trova su quali nodi gira CoreDNS
-  command: >-
-    {{ rpv_kubectl }} --kubeconfig {{ rpv_kubeconfig }}
-    -n kube-system get pods -l k8s-app=kube-dns
-    -o jsonpath={range.items[*]}{.spec.nodeName}{"\n"}{end}
+  command:
+    argv:
+      - "{{ rpv_kubectl }}"
+      - "--kubeconfig"
+      - "{{ rpv_kubeconfig }}"
+      - "-n"
+      - "kube-system"
+      - "get"
+      - "pods"
+      - "-l"
+      - "k8s-app=kube-dns"
+      - "-o"
+      - "jsonpath={.items[*].spec.nodeName}"
   register: rpv_nodi_coredns
   changed_when: false
   failed_when: false
@@ -28,8 +49,8 @@
 - name: Scegli un nodo senza CoreDNS
   set_fact:
     rpv_nodo_prova: >-
-      {{ ((rpv_nodi.stdout_lines | map('trim') | select('!=', '') | list)
-          | difference(rpv_nodi_coredns.stdout_lines | default([]) | map('trim') | list))
+      {{ ((rpv_nodi.stdout | default('') | split | list)
+          | difference(rpv_nodi_coredns.stdout | default('') | split | list))
          | first | default('') }}
 
 - name: Niente da verificare su un cluster che non attraversa i nodi
