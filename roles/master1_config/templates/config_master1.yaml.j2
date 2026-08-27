@@ -31,6 +31,18 @@ cni:
   - {{ plugin }}
 {% endfor %}
 {% endif %}
+{% if rke2_ingress_controller | default('') | length > 0 %}
+
+{{ '#' }} Ingress controller, scelto esplicitamente e non lasciato al default
+{{ '#' }} della versione: fino a v1.35 era ingress-nginx, da v1.36 e' Traefik.
+{{ '#' }} Il primo valore diventa anche la IngressClass predefinita.
+{{ '#' }}
+{{ '#' }} Con "traefik" su RKE2 >= 1.36 il chart arriva IMPACCHETTATO con RKE2 e
+{{ '#' }} non viene scaricato da traefik.github.io: niente dipendenza da
+{{ '#' }} Internet per l'ingress, e niente job che fallisce parlando di un sito
+{{ '#' }} esterno quando il guasto e' dentro al cluster.
+ingress-controller: {{ rke2_ingress_controller }}
+{% endif %}
 {% if rke2_disable | length > 0 %}
 disable:
 {% for component in rke2_disable %}

@@ -180,8 +180,40 @@ rke2_node_name: "{{ inventory_hostname }}"
 rke2_node_ip: "{{ ansible_host | default(ansible_default_ipv4.address | default(inventory_hostname)) }}"
 
 # Versione RKE2 del cluster locale. Vuoto = ultima disponibile da get.rke2.io.
-# Valorizzare (es. "v1.33.11+rke2r1") per fissarla e rendere i run ripetibili.
-rke2_version: ""
+#
+# FISSATA A v1.36 DI PROPOSITO, per avere Traefik come ingress SENZA scaricarlo.
+#
+# Da v1.36 Traefik e' il default per i cluster nuovi (release notes RKE2 v1.36:
+# "Traefik is now the default for new clusters starting in v1.36") ed e'
+# IMPACCHETTATO dentro RKE2: arriva con il tarball delle immagini, non da
+# traefik.github.io. Fino a v1.35 il default era ingress-nginx e Traefik andava
+# scaricato da Internet con un HelmChart — ed e' quel download che e' fallito
+# per un giorno intero con "i/o timeout" su traefik.github.io, mandando la
+# diagnosi verso Internet mentre il guasto era fra due macchine dello stesso rack.
+#
+# v1.37 NON ESISTE ancora: e' la versione in cui nginx verra' rimosso del tutto.
+# Al momento l'ultima e' la 1.36.4. Chiedere una 1.37 farebbe fallire il
+# "curl get.rke2.io" al primo nodo.
+#
+# Aggiornandola, controlla la matrice di supporto SUSE: Rancher deve supportare
+# la versione del cluster su cui gira.
+rke2_version: "v1.36.4+rke2r1"
+
+# Ingress controller del cluster locale, scelto esplicitamente invece di
+# affidarsi al default della versione.
+#
+# Valori accettati da RKE2 (reference/server_config): "none", "traefik",
+# "ingress-nginx". Il primo valore diventa anche la IngressClass predefinita.
+#
+# Scritto a mano perche' il default cambia con la versione — nginx fino a v1.35,
+# Traefik da v1.36 — e un playbook che si appoggia al default si comporta in due
+# modi diversi a seconda di quando lo lanci. Qui la scelta e' esplicita e non
+# dipende da quale RKE2 esce domani.
+#
+# Con questo valorizzato NON serve il ruolo traefik_install (vedi
+# traefik_enabled piu' sotto): sarebbero due ingress controller a contendersi
+# le porte 80 e 443 dei nodi, e il secondo che parte resta in CrashLoopBackOff.
+rke2_ingress_controller: "traefik"
 
 # CNI del cluster locale. Deve essere identico su tutti i master: se diverge,
 # in /etc/cni/net.d convivono conflist di CNI diversi e i pod restano bloccati
@@ -198,9 +230,13 @@ rke2_cni:
 # rke2-ingress-nginx: l'ingress standard e' Traefik, installato dal ruolo
 # traefik_install. Due ingress controller che pretendono entrambi le porte 80 e
 # 443 dei nodi non possono coesistere: il secondo resta in CrashLoopBackOff.
+# rke2-ingress-nginx NON sta piu' qui: la scelta dell'ingress la fa
+# rke2_ingress_controller, che e' il meccanismo previsto da RKE2 per questo — e
+# nelle versioni recenti "rke2-ingress-nginx" non e' nemmeno piu' fra i valori
+# ammessi di "disable". Metterlo comunque significherebbe chiedere a RKE2 di
+# disattivare un componente che con ingress-controller: traefik non installa.
 rke2_disable:
   - rke2-canal
-  - rke2-ingress-nginx
 
 # PORTA VXLAN DI CALICO. Disattivato: vuoto = decide Calico (4789).
 #
@@ -274,15 +310,29 @@ master_node_user: "root"
 rancher_endpoint_ip: "10.205.166.214"
 
 # ---------------------------------------------------------------------------
-# TRAEFIK: ingress controller standard su ENTRAMBI i cluster
+# TRAEFIK SCARICATO DA INTERNET: adesso SPENTO, e vale la pena sapere perche'
 # ---------------------------------------------------------------------------
-# Sostituisce rke2-ingress-nginx, disabilitato in rke2_disable sul cluster
-# locale e in machineGlobalConfig su quello downstream.
+# Questo ruolo scrive un HelmChart che fa scaricare il chart Traefik da
+# traefik.github.io. Serviva finche' il default di RKE2 era ingress-nginx e
+# Traefik andava preso da fuori.
 #
-# Il manifest viene scritto in /var/lib/rancher/rke2/server/manifests/ dei nodi
-# control plane: e' la directory che rke2-server sorveglia e da cui il
-# helm-controller integrato installa il chart. Non serve helm sui nodi.
-traefik_enabled: true
+# Da v1.36 Traefik e' IMPACCHETTATO in RKE2 e si ottiene con una riga in
+# config.yaml (rke2_ingress_controller). Quindi questo ruolo non serve piu' sul
+# cluster locale, ed e' meglio che sia spento che acceso: due ingress controller
+# vogliono entrambi le porte 80 e 443 dei nodi, e il secondo che parte resta in
+# CrashLoopBackOff.
+#
+# Toglie di mezzo anche una dipendenza da Internet che e' costata cara: il job
+# che scaricava questo chart e' quello che falliva con "i/o timeout" su
+# traefik.github.io ogni volta che la rete fra i nodi non consegnava, facendo
+# sembrare un problema di connettivita' esterna quello che era un guasto interno
+# al cluster. Con il chart impacchettato, quel messaggio non puo' piu' comparire.
+#
+# Resta true per il cluster DOWNSTREAM, che nasce con la versione in
+# cluster_k8s_version: finche' quella e' precedente alla 1.36, li' Traefik va
+# ancora installato cosi'. Il valore per i [new_managers] sta in
+# group_vars/new_managers.yml.
+traefik_enabled: false
 
 traefik_namespace: "traefik"
 traefik_chart: "traefik"

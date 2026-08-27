@@ -8,18 +8,31 @@
 # Non serve ne' helm ne' kubectl sul nodo: il file finisce nella directory che
 # rke2-server sorveglia, e il helm-controller integrato fa il resto.
 
-- name: Verifica che rke2-ingress-nginx sia disabilitato
+# Due modi validi di non avere nginx, e il controllo deve accettarli entrambi:
+#
+#   - ingress-controller: traefik|none in config.yaml — il meccanismo previsto
+#     da RKE2, e l'unico che funzioni dalle versioni in cui rke2-ingress-nginx
+#     non e' piu' fra i valori ammessi di "disable";
+#   - rke2-ingress-nginx fra i disable — il modo vecchio, ancora valido sulle
+#     versioni che lo accettano.
+#
+# Controllare solo il secondo faceva fallire questo assert appena la scelta
+# dell'ingress e' passata a rke2_ingress_controller, su un cluster che era
+# configurato correttamente.
+- name: Verifica che nessun altro ingress pretenda le porte 80 e 443
   assert:
     that:
-      - "'rke2-ingress-nginx' in rke2_disable"
+      - >-
+        (rke2_ingress_controller | default('') | length > 0
+         and rke2_ingress_controller != 'ingress-nginx')
+        or ('rke2-ingress-nginx' in (rke2_disable | default([])))
     fail_msg: >-
       Traefik e rke2-ingress-nginx pretendono entrambi le porte
       {{ traefik_host_http_port }} e {{ traefik_host_https_port }} dei nodi: il
-      secondo che parte resta in CrashLoopBackOff. Aggiungi rke2-ingress-nginx
-      a rke2_disable in group_vars/all.yml.
-  when:
-    - traefik_enabled | bool
-    - rke2_disable is defined
+      secondo che parte resta in CrashLoopBackOff.
+      Metti rke2_ingress_controller a "traefik" (o "none") in
+      group_vars/all.yml, oppure aggiungi rke2-ingress-nginx a rke2_disable.
+  when: traefik_enabled | bool
   run_once: true
 
 # La directory esiste gia' se rke2-server e' partito almeno una volta. Su un

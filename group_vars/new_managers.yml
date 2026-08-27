@@ -10,6 +10,18 @@
 #
 # Servono entrambi. Senza la tolleranza il taint respinge i pod; senza il
 # selettore finirebbero anche su manager e worker.
+# Traefik va ancora INSTALLATO qui, mentre sul cluster locale no.
+#
+# Il cluster locale gira su rke2_version 1.36, dove Traefik e' impacchetto in
+# RKE2 e si ottiene con ingress-controller: traefik in config.yaml — li'
+# traefik_enabled e' false. Il downstream invece nasce con
+# cluster_k8s_version, che e' piu' vecchia: finche' resta sotto la 1.36, li'
+# Traefik non e' impacchettato e va installato dal chart.
+#
+# Allineando anche cluster_k8s_version alla 1.36 questa riga si toglie, e il
+# downstream smette di dipendere da traefik.github.io come il locale.
+traefik_enabled: true
+
 traefik_node_selector: "{{ {ingress_node_key: ingress_node_value} }}"
 
 traefik_tolerations:
