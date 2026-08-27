@@ -149,17 +149,40 @@
           {{ traefik_stato.stdout | default('(niente)') }}
 
           Se qui sopra leggi "i/o timeout" o "no such host" su traefik.github.io,
-          il problema NON e' Traefik: e' che i pod non risolvono i nomi esterni.
-          Su Ubuntu /etc/resolv.conf punta allo stub 127.0.0.53 di
-          systemd-resolved, RKE2 vede il loopback e ripiega su 8.8.8.8, che su
-          rete aziendale chiusa non risponde. La cura e' rke2_resolv_conf in
-          group_vars/all.yml (cluster locale) e cluster_resolv_conf (cluster
-          downstream): il config.yaml del nodo deve contenere
+          il problema NON e' Traefik: e' che questo pod non risolve i nomi.
+          Le cause sono DUE e si somigliano molto. Prima di agire, distinguile:
+
+            {{ traefik_kubectl }} --kubeconfig {{ traefik_kubeconfig }} \
+              -n kube-system get pods -o wide | grep coredns
+
+            {{ traefik_kubectl }} --kubeconfig {{ traefik_kubeconfig }} run t1 \
+              --rm -i --restart=Never --image=busybox:1.36 \
+              --overrides='{"spec":{"nodeName":"<NODO-DI-COREDNS>"}}' \
+              -- nslookup github.com
+
+            {{ traefik_kubectl }} --kubeconfig {{ traefik_kubeconfig }} run t2 \
+              --rm -i --restart=Never --image=busybox:1.36 \
+              --overrides='{"spec":{"nodeName":"<UN-ALTRO-NODO>"}}' \
+              -- nslookup github.com
+
+          FALLISCONO ENTRAMBI -> e' il resolv.conf. Su Ubuntu /etc/resolv.conf
+          punta allo stub 127.0.0.53 di systemd-resolved, RKE2 vede il loopback
+          e ripiega su 8.8.8.8, che su rete aziendale chiusa non risponde. La
+          cura e' rke2_resolv_conf in group_vars/all.yml (cluster locale) e
+          cluster_resolv_conf (downstream): il config.yaml del nodo deve avere
 
             resolv-conf: /run/systemd/resolve/resolv.conf
 
-          Dopo averlo messo serve un "systemctl restart rke2-server" sui nodi,
-          oppure un azzeramento e reinstallazione.
+          Poi "systemctl restart rke2-server" sui nodi, o reinstallazione.
+
+          IL PRIMO RISOLVE E IL SECONDO NO -> non c'entra il DNS: CoreDNS sta
+          bene, e' il traffico fra pod di NODI DIVERSI che non passa. Con Calico
+          quel traffico e' VXLAN su UDP 4789; con canal e' UDP 8472. Se la rete
+          lascia passare una porta e non l'altra, il cluster sembra sano (tutti
+          i nodi Ready) ma i pod non si raggiungono fra macchine. La cura e'
+          calico_vxlan_port in group_vars/all.yml: mettici la porta che questa
+          rete consente davvero. Su un nodo singolo il guasto non si vede mai,
+          perche' li' non si incapsula niente.
 
           Con traefik_ferma_se_non_pronto=false il playbook prosegue lo stesso,
           ma quello che viene dopo (l'Ingress di Rancher) non puo' funzionare.

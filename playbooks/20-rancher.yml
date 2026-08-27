@@ -80,6 +80,28 @@
     - role: master1_kubectl
 
 
+# PORTA VXLAN DI CALICO, prima di Traefik e per una ragione precisa.
+#
+# Calico incapsula il traffico fra i pod di nodi diversi in VXLAN sulla porta
+# UDP 4789. Canal, che e' quello che girava qui prima, usa la 8472. Su questa
+# rete e' aperta la 8472 e non la 4789 — nessuno l'ha mai chiusa, semplicemente
+# non e' mai servita.
+#
+# Il guasto che ne segue non somiglia a un problema di rete: Calico si installa,
+# i tre master diventano Ready, e il primo a rompersi e' il job che scarica il
+# chart di Traefik, con un "i/o timeout" su traefik.github.io. Sembra Internet.
+# Invece e' che quel pod e' finito su un nodo e CoreDNS sta su un altro.
+#
+# Va qui perche' Traefik e' il primo a dipendere dalla rete fra i nodi: prima
+# non serve a niente, dopo e' troppo tardi.
+- name: Porta VXLAN di Calico
+  hosts: masters[0]
+  become: yes
+  gather_facts: no
+  roles:
+    - role: calico_vxlan_port
+
+
 # PLAY INGRESS: Traefik sul cluster locale.
 #
 # Deve stare fra il play dei master e quello di Rancher, non dentro al primo:
@@ -143,6 +165,11 @@
   gather_facts: no
   roles:
     - kubectl_setup
+    # Il cluster downstream nasce con cluster_cni: calico, quindi ha lo stesso
+    # problema di porta VXLAN del cluster locale, e la stessa cura. Va prima di
+    # traefik_install per lo stesso motivo: Traefik e' il primo che dipende
+    # dalla rete fra i nodi.
+    - calico_vxlan_port
     # Ingress del cluster downstream. Gira qui e non sui nodi [ingress] perche'
     # il manifest va nella directory dei server RKE2: sono questi i nodi
     # control plane. Dove girano i pod lo decide traefik_node_selector, in

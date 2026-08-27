@@ -1,0 +1,82 @@
+---
+# Sposta la porta VXLAN di Calico su quella che la rete lascia passare.
+# Il perche' sta per esteso in defaults/main.yml: qui basti sapere che con la
+# porta sbagliata il cluster SEMBRA sano — tutti i nodi Ready — ma i pod su nodi
+# diversi non si raggiungono.
+#
+# Gira su UN SOLO nodo: FelixConfiguration e' una risorsa del cluster, non del
+# nodo. Applicarla da tutti i master farebbe la stessa scrittura tre volte.
+
+# Con calico_vxlan_port vuoto il ruolo non fa niente: la porta la decide Calico.
+# Il ruolo non ha senso con un CNI diverso da Calico, e dirlo qui evita di
+# lasciarlo attivo per distrazione dopo un cambio di rke2_cni.
+- name: Salta se non c'e' niente da impostare
+  meta: end_host
+  when: >-
+    (calico_vxlan_port | default('') | string | length == 0)
+    or ('calico' not in calico_cni_dichiarato)
+
+- name: Attendi che Calico esponga la propria configurazione
+  command: >-
+    {{ calico_kubectl }} --kubeconfig {{ calico_kubeconfig }}
+    get felixconfiguration default -o jsonpath={.spec.vxlanPort}
+  register: calico_porta_attuale
+  until: calico_porta_attuale.rc == 0
+  retries: "{{ calico_attesa_retries }}"
+  delay: "{{ calico_attesa_delay }}"
+  changed_when: false
+  failed_when: false
+
+- name: Fermati se Calico non risponde
+  fail:
+    msg: >-
+      Calico non ha esposto FelixConfiguration dopo
+      {{ calico_attesa_retries | int * calico_attesa_delay | int }} secondi.
+      Senza, la porta VXLAN resta {{ calico_porta_default }} e i pod su nodi
+      diversi non si raggiungeranno. Controlla i pod del namespace
+      calico-system prima di proseguire.
+  when: calico_porta_attuale.rc != 0
+
+# jsonpath restituisce stringa vuota quando il campo non e' valorizzato: in quel
+# caso Calico sta usando il proprio default, che e' 4789.
+- name: Stabilisci la porta in uso
+  set_fact:
+    calico_porta_in_uso: >-
+      {{ (calico_porta_attuale.stdout | default('') | trim)
+         if (calico_porta_attuale.stdout | default('') | trim | length > 0)
+         else calico_porta_default | string }}
+
+- name: Imposta la porta VXLAN di Calico
+  command: >-
+    {{ calico_kubectl }} --kubeconfig {{ calico_kubeconfig }}
+    patch felixconfiguration default --type=merge
+    -p {{ {'spec': {'vxlanPort': calico_vxlan_port | int}} | to_json }}
+  register: calico_patch
+  when: calico_porta_in_uso != (calico_vxlan_port | string)
+
+# Felix ricrea il device vxlan.calico quando la porta cambia, ma il riavvio
+# rende la cosa immediata e osservabile invece che eventuale: senza, i nodi
+# restano appesi al tunnel vecchio per un tempo che nessuno controlla, e chi
+# guarda "kubectl get nodes" vede tutto verde mentre i pod ancora non si
+# parlano.
+- name: Riavvia calico-node perche' prenda la porta nuova
+  command: >-
+    {{ calico_kubectl }} --kubeconfig {{ calico_kubeconfig }}
+    -n calico-system rollout restart daemonset/calico-node
+  when: calico_patch is changed
+  failed_when: false
+
+- name: Attendi che calico-node sia ripartito su tutti i nodi
+  command: >-
+    {{ calico_kubectl }} --kubeconfig {{ calico_kubeconfig }}
+    -n calico-system rollout status daemonset/calico-node --timeout=300s
+  when: calico_patch is changed
+  changed_when: false
+
+- name: Riepilogo
+  debug:
+    msg: >-
+      Calico incapsula il traffico fra i pod su UDP {{ calico_vxlan_port }}.
+      {{ 'Cambiata adesso: prima era la ' ~ calico_porta_in_uso ~ '.'
+         if (calico_patch is defined and calico_patch is changed)
+         else 'Era gia impostata cosi, niente da fare.' }}

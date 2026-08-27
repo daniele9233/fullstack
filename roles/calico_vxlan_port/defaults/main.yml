@@ -1,0 +1,50 @@
+---
+# Porta UDP su cui Calico incapsula il traffico fra i pod di nodi diversi.
+#
+# PERCHE' ESISTE QUESTA VARIABILE
+#
+# Calico usa VXLAN sulla porta UDP 4789 (il numero IANA ufficiale).
+# Flannel, e quindi canal, usa la 8472.
+#
+# Sono entrambe UDP e fanno la stessa cosa, ma per una rete che filtra per porta
+# sono due mondi diversi: dove passa una puo' non passare l'altra. Ed e'
+# esattamente il caso di questa installazione. Il playbook precedente girava con
+# canal, quindi sulla 8472: quella porta e' aperta da sempre e nessuno ha mai
+# avuto motivo di aprire anche la 4789.
+#
+# Passando a Calico senza toccare nient'altro il guasto e' silenzioso e
+# ingannevole: Calico si installa, i nodi diventano tutti Ready, i pod sullo
+# stesso nodo si parlano, e il traffico fra pod di nodi DIVERSI sparisce senza
+# un errore. Il primo a caderci e' il job che scarica il chart di Traefik: gli
+# tocca CoreDNS sull'altro nodo e va in "i/o timeout" su traefik.github.io — un
+# messaggio che parla di Internet mentre il guasto e' fra due macchine dello
+# stesso rack. Il nodo singolo invece funziona sempre, perche' li' non si
+# incapsula niente: il traffico non lascia mai la macchina.
+#
+# 8472 = la porta che questa rete lascia passare. E' il default qui di proposito.
+# 4789 = il default di Calico. Mettilo se la rete la consente e preferisci
+#        restare sul valore standard.
+# ""   = non toccare la porta, lascia decidere a Calico.
+calico_vxlan_port: 8472
+
+# Il default di Calico, usato solo per dire nei messaggi quale porta era in uso
+# quando FelixConfiguration non ha il campo valorizzato.
+calico_porta_default: 4789
+
+# Come il ruolo capisce se il CNI in uso e' Calico. I due cluster dichiarano la
+# cosa in due posti diversi — rke2_cni e' una lista e vale per il cluster locale,
+# cluster_cni e' una stringa e vale per il downstream creato via API Rancher —
+# quindi qui si guardano tutti e due: il ruolo e' lo stesso per entrambi.
+calico_cni_dichiarato: >-
+  {{ (rke2_cni | default([]) | join(',')) ~ ',' ~ (cluster_cni | default('')) }}
+
+# kubectl del nodo. Non serve averlo nel PATH: RKE2 lo installa qui, ed e' lo
+# stesso percorso sui nodi del cluster locale e su quelli del downstream.
+calico_kubectl: /var/lib/rancher/rke2/bin/kubectl
+calico_kubeconfig: /etc/rancher/rke2/rke2.yaml
+
+# Quanto aspettare che Calico esponga la propria CRD di configurazione. Il
+# ruolo gira subito dopo l'avvio dei server RKE2, quando l'operator Tigera puo'
+# non aver ancora creato la FelixConfiguration.
+calico_attesa_retries: 60
+calico_attesa_delay: 5

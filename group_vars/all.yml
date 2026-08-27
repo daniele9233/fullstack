@@ -171,6 +171,33 @@ rke2_disable:
   - rke2-canal
   - rke2-ingress-nginx
 
+# PORTA VXLAN DI CALICO. Vale per il cluster locale E per quello downstream.
+#
+# Calico incapsula il traffico fra i pod di nodi diversi in VXLAN su UDP 4789
+# (il numero IANA). Flannel, e quindi canal, usa la 8472. Stessa tecnica, porta
+# diversa — e per una rete che filtra per porta sono due cose distinte.
+#
+# QUI SERVE LA 8472, e non e' una preferenza: e' la porta che questa rete lascia
+# passare. Il playbook precedente girava con canal (cluster_cni: "canal", e
+# nessuna riga cni: sui master), quindi sulla 8472, e ha sempre funzionato. La
+# 4789 non l'ha mai usata nessuno e non e' mai stata aperta.
+#
+# Cosa succede lasciando il default di Calico: il CNI si installa, tutti i nodi
+# risultano Ready, i pod sullo stesso nodo si parlano, e il traffico fra pod di
+# nodi diversi sparisce senza un errore. Il primo a caderci e' il job che scarica
+# il chart di Traefik, perche' gli tocca CoreDNS su un altro nodo: fallisce con
+# "i/o timeout" su traefik.github.io, cioe' dando la colpa a Internet mentre il
+# guasto e' fra due macchine dello stesso rack. Il nodo singolo
+# (21-rancher-single.yml) non se ne accorge mai: con un nodo solo il traffico
+# non lascia la macchina e non si incapsula niente.
+#
+# Come si verifica in un minuto, a cluster acceso: un pod sullo stesso nodo di
+# CoreDNS risolve, uno su un altro nodo va in timeout. Se falliscono ENTRAMBI
+# non e' questo, e' il resolv.conf (vedi rke2_resolv_conf piu' sotto).
+#
+# Vuoto = lascia decidere a Calico (4789). Da usare solo su reti che la aprono.
+calico_vxlan_port: 8472
+
 # SAN aggiuntivi nel certificato dell'API server. Il dominio Rancher e gli IP
 # di tutti i master sono gia' inclusi automaticamente dal template: qui vanno
 # solo eventuali VIP o FQDN del load balancer davanti ai master.
