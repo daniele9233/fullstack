@@ -1,0 +1,92 @@
+---
+# DIAGNOSTICA DELLA RETE FRA I NODI. Non cambia niente: legge e stampa.
+#
+#   ansible-playbook playbooks/diagnostica-rete.yml
+#
+# Si lancia quando rete_pod_verifica si ferma dicendo che il traffico fra pod di
+# nodi diversi non passa. Raccoglie in un colpo solo le quattro cose che
+# servono a capire di chi e' la colpa, e che prese una alla volta costano
+# mezz'ora di ssh:
+#
+#   1. Con quale indirizzo Calico annuncia ogni nodo (il "local" del tunnel), e
+#      se coincide con l'InternalIP che il nodo ha in Kubernetes. Se divergono,
+#      il tunnel punta dove non risponde nessuno.
+#   2. Se le rotte verso i blocchi pod DEGLI ALTRI nodi esistono. Se mancano, il
+#      problema e' nella configurazione di Calico e non nella rete fisica.
+#   3. Se la configurazione che calico_config posa e' arrivata davvero
+#      nell'Installation, o se Calico sta ancora usando i propri default.
+#   4. Su che porta e a che MTU sta incapsulando.
+#
+# Con 1 e 2 a posto ma il traffico che non arriva, la colpa e' della rete fisica
+# e il passo dopo e' un tcpdump sulla porta del tunnel fra due nodi.
+
+- name: Cosa dice ogni nodo di se stesso
+  hosts: masters
+  become: yes
+  gather_facts: no
+  tasks:
+    - name: Interfacce, tunnel e rotte
+      shell: |
+        echo "hostname            : $(hostname)"
+        echo "indirizzi           : $(hostname -I)"
+        echo "--- interfacce ---"
+        ip -br addr show | grep -v '^lo'
+        echo "--- tunnel Calico ---"
+        if ip link show vxlan.calico >/dev/null 2>&1; then
+          ip -d link show vxlan.calico | sed -n '2,3p'
+          ip -br addr show vxlan.calico
+        else
+          echo "vxlan.calico ASSENTE"
+        fi
+        echo "--- rotte verso le reti pod ---"
+        ip route | grep -E '10\.42\.' || echo "NESSUNA ROTTA verso 10.42.0.0/16"
+      args:
+        executable: /bin/bash
+      register: nodo
+      changed_when: false
+
+    - name: Referto del nodo
+      debug:
+        msg: "{{ nodo.stdout_lines }}"
+
+
+- name: Cosa dice il cluster
+  hosts: masters[0]
+  become: yes
+  gather_facts: no
+  vars:
+    k: "/var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml"
+  tasks:
+    - name: Nodi, Calico e configurazione effettiva
+      shell: |
+        echo "=== INTERNAL-IP DI OGNI NODO (quello che Calico dovrebbe usare) ==="
+        {{ k }} get nodes -o wide
+        echo
+        echo "=== CONFIGURAZIONE CALICO EFFETTIVA (Installation) ==="
+        echo "-- e' arrivata quella di calico_config, o sono i default? --"
+        {{ k }} get installation default -o yaml 2>/dev/null \
+          | sed -n '/calicoNetwork:/,/^  [a-z]/p' || echo "Installation non trovata"
+        echo
+        echo "=== IPPool: incapsulamento e MTU ==="
+        {{ k }} get ippools.crd.projectcalico.org -o yaml 2>/dev/null \
+          | grep -E 'cidr:|ipipMode:|vxlanMode:|blockSize:|natOutgoing:'
+        echo
+        echo "=== HelmChartConfig posato dal playbook, se c'e' ==="
+        {{ k }} -n kube-system get helmchartconfig rke2-calico -o jsonpath={.spec.valuesContent} 2>/dev/null \
+          || echo "nessun HelmChartConfig rke2-calico nel cluster"
+        echo
+        echo "=== POD DI CALICO ==="
+        {{ k }} -n calico-system get pods -o wide 2>/dev/null || \
+          {{ k }} -n kube-system get pods -o wide 2>/dev/null | grep -i calico
+        echo
+        echo "=== DOVE STA COREDNS ==="
+        {{ k }} -n kube-system get pods -o wide | grep -E 'NAME|coredns'
+      args:
+        executable: /bin/bash
+      register: cluster
+      changed_when: false
+      failed_when: false
+
+    - name: Referto del cluster
+      debug:
+        msg: "{{ cluster.stdout_lines }}"
