@@ -1,0 +1,13 @@
+{{ '#' }} {{ ansible_managed }} - roles/host_prep
+{{ '#' }}
+{{ '#' }} Interfacce che il CNI crea e che NetworkManager NON deve gestire.
+{{ '#' }} L'elenco e' quello della documentazione RKE2 (Known Issues): se
+{{ '#' }} NetworkManager le prende in carico, riconfigura sotto al CNI le
+{{ '#' }} interfacce del tunnel e il traffico fra pod di nodi diversi smette di
+{{ '#' }} essere consegnato — senza un errore da nessuna parte, perche' la
+{{ '#' }} tabella di routing main resta corretta.
+{{ '#' }}
+{{ '#' }} Il nome del file e' quello indicato dalla doc e vale per tutti i CNI
+{{ '#' }} bundled, non solo per canal: l'elenco copre flannel, calico e wireguard.
+[keyfile]
+unmanaged-devices=interface-name:flannel*;interface-name:cali*;interface-name:tunl*;interface-name:vxlan.calico;interface-name:vxlan-v6.calico;interface-name:wireguard.cali;interface-name:wg-v6.cali
