@@ -1,0 +1,25 @@
+---
+# Il file va posato PRIMA che rke2-server parta la prima volta: e' quando il
+# helm-controller installa rke2-calico, ed e' l'unico momento comodo per dirgli
+# come configurarsi. Per questo il ruolo sta fra master1_install e
+# master1_config nel playbook, e non dopo.
+
+- name: Salta se il CNI non e' Calico
+  meta: end_host
+  when: "'calico' not in (rke2_cni | default([]) | join(','))"
+
+- name: Crea la directory dei manifest RKE2
+  file:
+    path: "{{ calico_manifest_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Configurazione di Calico per il chart packaged
+  template:
+    src: rke2-calico-config.yaml.j2
+    dest: "{{ calico_manifest_dir }}/{{ calico_manifest_file }}"
+    owner: root
+    group: root
+    mode: '0600'

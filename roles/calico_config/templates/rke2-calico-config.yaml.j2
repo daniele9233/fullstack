@@ -1,0 +1,27 @@
+{{ '#' }} {{ ansible_managed }} - roles/calico_config
+{{ '#' }} HelmChartConfig: NON installa niente, aggiunge valori al chart rke2-calico
+{{ '#' }} che RKE2 installa da se'. Il nome e il namespace devono coincidere con
+{{ '#' }} quelli dell'HelmChart packaged, altrimenti il file viene ignorato in
+{{ '#' }} silenzio e Calico parte con i propri default.
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: rke2-calico
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    installation:
+      calicoNetwork:
+{% if calico_mtu | default('') | string | length > 0 %}
+        {{ '#' }} MTU del tunnel. Vedi calico_mtu in roles/calico_config/defaults.
+        mtu: {{ calico_mtu | int }}
+{% endif %}
+        {{ '#' }} Con quale indirizzo il nodo si annuncia agli altri.
+        {{ '#' }} NodeInternalIP = quello del Node Kubernetes, cioe' il node-ip
+        {{ '#' }} che master1_config scrive in config.yaml. Senza questa riga
+        {{ '#' }} Calico sceglie da se' la prima interfaccia che trova, e su una
+        {{ '#' }} macchina con piu' interfacce puo' prendere quella sbagliata.
+        nodeAddressAutodetectionV4:
+{% for chiave, valore in calico_autodetection.items() %}
+          {{ chiave }}: {{ valore }}
+{% endfor %}

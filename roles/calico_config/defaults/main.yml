@@ -1,0 +1,49 @@
+---
+# Configurazione di Calico per il cluster LOCALE, scritta PRIMA che RKE2 parta.
+#
+# PERCHE' ESISTE QUESTO RUOLO
+#
+# Calico non usa il node-ip che scriviamo in /etc/rancher/rke2/config.yaml.
+# Flannel — e quindi canal — legge l'InternalIP del Node Kubernetes, che RKE2
+# imposta proprio da quel node-ip: corretto per costruzione. Calico no: decide
+# da se' con quale indirizzo annunciarsi, tramite nodeAddressAutodetectionV4,
+# il cui default e' "firstFound" — la prima interfaccia non-loopback che trova.
+#
+# Su una macchina con piu' interfacce (un ex bilanciatore con i VIP di
+# keepalived, una con bridge o tunnel residui) quella scelta puo' cadere
+# sull'indirizzo sbagliato. E il guasto che ne segue e' fra i piu' difficili da
+# leggere: il nodo risulta Ready, i pod sullo stesso nodo si parlano, e solo il
+# traffico fra pod di nodi DIVERSI sparisce, senza un errore da nessuna parte.
+# Il primo a caderci e' il job che scarica il chart di Traefik, che va in
+# timeout su CoreDNS e stampa un messaggio su traefik.github.io: sembra
+# Internet, e non lo e'.
+#
+# E' anche la ragione per cui su questa rete canal ha sempre funzionato fra i
+# nodi mentre Calico no, a parita' di macchine e di porte: i due prendono
+# l'indirizzo del nodo da due posti diversi.
+#
+# kubernetes: NodeInternalIP dice a Calico di usare l'InternalIP del Node, cioe'
+# esattamente il node-ip che gia' controlliamo noi in master1_config. I due
+# smettono di poter divergere.
+calico_autodetection:
+  kubernetes: NodeInternalIP
+
+# MTU del tunnel Calico. Vuoto = la deduce Calico dall'interfaccia dell'host.
+#
+# Su queste macchine ens5 ha MTU 9001 (jumbo AWS) e Calico si era impostato a
+# 8951. Canal, con cui questo ambiente ha sempre funzionato, usa 1450. Il valore
+# alto non e' sbagliato in se', ma vale solo se TUTTO il percorso fra i nodi
+# regge i jumbo frame: se in mezzo c'e' un tratto a 1500, i pacchetti grandi
+# spariscono e i piccoli passano — un guasto intermittente che si manifesta
+# sulle risposte lunghe e non sulle query brevi, cioe' il peggior tipo da
+# diagnosticare.
+#
+# 1450 e' il valore che qui e' provato. Costa qualche punto percentuale di
+# efficienza e toglie di mezzo un'incognita.
+calico_mtu: 1450
+
+# Directory sorvegliata da rke2-server. Il file va scritto QUI e PRIMA del primo
+# avvio: il helm-controller lo applica quando installa il chart rke2-calico, e
+# la configurazione di rete di un cluster non si cambia comodamente dopo.
+calico_manifest_dir: "/var/lib/rancher/rke2/server/manifests"
+calico_manifest_file: "rke2-calico-config.yaml"

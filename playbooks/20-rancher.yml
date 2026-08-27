@@ -76,6 +76,11 @@
   order: inventory
   roles:
     - role: master1_install
+    # Fra install e config, e non altrove: posa la configurazione di Calico
+    # nella directory dei manifest PRIMA che master1_config avvii rke2-server.
+    # E' l'unico momento in cui si puo' dire a Calico come annunciarsi — dopo,
+    # il chart e' gia' installato e la rete del cluster gia' formata.
+    - role: calico_config
     - role: master1_config
     - role: master1_kubectl
 
@@ -100,6 +105,24 @@
   gather_facts: no
   roles:
     - role: calico_vxlan_port
+
+
+# LA RETE FRA I NODI PASSA? Si chiede QUI, prima di Traefik.
+#
+# Traefik e' il primo componente che dipende dal traffico fra pod di nodi
+# diversi: il job che scarica il suo chart interroga CoreDNS, che sta su un
+# altro nodo. Quando quella rete non passa, il cluster non lo dice — nodi tutti
+# Ready, nessun errore — e il guasto salta fuori cinque minuti dopo con un
+# messaggio su traefik.github.io che manda la diagnosi verso Internet.
+#
+# Questo play trasforma quel fallimento in una diagnosi giusta in un minuto. Su
+# un cluster a un nodo non ha niente da verificare e si salta da se'.
+- name: Verifica della rete fra i nodi
+  hosts: masters[0]
+  become: yes
+  gather_facts: no
+  roles:
+    - role: rete_pod_verifica
 
 
 # PLAY INGRESS: Traefik sul cluster locale.
@@ -170,6 +193,10 @@
     # traefik_install per lo stesso motivo: Traefik e' il primo che dipende
     # dalla rete fra i nodi.
     - calico_vxlan_port
+    # Stessa verifica fatta sul cluster locale, qui sul downstream: anche questo
+    # nasce con Calico, anche qui Traefik e' il primo a dipendere dalla rete fra
+    # i nodi, e anche qui il guasto sarebbe silenzioso.
+    - rete_pod_verifica
     # Ingress del cluster downstream. Gira qui e non sui nodi [ingress] perche'
     # il manifest va nella directory dei server RKE2: sono questi i nodi
     # control plane. Dove girano i pod lo decide traefik_node_selector, in

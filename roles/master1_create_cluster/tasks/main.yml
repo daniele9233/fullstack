@@ -217,6 +217,12 @@
                  if (cluster_resolv_conf | default('') | length > 0
                      and cluster_resolv_senza | length == 0)
                  else {}) }}
+          # Valori per i chart packaged del cluster downstream. Serve a imporre a
+          # Calico con quale indirizzo annunciarsi: senza, sceglie la prima
+          # interfaccia che trova e su una macchina con piu' interfacce prende
+          # quella sbagliata — e il traffico fra pod di nodi diversi sparisce in
+          # silenzio. Vedi cluster_chart_values in group_vars/all.yml.
+          chartValues: "{{ cluster_chart_values | default({}) }}"
           machineSelectorConfig:
             - config:
                 protect-kernel-defaults: false

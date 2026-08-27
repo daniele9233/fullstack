@@ -65,23 +65,38 @@ remote_cert_path: "/root"
 # Cluster configuration (cluster DOWNSTREAM creato via API Rancher)
 cluster_name: "iacdevops"
 cluster_k8s_version: "v1.33.11+rke2r1"
-# CNI del cluster DOWNSTREAM: canal, non calico. E' la scelta provata qui.
+# CNI del cluster DOWNSTREAM. Calico, come il cluster locale.
 #
-# Il downstream e' multi-nodo per costruzione (manager + ingress, e i worker
-# quando ci sono), quindi il traffico fra pod attraversa le macchine sul serio —
-# a differenza del cluster locale, che qui gira su un nodo solo.
+# Perche' con Calico il traffico fra i nodi non passava, e perche' adesso
+# dovrebbe: Calico NON usa il node-ip che scriviamo in config.yaml. Flannel, e
+# quindi canal, legge l'InternalIP del Node Kubernetes — che RKE2 imposta
+# proprio da quel node-ip. Calico invece decide da se' con quale indirizzo
+# annunciarsi, e con il default "firstFound" prende la prima interfaccia che
+# trova. E' li' che i due divergono, ed e' per questo che su queste stesse
+# macchine canal attraversava i nodi e Calico no.
 #
-# Con canal quel traffico passa: e' la configurazione con cui questo stesso
-# ambiente ha sempre girato, con sei nodi downstream e sopra NFS provisioner,
-# pgadmin e Prometheus, tutta roba che senza rete fra i pod non starebbe in
-# piedi. Con calico no: sul cluster locale a tre nodi un pod su una macchina non
-# raggiunge CoreDNS su un'altra, e non e' la porta VXLAN (provate 4789 e 8472,
-# stesso esito). Finche' quel comportamento di Calico non e' spiegato, il
-# cluster che deve attraversare i nodi usa quello che qui funziona.
+# La cura e' cluster_chart_values qui sotto (e il ruolo calico_config per il
+# cluster locale): impone a Calico nodeAddressAutodetectionV4 kubernetes
+# NodeInternalIP, cioe' lo stesso indirizzo che gia' controlliamo noi.
 #
-# Il cluster LOCALE resta su Calico (rke2_cni piu' sopra): con un nodo solo non
-# incapsula niente e la differenza non si presenta.
-cluster_cni: "canal"
+# Se dovesse ripresentarsi, il playbook adesso lo dice SUBITO: rete_pod_verifica
+# gira prima di Traefik e fallisce in un minuto dicendo che il guasto e' fra i
+# nodi, invece di lasciarlo emergere venticinque minuti dopo travestito da
+# problema di traefik.github.io. Lo stato precedente con canal, funzionante, e'
+# sul branch ClusterRancher3NodiCanalFunzionante.
+cluster_cni: "calico"
+
+# Valori dei chart packaged del cluster DOWNSTREAM, passati a Rancher in
+# spec.rkeConfig.chartValues. E' l'equivalente, per il cluster creato via API,
+# del HelmChartConfig che il ruolo calico_config posa sul cluster locale: la
+# stessa configurazione di Calico, per la stessa ragione.
+cluster_chart_values:
+  rke2-calico:
+    installation:
+      calicoNetwork:
+        mtu: 1450
+        nodeAddressAutodetectionV4:
+          kubernetes: NodeInternalIP
 
 # Componenti packaged da non installare sul cluster downstream, stesso standard
 # del cluster locale (vedi rke2_disable). L'ingress e' Traefik.
