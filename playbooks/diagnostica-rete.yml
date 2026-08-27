@@ -29,6 +29,12 @@
       shell: |
         echo "hostname            : $(hostname)"
         echo "indirizzi           : $(hostname -I)"
+        echo "--- rke2-server ---"
+        systemctl is-active rke2-server 2>&1
+        systemctl is-enabled rke2-server 2>&1
+        echo "avviato: $(systemctl show rke2-server -p ActiveEnterTimestamp --value 2>/dev/null)"
+        echo "--- ultime righe del journal di rke2-server ---"
+        journalctl -u rke2-server -n 12 --no-pager -o cat 2>&1 | tail -12
         echo "--- interfacce ---"
         ip -br addr show | grep -v '^lo'
         echo "--- tunnel Calico ---"
@@ -57,30 +63,37 @@
   vars:
     k: "/var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml"
   tasks:
+    # 2>&1 OVUNQUE, e nessun "|| echo": la volta scorsa questo blocco e' tornato
+    # vuoto su tutto e non si capiva perche' — gli errori di kubectl finivano su
+    # stderr, che il debug qui sotto non stampava. Un referto che nasconde il
+    # motivo per cui non ha dati e' peggio di nessun referto.
     - name: Nodi, Calico e configurazione effettiva
       shell: |
+        echo "=== IL FILE DI CALICO E' SUL DISCO? ==="
+        ls -l /var/lib/rancher/rke2/server/manifests/ 2>&1
+        echo
+        echo "=== kubectl RISPONDE? ==="
+        {{ k }} version --request-timeout=10s 2>&1 | tail -3
+        echo
         echo "=== INTERNAL-IP DI OGNI NODO (quello che Calico dovrebbe usare) ==="
-        {{ k }} get nodes -o wide
+        {{ k }} get nodes -o wide --request-timeout=15s 2>&1
         echo
         echo "=== CONFIGURAZIONE CALICO EFFETTIVA (Installation) ==="
-        echo "-- e' arrivata quella di calico_config, o sono i default? --"
-        {{ k }} get installation default -o yaml 2>/dev/null \
-          | sed -n '/calicoNetwork:/,/^  [a-z]/p' || echo "Installation non trovata"
+        {{ k }} get installation default -o yaml --request-timeout=15s 2>&1 | sed -n '1,60p'
         echo
-        echo "=== IPPool: incapsulamento e MTU ==="
-        {{ k }} get ippools.crd.projectcalico.org -o yaml 2>/dev/null \
-          | grep -E 'cidr:|ipipMode:|vxlanMode:|blockSize:|natOutgoing:'
+        echo "=== IPPool ==="
+        {{ k }} get ippools.crd.projectcalico.org -o yaml --request-timeout=15s 2>&1 \
+          | grep -E 'cidr:|ipipMode:|vxlanMode:|blockSize:|natOutgoing:|error|Error'
         echo
-        echo "=== HelmChartConfig posato dal playbook, se c'e' ==="
-        {{ k }} -n kube-system get helmchartconfig rke2-calico -o jsonpath={.spec.valuesContent} 2>/dev/null \
-          || echo "nessun HelmChartConfig rke2-calico nel cluster"
+        echo "=== HelmChartConfig rke2-calico ==="
+        {{ k }} -n kube-system get helmchartconfig --request-timeout=15s 2>&1
         echo
-        echo "=== POD DI CALICO ==="
-        {{ k }} -n calico-system get pods -o wide 2>/dev/null || \
-          {{ k }} -n kube-system get pods -o wide 2>/dev/null | grep -i calico
+        echo "=== POD DI CALICO (calico-system e kube-system) ==="
+        {{ k }} -n calico-system get pods -o wide --request-timeout=15s 2>&1
+        {{ k }} -n kube-system get pods -o wide --request-timeout=15s 2>&1 | grep -Ei 'NAME|calico|coredns|helm-install'
         echo
-        echo "=== DOVE STA COREDNS ==="
-        {{ k }} -n kube-system get pods -o wide | grep -E 'NAME|coredns'
+        echo "=== JOB DI INSTALLAZIONE DEI CHART: qualcuno e' fallito? ==="
+        {{ k }} -n kube-system get jobs --request-timeout=15s 2>&1
       args:
         executable: /bin/bash
       register: cluster
@@ -89,4 +102,4 @@
 
     - name: Referto del cluster
       debug:
-        msg: "{{ cluster.stdout_lines }}"
+        msg: "{{ cluster.stdout_lines + (['--- stderr ---'] + cluster.stderr_lines if cluster.stderr_lines | length > 0 else []) }}"

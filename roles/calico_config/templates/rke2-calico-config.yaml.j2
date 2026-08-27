@@ -3,6 +3,13 @@
 {{ '#' }} che RKE2 installa da se'. Il nome e il namespace devono coincidere con
 {{ '#' }} quelli dell'HelmChart packaged, altrimenti il file viene ignorato in
 {{ '#' }} silenzio e Calico parte con i propri default.
+{{ '#' }}
+{{ '#' }} calicoNetwork E' SCRITTO PER INTERO, e non e' verbosita': bgp e ipPools
+{{ '#' }} stanno qui perche' un valore omesso non e' un valore ereditato. Se il
+{{ '#' }} merge non conserva i default del chart, un calicoNetwork parziale
+{{ '#' }} lascerebbe Calico senza incapsulamento e con BGP acceso ma senza peer:
+{{ '#' }} nessun tunnel, nessuna rotta verso gli altri nodi, e il cluster che
+{{ '#' }} sembra sano mentre i pod non si raggiungono fra macchine.
 apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
 metadata:
@@ -12,10 +19,20 @@ spec:
   valuesContent: |-
     installation:
       calicoNetwork:
+        {{ '#' }} Niente BGP: i nodi non si scambiano rotte, si parlano nel tunnel.
+        bgp: Disabled
 {% if calico_mtu | default('') | string | length > 0 %}
         {{ '#' }} MTU del tunnel. Vedi calico_mtu in roles/calico_config/defaults.
         mtu: {{ calico_mtu | int }}
 {% endif %}
+        {{ '#' }} Il pool da cui nascono gli IP dei pod, con l'incapsulamento.
+        {{ '#' }} VXLAN e non IPIP: il primo e' UDP normale, il secondo e' il
+        {{ '#' }} protocollo IP 4, che molte reti aziendali scartano del tutto.
+        ipPools:
+          - cidr: {{ calico_pod_cidr }}
+            encapsulation: VXLAN
+            natOutgoing: Enabled
+            blockSize: {{ calico_block_size | int }}
         {{ '#' }} Con quale indirizzo il nodo si annuncia agli altri.
         {{ '#' }} NodeInternalIP = quello del Node Kubernetes, cioe' il node-ip
         {{ '#' }} che master1_config scrive in config.yaml. Senza questa riga

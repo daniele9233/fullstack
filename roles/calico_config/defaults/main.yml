@@ -42,6 +42,17 @@ calico_autodetection:
 # efficienza e toglie di mezzo un'incognita.
 calico_mtu: 1450
 
+# Il pool da cui nascono gli IP dei pod. 10.42.0.0/16 e' il default di RKE2 ed
+# e' quello in uso qui: si vede in "kubectl get ippools" e nei blackhole che
+# Calico lascia in "ip route" (10.42.107.0/26 e simili). blockSize 26 e' il
+# taglio dei blocchi che Calico assegna a ogni nodo, anch'esso il default.
+#
+# Vanno scritti perche' il template dichiara calicoNetwork PER INTERO: se il
+# merge del chart non conservasse i default, un pool mancante lascerebbe i pod
+# senza indirizzi.
+calico_pod_cidr: "10.42.0.0/16"
+calico_block_size: 26
+
 # Directory sorvegliata da rke2-server. Il file va scritto QUI e PRIMA del primo
 # avvio: il helm-controller lo applica quando installa il chart rke2-calico, e
 # la configurazione di rete di un cluster non si cambia comodamente dopo.
