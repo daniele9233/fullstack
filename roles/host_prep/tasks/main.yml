@@ -76,6 +76,44 @@
 # Non e' un problema di rete, e nessun firewall lo spiega: e' una configurazione
 # dell'host. E sopravvive a qualunque azzeramento di RKE2, perche' non e' roba
 # di RKE2 — resta li' anche dopo rke2-uninstall.sh, anche dopo il riavvio.
+# service_facts elenca NetworkManager anche su macchine dove non e' realmente
+# installato: la prova che decide e' /etc/NetworkManager sul disco. Distinguere
+# i due casi conta, perche' se NetworkManager non c'e' allora non e' lui a
+# riconfigurare le interfacce del CNI, e la causa di un eventuale guasto di rete
+# va cercata altrove invece che darla per trovata.
+- name: Verifica se NetworkManager e' davvero installato
+  stat:
+    path: /etc/NetworkManager
+  register: host_prep_nm_dir
+
+# Va stampato sempre, anche quando non c'e' niente da fare: sapere CHI gestisce
+# la rete su un nodo e' la prima cosa che serve quando il traffico fra pod non
+# passa, e finora l'abbiamo sempre dedotta invece di leggerla.
+- name: Riepilogo di cosa gestisce la rete su questo nodo
+  debug:
+    msg: >-
+      {{ inventory_hostname }}: NetworkManager
+      {{ 'INSTALLATO' if host_prep_nm_dir.stat.exists else 'ASSENTE' }},
+      nm-cloud-setup
+      {{ 'PRESENTE' if host_prep_has_nmcloud | bool else 'assente' }}.
+      {{ 'Nessuno dei due puo essere la causa di un guasto di rete fra i nodi qui.'
+         if (not host_prep_nm_dir.stat.exists and not host_prep_has_nmcloud | bool)
+         else 'Configurazione applicata.' }}
+
+# La directory puo' non esserci su un'installazione minimale anche con
+# NetworkManager presente: template non crea il percorso padre e fallirebbe con
+# "Destination directory ... does not exist".
+- name: Crea la directory di configurazione di NetworkManager
+  file:
+    path: /etc/NetworkManager/conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when:
+    - gestisci_networkmanager | bool
+    - host_prep_nm_dir.stat.exists
+
 # template e non "copy: content:": ansible_managed lo fornisce il modulo
 # template, non copy — scritto con copy il task muore con "'ansible_managed' is
 # undefined". E' anche il modo in cui il resto del repository scrive i file.
@@ -89,13 +127,13 @@
   register: host_prep_nm_conf
   when:
     - gestisci_networkmanager | bool
-    - host_prep_has_nm | bool
+    - host_prep_nm_dir.stat.exists
 
 - name: Ricarica NetworkManager
   command: nmcli general reload
   when:
     - gestisci_networkmanager | bool
-    - host_prep_has_nm | bool
+    - host_prep_nm_dir.stat.exists
     - host_prep_nm_conf is changed
   failed_when: false
   changed_when: true
