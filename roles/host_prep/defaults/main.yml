@@ -6,6 +6,24 @@
 disable_ufw: true
 disable_apparmor: true
 
+# Toglie a NetworkManager le interfacce del CNI e spegne nm-cloud-setup.
+#
+# E' un requisito documentato di RKE2, non una precauzione: NetworkManager
+# riconfigura le interfacce che il CNI crea nel default network namespace, e
+# nm-cloud-setup — presente di serie sulle immagini cloud — AGGIUNGE UNA TABELLA
+# DI ROUTING che scavalca quella del CNI.
+#
+# Il guasto che ne segue e' fra i piu' difficili da diagnosticare che esistano:
+# "ip route" resta perfetta (e' la tabella main, e nessuno la tocca), le rotte
+# verso i blocchi pod degli altri nodi ci sono tutte, Calico riporta ogni
+# componente Available — e i pacchetti escono dal nodo e non arrivano, perche'
+# le "ip rule" li hanno deviati su un'altra tabella prima che la main venisse
+# consultata. Si guarda la configurazione giusta e si vede tutto a posto.
+#
+# Non si spegne, se non si sa cosa si sta facendo. Nemmeno su macchine dove
+# "tutte le porte sono aperte": questo non c'entra con le porte.
+gestisci_networkmanager: true
+
 # Allinea l'hostname di sistema al nome usato nell'inventario.
 #
 # Disattivato di default DI PROPOSITO: su un nodo gia' in un cluster, cambiare
