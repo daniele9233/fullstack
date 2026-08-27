@@ -46,11 +46,23 @@
          if (calico_porta_attuale.stdout | default('') | trim | length > 0)
          else calico_porta_default | string }}
 
+# argv e NON la forma a stringa: il payload JSON contiene spazi, e "command"
+# spezza la riga sugli spazi bianchi. Scritto come stringa, kubectl riceveva
+# tre argomenti separati ({spec:, {vxlanPort:, 8472}}) e rispondeva
+# "error decoding patch: invalid character 's'". Con argv ogni elemento resta
+# un argomento solo, quali che siano gli spazi dentro.
 - name: Imposta la porta VXLAN di Calico
-  command: >-
-    {{ calico_kubectl }} --kubeconfig {{ calico_kubeconfig }}
-    patch felixconfiguration default --type=merge
-    -p {{ {'spec': {'vxlanPort': calico_vxlan_port | int}} | to_json }}
+  command:
+    argv:
+      - "{{ calico_kubectl }}"
+      - "--kubeconfig"
+      - "{{ calico_kubeconfig }}"
+      - "patch"
+      - "felixconfiguration"
+      - "default"
+      - "--type=merge"
+      - "-p"
+      - "{{ {'spec': {'vxlanPort': calico_vxlan_port | int}} | to_json }}"
   register: calico_patch
   when: calico_porta_in_uso != (calico_vxlan_port | string)
 
