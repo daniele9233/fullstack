@@ -69,6 +69,92 @@
     - rke2_nome_effettivo.stdout | length > 0
     - rke2_nome_effettivo.stdout != rke2_node_name
 
+# --- Il CNI non si cambia a caldo --------------------------------------------
+# Passando da Calico a canal (o viceversa) su una macchina gia' usata, in
+# /etc/cni/net.d restano DUE conflist. Vince quella che viene prima in ordine
+# alfabetico, che non e' detto sia del CNI installato, e i pod restano in
+# ContainerCreating con 'failed to find plugin "<cni>-cni" in path [/opt/cni/bin]'
+# — un errore che parla di un plugin e non del fatto che il nodo ha due CNI.
+#
+# RKE2 non fa nessuna migrazione: la rete di un cluster si sceglie prima del
+# primo avvio. Meglio fermarsi qui, dove la cura e' una riga, che scoprirlo con
+# il cluster su e i pod fermi.
+# follow: yes perche' su un nodo RKE2 /etc/cni/net.d e' un link a
+# /var/lib/rancher/rke2/agent/etc/cni/net.d, e stat di suo NON segue i link:
+# senza, la directory risulterebbe "non una directory" su ogni nodo gia'
+# installato e il controllo non guarderebbe mai niente.
+#
+# Si guarda prima con stat perche' "find" su un percorso che non esiste — il
+# caso normale di un nodo nuovo — stampa un WARNING a ogni esecuzione. Un
+# avviso che compare sempre e non significa niente e' il modo migliore per far
+# ignorare quelli che invece significano qualcosa.
+- name: Verifica se sul nodo c'e' una directory di configurazione CNI
+  stat:
+    path: /etc/cni/net.d
+    follow: yes
+  register: rke2_cni_dir
+
+- name: Cerca la configurazione CNI gia' presente sul nodo
+  find:
+    paths: /etc/cni/net.d
+    patterns: "*.conf,*.conflist"
+  register: rke2_cni_presente
+  failed_when: false
+  changed_when: false
+  when: rke2_cni_dir.stat.isdir | default(false)
+
+- name: Stabilisci quale CNI c'e' sul nodo e quale ne stiamo chiedendo
+  set_fact:
+    # Il nome del CNI sta nel NOME del file: 10-canal.conflist, 10-calico.conflist,
+    # 05-cilium.conflist. Il contenuto no — quello di canal nomina calico, perche'
+    # canal e' flannel per la rete piu' calico per le policy.
+    rke2_cni_sul_nodo: >-
+      {{ (rke2_cni_presente.files | default([]) | map(attribute='path') | map('basename') | join(' '))
+         | regex_search('canal|calico|cilium|flannel') | default('', true) }}
+    # Lista vuota = default RKE2, che e' canal.
+    rke2_cni_richiesto: "{{ rke2_cni | default([]) | first | default('canal', true) }}"
+
+- name: Fermati se il nodo ha gia' un altro CNI
+  fail:
+    msg: |
+      Su {{ inventory_hostname }} in /etc/cni/net.d c'e' gia' la configurazione di
+      "{{ rke2_cni_sul_nodo }}", ma questo playbook sta per configurare
+      "{{ rke2_cni_richiesto }}".
+
+      File trovati: {{ rke2_cni_presente.files | default([]) | map(attribute='path') | map('basename') | join(', ') }}
+
+      IL CNI NON SI CAMBIA A CALDO. RKE2 non rimuove la configurazione del CNI
+      precedente: le due conflist convivono, vince quella che viene prima in
+      ordine alfabetico e i pod restano in ContainerCreating con
+      'failed to find plugin "<cni>-cni" in path [/opt/cni/bin]'.
+
+      La macchina va azzerata e rifatta entrare:
+
+        ansible-playbook playbooks/20-rancher.yml -e clean_nodes_before_join=true
+
+      Per azzerare un nodo solo, aggiungi --limit {{ inventory_hostname }} e poi
+      rilancia il playbook intero. La pulizia rimuove /etc/cni/net.d, /var/lib/cni
+      e /opt/cni insieme al resto dello stato di RKE2.
+
+      Se sai quello che fai e vuoi proseguire lo stesso:
+      -e rke2_ferma_se_cni_diverso=false
+  when:
+    - rke2_ferma_se_cni_diverso | bool
+    - rke2_cni_sul_nodo | length > 0
+    - rke2_cni_sul_nodo != rke2_cni_richiesto
+
+- name: Segnala il CNI diverso e prosegui, come richiesto
+  debug:
+    msg: >-
+      {{ inventory_hostname }}: sul nodo c'e' la configurazione di
+      "{{ rke2_cni_sul_nodo }}" e si sta configurando "{{ rke2_cni_richiesto }}",
+      ma rke2_ferma_se_cni_diverso e' false: si prosegue. I pod possono restare
+      in ContainerCreating.
+  when:
+    - not (rke2_ferma_se_cni_diverso | bool)
+    - rke2_cni_sul_nodo | length > 0
+    - rke2_cni_sul_nodo != rke2_cni_richiesto
+
 # --- Token del cluster -------------------------------------------------------
 # Con rke2_token valorizzato si usa quello su tutti i master. Con rke2_token
 # vuoto (default) il primo master bootstrappa senza token, RKE2 gliene genera
@@ -297,4 +383,5 @@
   debug:
     msg: |
       {{ inventory_hostname }} ({{ 'bootstrap' if inventory_hostname == groups['masters'][0] else 'join su ' + hostvars[groups['masters'][0]].ansible_host }})
+      CNI: {{ rke2_cni | join(', ') | default('canal (default RKE2)', true) }} — disabilitati: {{ rke2_disable | join(', ') | default('nessuno', true) }}
       {{ rke2_nodes.stdout }}

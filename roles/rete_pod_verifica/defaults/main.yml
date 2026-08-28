@@ -15,9 +15,30 @@
 # rete fra i nodi.
 #
 # Su un cluster a un nodo non ha niente da verificare e si salta da se'.
+#
+# NON DIPENDE DAL CNI: la domanda e' se un pod raggiunge CoreDNS su un ALTRO
+# nodo, e vale identica con canal e con Calico. Del CNI il ruolo si serve solo
+# per dire, quando fallisce, quale interfaccia e quale porta guardare.
 
 rpv_kubectl: "/var/lib/rancher/rke2/bin/kubectl"
 rpv_kubeconfig: "/etc/rancher/rke2/rke2.yaml"
+
+# --- Di quale CNI stiamo parlando -------------------------------------------
+# Serve solo ai messaggi di diagnosi. I due cluster dichiarano la cosa in due
+# posti diversi — rke2_cni e' una lista e vale per il cluster locale, cluster_cni
+# e' una stringa e vale per il downstream creato via API Rancher — e questo ruolo
+# gira su entrambi, quindi si guardano tutti e due. Se nessuno dei due nomina
+# Calico, il CNI e' canal (che e' anche il default di RKE2 con la lista vuota).
+rpv_cni_dichiarato: >-
+  {{ (rke2_cni | default([]) | join(',')) ~ ',' ~ (cluster_cni | default('')) }}
+rpv_cni: "{{ 'calico' if 'calico' in rpv_cni_dichiarato else 'canal' }}"
+
+# Interfaccia del tunnel e porta UDP dell'incapsulamento, per i comandi
+# suggeriti nel messaggio di errore. Calico crea vxlan.calico e usa la 4789
+# (il numero IANA), flannel crea flannel.1 e usa la 8472 — che su questa rete
+# e' quella aperta.
+rpv_tunnel_iface: "{{ 'vxlan.calico' if rpv_cni == 'calico' else 'flannel.1' }}"
+rpv_tunnel_porta: "{{ 4789 if rpv_cni == 'calico' else 8472 }}"
 
 # Immagine del pod di prova. Serve solo nslookup. Se il nodo non riesce a
 # scaricarla il ruolo lo dice a parte: e' un problema diverso: il pull passa

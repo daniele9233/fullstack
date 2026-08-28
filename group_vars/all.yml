@@ -65,38 +65,63 @@ remote_cert_path: "/root"
 # Cluster configuration (cluster DOWNSTREAM creato via API Rancher)
 cluster_name: "iacdevops"
 cluster_k8s_version: "v1.33.11+rke2r1"
-# CNI del cluster DOWNSTREAM. Calico, come il cluster locale.
+# CNI del cluster DOWNSTREAM. Canal, come il cluster locale (rke2_cni).
 #
-# Perche' con Calico il traffico fra i nodi non passava, e perche' adesso
-# dovrebbe: Calico NON usa il node-ip che scriviamo in config.yaml. Flannel, e
-# quindi canal, legge l'InternalIP del Node Kubernetes — che RKE2 imposta
-# proprio da quel node-ip. Calico invece decide da se' con quale indirizzo
-# annunciarsi, e con il default "firstFound" prende la prima interfaccia che
-# trova. E' li' che i due divergono, ed e' per questo che su queste stesse
-# macchine canal attraversava i nodi e Calico no.
+# PERCHE' CANAL E NON CALICO, adesso
 #
-# La cura e' cluster_chart_values qui sotto (e il ruolo calico_config per il
-# cluster locale): impone a Calico nodeAddressAutodetectionV4 kubernetes
-# NodeInternalIP, cioe' lo stesso indirizzo che gia' controlliamo noi.
+# Il deploy della console a 3 nodi con Traefik e Calico non riesce, e il guasto
+# e' sempre lo stesso: i nodi risultano tutti Ready, i pod sulla stessa macchina
+# si parlano, e il traffico fra pod di nodi DIVERSI sparisce senza un errore. Il
+# primo a caderci e' il job che scarica il chart di Traefik, che va in timeout
+# su CoreDNS e stampa un messaggio su traefik.github.io: sembra Internet, e non
+# lo e'.
 #
-# Se dovesse ripresentarsi, il playbook adesso lo dice SUBITO: rete_pod_verifica
-# gira prima di Traefik e fallisce in un minuto dicendo che il guasto e' fra i
-# nodi, invece di lasciarlo emergere venticinque minuti dopo travestito da
-# problema di traefik.github.io. Lo stato precedente con canal, funzionante, e'
-# sul branch ClusterRancher3NodiCanalFunzionante.
-cluster_cni: "calico"
+# Con Calico le spiegazioni possibili sono due e finora nessuna delle due ha
+# retto alla prova: la porta VXLAN (4789 di Calico contro 8472 di flannel, e su
+# questa rete e' aperta la seconda) e l'autodetection dell'indirizzo con cui il
+# nodo si annuncia. Provate tutt'e due — calico_vxlan_port e calico_config — il
+# sintomo e' rimasto identico.
+#
+# Canal toglie di mezzo entrambe le incognite in un colpo solo, e non e' una
+# scelta al buio: e' la configurazione con cui QUESTO ambiente ha sempre girato,
+# con il cluster downstream a piu' nodi e sopra NFS provisioner, pgadmin e
+# Prometheus — roba che senza rete fra i pod non starebbe in piedi. Flannel
+# incapsula sulla 8472, che qui passa, e prende l'indirizzo del nodo dal Node
+# Kubernetes, cioe' dal node-ip che scriviamo noi in config.yaml: niente
+# autodetection che possa scegliere l'interfaccia sbagliata.
+#
+# Se con canal la console a 3 nodi viene su, il guasto NON e' della rete ne'
+# delle porte: e' di Calico, e si torna a cercarlo li'.
+#
+# PER TORNARE A CALICO basta rimettere "calico" qui (e "- calico" in rke2_cni
+# per il cluster locale): cluster_chart_values qui sotto si riaccende da solo,
+# perche' deriva da questa riga. Il cluster downstream pero' non cambia CNI a
+# caldo: i nodi vanno ricreati.
+cluster_cni: "canal"
 
 # Valori dei chart packaged del cluster DOWNSTREAM, passati a Rancher in
 # spec.rkeConfig.chartValues. E' l'equivalente, per il cluster creato via API,
-# del HelmChartConfig che il ruolo calico_config posa sul cluster locale: la
-# stessa configurazione di Calico, per la stessa ragione.
-cluster_chart_values:
+# del HelmChartConfig che il ruolo calico_config posa sul cluster locale.
+#
+# CON CANAL NON C'E' NIENTE DA IMPORRE, e vale la pena sapere perche' non e'
+# una dimenticanza: i due valori che a Calico vanno detti a mano — l'indirizzo
+# con cui il nodo si annuncia e la MTU del tunnel — con canal arrivano gia'
+# giusti. L'indirizzo lo prende dal Node Kubernetes (il node-ip che scriviamo
+# noi), e la MTU la fissa il chart rke2-canal a 1450, che e' il valore con cui
+# qui ha sempre funzionato.
+#
+# Il dizionario di Calico resta scritto qui sotto e si riaccende cambiando
+# cluster_cni: cosi' il ritorno a Calico non richiede di riscrivere niente.
+cluster_chart_values_calico:
   rke2-calico:
     installation:
       calicoNetwork:
         mtu: 1450
         nodeAddressAutodetectionV4:
           kubernetes: NodeInternalIP
+
+cluster_chart_values: >-
+  {{ cluster_chart_values_calico if cluster_cni == 'calico' else {} }}
 
 # Componenti packaged da non installare sul cluster downstream, stesso standard
 # del cluster locale (vedi rke2_disable). L'ingress e' Traefik.
@@ -224,50 +249,84 @@ rke2_ingress_controller: "traefik"
 # CNI del cluster locale. Deve essere identico su tutti i master: se diverge,
 # in /etc/cni/net.d convivono conflist di CNI diversi e i pod restano bloccati
 # in ContainerCreating. Lista vuota = default RKE2 (canal).
-rke2_cni:
-  - calico
-
-# Componenti packaged da disabilitare.
 #
-# rke2-canal: con rke2_cni: [calico] il canal packaged non va installato,
+# CANAL, per la stessa ragione scritta per esteso in cluster_cni piu' sopra: la
+# console a 3 nodi con Traefik e Calico non viene su, il traffico fra pod di
+# nodi diversi sparisce in silenzio, e ne' la porta VXLAN ne' l'autodetection
+# dell'indirizzo hanno spiegato il perche'. Canal incapsula sulla 8472, che su
+# questa rete passa, e prende l'indirizzo del nodo dall'InternalIP del Node,
+# cioe' dal node-ip che scriviamo noi qui sotto: due incognite in meno.
+#
+# E' scritto "canal" invece di lasciare la lista vuota anche se il default di
+# RKE2 e' lo stesso: cosi' il CNI in uso e' leggibile in config.yaml sui nodi,
+# ed e' la stessa cosa che guarda master1_config quando controlla che il nodo
+# non stia gia' girando con un altro CNI.
+#
+# PER TORNARE A CALICO basta rimettere "- calico" qui: rke2_disable, il ruolo
+# calico_config e il play della porta VXLAN si riaccendono da soli, perche'
+# derivano tutti da questa riga. I nodi pero' vanno azzerati: il CNI non si
+# cambia a caldo (vedi clean_nodes_before_join).
+rke2_cni:
+  - canal
+
+# true = master1_config si ferma se in /etc/cni/net.d del nodo c'e' gia' la
+# configurazione di un CNI DIVERSO da quello richiesto qui sopra. E' la guardia
+# che serve proprio adesso, passando da Calico a canal su macchine gia' usate:
+# le due conflist convivono, vince quella prima in ordine alfabetico e i pod
+# restano in ContainerCreating con un errore che parla di un plugin mancante.
+# La cura e' azzerare i nodi (clean_nodes_before_join=true), e il messaggio lo
+# dice. false = prosegui lo stesso, sapendo cosa si rischia.
+rke2_ferma_se_cni_diverso: true
+
+# Componenti packaged da disabilitare. DERIVATA da rke2_cni e da
+# rke2_ingress_controller: non modificarla a mano.
+#
+# rke2-canal si disabilita SOLO quando il CNI e' un altro. Con Calico serve,
 # altrimenti in /etc/cni/net.d convivono due conflist e i pod restano in
-# ContainerCreating.
+# ContainerCreating; con canal disabilitarlo vorrebbe dire lasciare il nodo
+# senza rete del tutto. E' lo stesso calcolo che fa gia' rsn_disable_effettivo
+# per il nodo singolo.
 #
 # rke2-ingress-nginx: l'ingress standard e' Traefik, installato dal ruolo
 # traefik_install. Due ingress controller che pretendono entrambi le porte 80 e
 # 443 dei nodi non possono coesistere: il secondo resta in CrashLoopBackOff.
-# DERIVATA da rke2_ingress_controller: non modificarla a mano.
 #
 # Con ingress-controller valorizzato la scelta dell'ingress la fa quello, ed e'
 # il meccanismo previsto da RKE2 — nelle versioni recenti "rke2-ingress-nginx"
 # non e' nemmeno piu' fra i valori ammessi di "disable". Senza, si torna al modo
 # vecchio: nginx disattivato qui e Traefik installato dal chart.
 #
-# E' calcolata invece che scritta perche' le due cose devono per forza
-# corrispondere: nginx acceso insieme a Traefik significa due ingress che
-# pretendono le porte 80 e 443 dei nodi, e il secondo che parte resta in
-# CrashLoopBackOff. Tenerle allineate a mano vuol dire dimenticarsene una volta.
+# E' calcolata invece che scritta perche' queste cose devono per forza
+# corrispondere: canal disabilitato mentre e' lui il CNI significa un nodo senza
+# rete, e nginx acceso insieme a Traefik significa due ingress che pretendono le
+# porte 80 e 443. Tenerle allineate a mano vuol dire dimenticarsene una volta.
 rke2_disable: >-
-  {{ ['rke2-canal']
+  {{ (['rke2-canal'] if (rke2_cni | length > 0 and 'canal' not in rke2_cni) else [])
      + ([] if (rke2_ingress_controller | default('') | length > 0)
         else ['rke2-ingress-nginx']) }}
 
-# PORTA VXLAN DI CALICO. Disattivato: vuoto = decide Calico (4789).
+# PORTA VXLAN DI CALICO. Non si applica: con canal la porta e' la 8472 e la
+# decide flannel. Vuoto = non toccare niente.
 #
-# Serve a forzare la porta UDP su cui Calico incapsula il traffico fra i pod di
+# Serve a forzare la porta UDP su cui CALICO incapsula il traffico fra i pod di
 # nodi diversi. Calico usa la 4789, flannel e canal la 8472, e su una rete che
-# filtra per porta la differenza conta.
+# filtra per porta la differenza conta: qui e' aperta la 8472 — nessuno ha mai
+# chiuso la 4789, semplicemente non e' mai servita — ed e' uno dei motivi per
+# cui si e' tornati a canal.
 #
-# QUI NON ERA QUESTO, e lo si e' verificato invece di dedurlo: sul cluster
-# locale a tre nodi il traffico fra pod di macchine diverse non passa ne' con la
-# 4789 ne' con la 8472. Cambiata la porta e riavviato calico-node, il job che
-# scarica il chart di Traefik e' morto identico, con lo stesso i/o timeout verso
-# CoreDNS. La causa vera del comportamento di Calico qui non e' ancora nota.
+# CON CALICO QUI NON ERA QUESTO, e lo si e' verificato invece di dedurlo: sul
+# cluster locale a tre nodi il traffico fra pod di macchine diverse non passava
+# ne' con la 4789 ne' con la 8472. Cambiata la porta e riavviato calico-node, il
+# job che scarica il chart di Traefik e' morto identico, con lo stesso i/o
+# timeout verso CoreDNS. La causa vera del comportamento di Calico qui non e'
+# ancora nota, ed e' la ragione per cui adesso il CNI e' canal.
 #
 # La variabile e il ruolo calico_vxlan_port restano perche' su un'altra rete
-# quella porta e' una spiegazione plausibile e provarla costa un minuto. Il
-# sintomo da cui partire: tutti i nodi Ready, i pod sullo stesso nodo si parlano,
-# e il traffico fra nodi diversi sparisce senza un errore. Si distingue cosi':
+# quella porta e' una spiegazione plausibile e provarla costa un minuto. Il ruolo
+# non gira affatto finche' il CNI e' canal: lo decidono i "when" in
+# playbooks/20-rancher.yml. Il sintomo da cui partire: tutti i nodi Ready, i pod
+# sullo stesso nodo si parlano, e il traffico fra nodi diversi sparisce senza un
+# errore. Si distingue cosi':
 #
 #   kubectl run t --rm -i --restart=Never --image=busybox:1.36 \
 #     --overrides='{"spec":{"nodeName":"<NODO>"}}' -- nslookup github.com
@@ -1434,12 +1493,14 @@ rsn_remove_127_0_1_1: true
 # per rendere le installazioni ripetibili.
 rsn_rke2_version: ""
 
-# Lo stesso CNI dei 3 nodi, per non avere due standard. Su UN NODO SOLO la
-# scelta conta molto meno: non c'e' traffico fra nodi, quindi non c'e' overlay
-# VXLAN da far passare in mezzo a un firewall — che e' il modo in cui Calico si
-# rompe piu' spesso. Lista VUOTA = default RKE2 (canal), un chart in meno.
+# Lo stesso CNI dei 3 nodi, per non avere due standard: adesso canal, come
+# rke2_cni. Su UN NODO SOLO la scelta conta molto meno — non c'e' traffico fra
+# nodi, quindi non c'e' overlay VXLAN da far passare in mezzo a un firewall, che
+# e' il modo in cui Calico si rompe piu' spesso — ma tenere due CNI diversi nello
+# stesso repository significa diagnosticare due cose diverse.
+# Lista VUOTA = default RKE2 (canal), che qui e' lo stesso risultato.
 rsn_cni:
-  - calico
+  - canal
 rsn_disable_ingress_nginx: true
 
 # Il resolv.conf VERO, non lo stub 127.0.0.53 di systemd-resolved a cui punta

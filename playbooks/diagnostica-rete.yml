@@ -8,27 +8,38 @@
 # servono a capire di chi e' la colpa, e che prese una alla volta costano
 # mezz'ora di ssh:
 #
-#   1. Con quale indirizzo Calico annuncia ogni nodo (il "local" del tunnel), e
+#   1. Con quale indirizzo ogni nodo annuncia il proprio tunnel (il "local"), e
 #      se coincide con l'InternalIP che il nodo ha in Kubernetes. Se divergono,
 #      il tunnel punta dove non risponde nessuno.
 #   2. Se le rotte verso i blocchi pod DEGLI ALTRI nodi esistono. Se mancano, il
-#      problema e' nella configurazione di Calico e non nella rete fisica.
-#   3. Se la configurazione che calico_config posa e' arrivata davvero
-#      nell'Installation, o se Calico sta ancora usando i propri default.
+#      problema e' nella configurazione del CNI e non nella rete fisica.
+#   3. Che cosa sta girando davvero: con Calico l'Installation e gli IPPool, con
+#      canal il DaemonSet rke2-canal e la sua net-conf.
 #   4. Su che porta e a che MTU sta incapsulando.
 #
 # Con 1 e 2 a posto ma il traffico che non arriva, la colpa e' della rete fisica
-# e il passo dopo e' un tcpdump sulla porta del tunnel fra due nodi.
+# e il passo dopo e' un tcpdump sulla porta del tunnel fra due nodi:
+# UDP 8472 con canal, UDP 4789 con Calico.
+#
+# SI ADATTA AL CNI IN USO leggendo rke2_cni da group_vars: oggi e' canal, quindi
+# guarda flannel.1 e i pod di rke2-canal; rimettendo calico torna a guardare
+# vxlan.calico, l'Installation e il namespace calico-system.
 
 - name: Cosa dice ogni nodo di se stesso
   hosts: masters
   become: yes
   gather_facts: no
+  vars:
+    cni_e_calico: "{{ 'calico' in (rke2_cni | default([]) | join(',')) }}"
+    tunnel_iface: "{{ 'vxlan.calico' if cni_e_calico | bool else 'flannel.1' }}"
+    tunnel_porta: "{{ 4789 if cni_e_calico | bool else 8472 }}"
   tasks:
     - name: Interfacce, tunnel e rotte
       shell: |
         echo "hostname            : $(hostname)"
         echo "indirizzi           : $(hostname -I)"
+        echo "CNI atteso          : {{ rke2_cni | default([]) | join(', ') | default('canal (default RKE2)', true) }}"
+        echo "tunnel atteso       : {{ tunnel_iface }} su UDP {{ tunnel_porta }}"
         echo "--- rke2-server ---"
         systemctl is-active rke2-server 2>&1
         systemctl is-enabled rke2-server 2>&1
@@ -37,15 +48,19 @@
         journalctl -u rke2-server -n 12 --no-pager -o cat 2>&1 | tail -12
         echo "--- interfacce ---"
         ip -br addr show | grep -v '^lo'
-        echo "--- tunnel Calico ---"
-        if ip link show vxlan.calico >/dev/null 2>&1; then
-          ip -d link show vxlan.calico | sed -n '2,3p'
-          ip -br addr show vxlan.calico
+        echo "--- tunnel {{ tunnel_iface }} ---"
+        if ip link show {{ tunnel_iface }} >/dev/null 2>&1; then
+          ip -d link show {{ tunnel_iface }} | sed -n '2,3p'
+          ip -br addr show {{ tunnel_iface }}
         else
-          echo "vxlan.calico ASSENTE"
+          echo "{{ tunnel_iface }} ASSENTE"
         fi
+        echo "--- configurazione CNI sul disco ---"
+        ls -l /etc/cni/net.d/ 2>&1
         echo "--- rotte verso le reti pod ---"
         ip route | grep -E '10\.42\.' || echo "NESSUNA ROTTA verso 10.42.0.0/16"
+        echo "--- chi ascolta sulla porta del tunnel ({{ tunnel_porta }}/udp) ---"
+        ss -lunp 2>/dev/null | awk 'NR==1 || $4 ~ /:{{ tunnel_porta }}$/'
       args:
         executable: /bin/bash
       register: nodo
@@ -62,22 +77,24 @@
   gather_facts: no
   vars:
     k: "/var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml"
+    cni_e_calico: "{{ 'calico' in (rke2_cni | default([]) | join(',')) }}"
   tasks:
     # 2>&1 OVUNQUE, e nessun "|| echo": la volta scorsa questo blocco e' tornato
     # vuoto su tutto e non si capiva perche' — gli errori di kubectl finivano su
     # stderr, che il debug qui sotto non stampava. Un referto che nasconde il
     # motivo per cui non ha dati e' peggio di nessun referto.
-    - name: Nodi, Calico e configurazione effettiva
+    - name: Nodi, CNI e configurazione effettiva
       shell: |
-        echo "=== IL FILE DI CALICO E' SUL DISCO? ==="
+        echo "=== MANIFEST POSATI SUL DISCO ==="
         ls -l /var/lib/rancher/rke2/server/manifests/ 2>&1
         echo
         echo "=== kubectl RISPONDE? ==="
         {{ k }} version --request-timeout=10s 2>&1 | tail -3
         echo
-        echo "=== INTERNAL-IP DI OGNI NODO (quello che Calico dovrebbe usare) ==="
+        echo "=== INTERNAL-IP DI OGNI NODO (quello che il tunnel deve usare) ==="
         {{ k }} get nodes -o wide --request-timeout=15s 2>&1
         echo
+        {% if cni_e_calico | bool %}
         echo "=== CONFIGURAZIONE CALICO EFFETTIVA (Installation) ==="
         {{ k }} get installation default -o yaml --request-timeout=15s 2>&1 | sed -n '1,60p'
         echo
@@ -91,6 +108,19 @@
         echo "=== POD DI CALICO (calico-system e kube-system) ==="
         {{ k }} -n calico-system get pods -o wide --request-timeout=15s 2>&1
         {{ k }} -n kube-system get pods -o wide --request-timeout=15s 2>&1 | grep -Ei 'NAME|calico|coredns|helm-install'
+        {% else %}
+        echo "=== CONFIGURAZIONE DI FLANNEL (net-conf.json del ConfigMap di canal) ==="
+        {{ k }} -n kube-system get configmap rke2-canal-config -o 'jsonpath={.data.net-conf\.json}' --request-timeout=15s 2>&1
+        echo
+        echo "=== SUBNET POD ASSEGNATA A OGNI NODO ==="
+        {{ k }} get nodes -o custom-columns='NODO:.metadata.name,PODCIDR:.spec.podCIDR,PUBLIC-IP:.metadata.annotations.flannel\.alpha\.coreos\.com/public-ip' --request-timeout=15s 2>&1
+        echo
+        echo "=== HelmChartConfig (valori aggiunti ai chart packaged) ==="
+        {{ k }} -n kube-system get helmchartconfig --request-timeout=15s 2>&1
+        echo
+        echo "=== POD DI CANAL E COREDNS ==="
+        {{ k }} -n kube-system get pods -o wide --request-timeout=15s 2>&1 | grep -Ei 'NAME|canal|coredns|helm-install'
+        {% endif %}
         echo
         echo "=== JOB DI INSTALLAZIONE DEI CHART: qualcuno e' fallito? ==="
         {{ k }} -n kube-system get jobs --request-timeout=15s 2>&1

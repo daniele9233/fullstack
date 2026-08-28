@@ -11,6 +11,27 @@
 # E' l'unico dei quattro playbook che usa update_hosts_file: il dominio Rancher
 # serve a chi parla con Rancher. I nodi database e Gluster si scrivono
 # /etc/hosts da soli, dentro ai rispettivi ruoli.
+#
+# IL CNI DI ENTRAMBI I CLUSTER E' CANAL. Il perche' per esteso sta in
+# group_vars/all.yml (cluster_cni e rke2_cni); in breve: con Calico la console a
+# 3 nodi non viene su perche' il traffico fra pod di nodi diversi sparisce senza
+# un errore, e ne' la porta VXLAN ne' l'autodetection dell'indirizzo hanno
+# spiegato il perche'. Canal e' la configurazione con cui questo ambiente ha
+# sempre girato: incapsula sulla 8472, che qui passa, e segue il node-ip che
+# scriviamo noi. Se con canal viene su, il guasto non e' della rete: e' di Calico.
+#
+# Quello che cambia in questo playbook, e cambia da se' leggendo quelle due
+# variabili: calico_config non posa piu' niente prima dell'avvio, il play della
+# porta VXLAN non gira, e rke2_disable smette di disabilitare rke2-canal — che
+# adesso e' il CNI, e disabilitarlo lascerebbe i nodi senza rete. Il resto,
+# rete_pod_verifica compreso, e' identico: quella verifica non guarda il CNI, ma
+# se un pod raggiunge CoreDNS su un altro nodo.
+#
+# ATTENZIONE sulle macchine che hanno gia' girato con Calico: il CNI non si
+# cambia a caldo. I nodi vanno azzerati, altrimenti in /etc/cni/net.d restano
+# due conflist e i pod non partono. master1_config se ne accorge e si ferma
+# dicendolo, ma la cura e' partire gia' con:
+#   ansible-playbook playbooks/20-rancher.yml -e clean_nodes_before_join=true
 
 - name: Prepara i nodi del cluster Rancher
   hosts: masters,new_managers,workers,ingress
@@ -80,7 +101,17 @@
     # nella directory dei manifest PRIMA che master1_config avvii rke2-server.
     # E' l'unico momento in cui si puo' dire a Calico come annunciarsi — dopo,
     # il chart e' gia' installato e la rete del cluster gia' formata.
+    #
+    # CON CANAL NON C'E' NIENTE DA POSARE, ed e' il motivo per cui questo ruolo
+    # adesso e' condizionato: flannel prende l'indirizzo del nodo dall'InternalIP
+    # del Node (il node-ip che master1_config scrive in config.yaml) e la MTU dal
+    # chart rke2-canal, che la fissa a 1450. I due valori che a Calico vanno
+    # imposti a mano, con canal arrivano gia' giusti.
+    #
+    # Il "when" guarda rke2_cni: rimettendo "- calico" li', il ruolo torna a
+    # girare da solo senza toccare questo file.
     - role: calico_config
+      when: "'calico' in (rke2_cni | default([]))"
     - role: master1_config
     - role: master1_kubectl
 
@@ -88,14 +119,17 @@
 # PORTA VXLAN DI CALICO, prima di Traefik e per una ragione precisa.
 #
 # Calico incapsula il traffico fra i pod di nodi diversi in VXLAN sulla porta
-# UDP 4789. Canal, che e' quello che girava qui prima, usa la 8472. Su questa
-# rete e' aperta la 8472 e non la 4789 — nessuno l'ha mai chiusa, semplicemente
-# non e' mai servita.
+# UDP 4789. Canal usa la 8472. Su questa rete e' aperta la 8472 e non la 4789 —
+# nessuno l'ha mai chiusa, semplicemente non e' mai servita.
 #
 # Il guasto che ne segue non somiglia a un problema di rete: Calico si installa,
 # i tre master diventano Ready, e il primo a rompersi e' il job che scarica il
 # chart di Traefik, con un "i/o timeout" su traefik.github.io. Sembra Internet.
 # Invece e' che quel pod e' finito su un nodo e CoreDNS sta su un altro.
+#
+# CON CANAL QUESTO PLAY NON HA NIENTE DA FARE: il tunnel e' gia' sulla porta che
+# questa rete lascia passare, e non c'e' nessuna FelixConfiguration da correggere.
+# Il "when" lo spegne finche' rke2_cni non torna a calico.
 #
 # Va qui perche' Traefik e' il primo a dipendere dalla rete fra i nodi: prima
 # non serve a niente, dopo e' troppo tardi.
@@ -105,6 +139,7 @@
   gather_facts: no
   roles:
     - role: calico_vxlan_port
+      when: "'calico' in (rke2_cni | default([]))"
 
 
 # LA RETE FRA I NODI PASSA? Si chiede QUI, prima di Traefik.
@@ -187,18 +222,23 @@
   become: yes
   gather_facts: no
   roles:
-    - kubectl_setup
-    # Il cluster downstream nasce con cluster_cni: calico, quindi ha lo stesso
-    # problema di porta VXLAN del cluster locale, e la stessa cura. Va prima di
-    # traefik_install per lo stesso motivo: Traefik e' il primo che dipende
-    # dalla rete fra i nodi.
-    - calico_vxlan_port
-    # Stessa verifica fatta sul cluster locale, qui sul downstream: anche questo
-    # nasce con Calico, anche qui Traefik e' il primo a dipendere dalla rete fra
-    # i nodi, e anche qui il guasto sarebbe silenzioso.
-    - rete_pod_verifica
+    - role: kubectl_setup
+    # Con cluster_cni: calico il downstream avrebbe lo stesso problema di porta
+    # VXLAN del cluster locale, e la stessa cura. Adesso nasce con canal, che
+    # incapsula gia' sulla 8472: il ruolo resta condizionato a cluster_cni e
+    # torna a girare da solo se si rimette calico.
+    #
+    # Va comunque PRIMA di traefik_install, quando serve: Traefik e' il primo
+    # componente che dipende dalla rete fra i nodi.
+    - role: calico_vxlan_port
+      when: cluster_cni | default('') == 'calico'
+    # Stessa verifica fatta sul cluster locale, qui sul downstream: il CNI non
+    # c'entra — si chiede se un pod raggiunge CoreDNS su un ALTRO nodo, che e'
+    # quello che serve sapere con canal esattamente come con Calico. Anche qui
+    # Traefik e' il primo a dipenderne, e anche qui il guasto sarebbe silenzioso.
+    - role: rete_pod_verifica
     # Ingress del cluster downstream. Gira qui e non sui nodi [ingress] perche'
     # il manifest va nella directory dei server RKE2: sono questi i nodi
     # control plane. Dove girano i pod lo decide traefik_node_selector, in
     # group_vars/new_managers.yml.
-    - traefik_install
+    - role: traefik_install

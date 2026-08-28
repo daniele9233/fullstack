@@ -8,9 +8,14 @@
 #
 # Sono entrambe UDP e fanno la stessa cosa, ma per una rete che filtra per porta
 # sono due mondi diversi: dove passa una puo' non passare l'altra. Ed e'
-# esattamente il caso di questa installazione. Il playbook precedente girava con
-# canal, quindi sulla 8472: quella porta e' aperta da sempre e nessuno ha mai
-# avuto motivo di aprire anche la 4789.
+# esattamente il caso di questa installazione: qui si e' sempre girato con canal,
+# quindi sulla 8472, che e' aperta da sempre — nessuno ha mai avuto motivo di
+# aprire anche la 4789.
+#
+# OGGI IL CNI E' TORNATO CANAL (rke2_cni e cluster_cni in group_vars/all.yml),
+# quindi questo ruolo non gira: il tunnel e' gia' sulla porta giusta e non c'e'
+# nessuna FelixConfiguration da correggere. Quello che segue vale per quando si
+# riprova Calico.
 #
 # Passando a Calico senza toccare nient'altro il guasto e' silenzioso e
 # ingannevole: Calico si installa, i nodi diventano tutti Ready, i pod sullo

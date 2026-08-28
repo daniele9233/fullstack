@@ -164,22 +164,33 @@ Variabili in group_vars/all.yml:
   rke2_supervisor_port       9345
   rke2_version               vuoto = ultima da get.rke2.io; valorizzare per
                              fissare la versione e rendere i run ripetibili
-  rke2_cni                   deve essere identico su tutti i master
-  rke2_disable               componenti packaged da disabilitare
+  rke2_cni                   deve essere identico su tutti i master.
+                             Adesso canal (vedi la sezione sul CNI qui sotto)
+  rke2_disable               componenti packaged da disabilitare. CALCOLATA da
+                             rke2_cni e rke2_ingress_controller, non si scrive
+                             a mano: rke2-canal si disabilita SOLO se il CNI e'
+                             un altro
+  rke2_ferma_se_cni_diverso  true = il playbook si ferma se sul nodo c'e' gia'
+                             la configurazione di un CNI diverso da quello
+                             richiesto, invece di lasciare due conflist in
+                             /etc/cni/net.d e i pod in ContainerCreating
   rke2_extra_tls_san         SAN extra (VIP o FQDN del load balancer)
   rke2_write_kubeconfig_mode permessi di rke2.yaml, vuoto = default RKE2
   rancher_endpoint_ip        IP a cui punta rancher_domain in /etc/hosts.
                              Default il primo master; con 3 master conviene
                              valorizzarlo con l'IP del bilanciatore nginx
 
-Per riprodurre la configurazione del cluster di produzione (calico al posto
-di canal):
+Per riprovare Calico al posto di canal bastano due righe in group_vars/all.yml
+(rke2_disable, il ruolo calico_config e il play della porta VXLAN si riaccendono
+da soli, perche' derivano da queste):
 
   rke2_cni:
     - calico
-  rke2_disable:
-    - rke2-canal
-    - cilium
+  cluster_cni: "calico"
+
+e i nodi vanno azzerati, perche' il CNI non si cambia a caldo:
+
+  ansible-playbook playbooks/20-rancher.yml -e clean_nodes_before_join=true
 
 I master vengono installati un nodo alla volta (serial: 1): ogni nodo attende
 che il proprio API server risponda su /readyz prima di liberare il successivo.
@@ -253,16 +264,59 @@ e haproxy non riescono a fare il bind del VIP sul nodo che non lo possiede e
 non partono affatto. Per questo keepalived_install gira prima degli altri due.
 
 
-STANDARD DEI CLUSTER: CALICO E TRAEFIK
+STANDARD DEI CLUSTER: CANAL E TRAEFIK
 
 Vale per entrambi i cluster, quello LOCALE che ospita Rancher e quello
 DOWNSTREAM creato via API Rancher.
 
-  CNI              Calico            rke2_cni sul locale, cluster_cni sul
+  CNI              canal             rke2_cni sul locale, cluster_cni sul
                                      downstream
-  Ingress          Traefik           ruolo traefik_install
-  Disabilitati     rke2-canal        solo sul locale, dove Calico lo sostituisce
-                   rke2-ingress-nginx  su entrambi
+  Ingress          Traefik           ingress-controller di RKE2 sul locale,
+                                     ruolo traefik_install sul downstream
+  Disabilitati     rke2-ingress-nginx  solo quando l'ingress lo installa il
+                                     ruolo, cioe' con rke2_ingress_controller
+                                     vuoto
+                   rke2-canal        SOLO se il CNI e' un altro (con Calico).
+                                     Con canal disabilitarlo lascerebbe i nodi
+                                     senza rete
+
+PERCHE' CANAL E NON CALICO
+
+Il deploy della console a 3 nodi con Calico non riesce, e il guasto e' sempre
+lo stesso: nodi tutti Ready, pod sulla stessa macchina che si parlano, e il
+traffico fra pod di nodi DIVERSI che sparisce senza un errore. Il primo a
+caderci e' il job che scarica il chart di Traefik, che va in timeout su CoreDNS
+e stampa un messaggio su traefik.github.io — sembra Internet, e non lo e'.
+
+Le due spiegazioni plausibili sono state provate e nessuna ha retto:
+
+  - la porta VXLAN. Calico incapsula su UDP 4789, flannel (e quindi canal) sulla
+    8472, e su questa rete e' aperta la 8472. Spostata la porta con
+    calico_vxlan_port e riavviato calico-node, il sintomo e' rimasto identico.
+  - l'indirizzo con cui il nodo si annuncia. Calico non usa il node-ip di
+    config.yaml, se lo sceglie da solo con "firstFound". Imposto a NodeInternalIP
+    con il ruolo calico_config, il sintomo e' rimasto identico.
+
+Canal toglie di mezzo entrambe le incognite ed e' la configurazione con cui
+questo ambiente ha sempre girato: incapsula sulla 8472, che qui passa, e prende
+l'indirizzo del nodo dall'InternalIP del Node, cioe' dal node-ip che il playbook
+scrive. Se con canal la console viene su, il guasto non e' della rete ne' delle
+porte: e' di Calico, e si torna a cercarlo li'.
+
+Quello che cambia nei playbook lo decidono rke2_cni e cluster_cni, e cambia da
+se': calico_config non posa piu' niente prima dell'avvio, il play della porta
+VXLAN non gira, rke2_disable smette di disabilitare rke2-canal e
+cluster_chart_values resta vuoto. rete_pod_verifica invece resta identico —
+quella verifica non guarda il CNI, ma se un pod raggiunge CoreDNS su un altro
+nodo — e i suoi messaggi di diagnosi si adattano da soli, indicando flannel.1 e
+la 8472 con canal, vxlan.calico e la 4789 con Calico.
+
+IL CNI NON SI CAMBIA A CALDO. Su una macchina che ha gia' girato con un altro
+CNI restano due conflist in /etc/cni/net.d, vince quella prima in ordine
+alfabetico e i pod si fermano in ContainerCreating con 'failed to find plugin
+"<cni>-cni" in path [/opt/cni/bin]'. master1_config se ne accorge e si ferma
+prima di avviare rke2-server (rke2_ferma_se_cni_diverso); la cura e' partire con
+clean_nodes_before_join=true.
 
 Traefik non si installa con helm dal nodo: il ruolo scrive una risorsa HelmChart
 in /var/lib/rancher/rke2/server/manifests/ dei nodi control plane, e il
@@ -527,7 +581,10 @@ precedente i nodi conservano lo stato vecchio e il cluster non si tira su:
 
   - /etc/cni/net.d contiene ancora il conflist del CNI precedente. Vince per
     ordine alfabetico su quello nuovo e ogni pod resta in ContainerCreating con
-    'failed to find plugin "<cni>-cni" in path [/opt/cni/bin]'
+    'failed to find plugin "<cni>-cni" in path [/opt/cni/bin]'.
+    E' il caso di chi ha gia' installato con Calico e adesso installa con canal:
+    master1_config lo rileva e si ferma PRIMA di avviare rke2-server, invece di
+    lasciare scoprire il guasto a cluster su (rke2_ferma_se_cni_diverso)
   - /var/lib/rancher/agent conserva il vecchio Cattle ID, che il nuovo Rancher
     non riconosce: 401 durante il download della connection info
 
@@ -1365,9 +1422,10 @@ resto di questo repository.
   # senza certificati propri
   ansible-playbook playbooks/21-rancher-single.yml -e rsn_tls_source=rancher
 
-  # canal invece di calico: un chart in meno, e su un nodo solo il CNI non deve
-  # far passare niente fra macchine
-  ansible-playbook playbooks/21-rancher-single.yml -e '{"rsn_cni":[]}'
+  # Calico invece di canal (rsn_cni segue lo standard, che adesso e' canal).
+  # Su un nodo solo la scelta conta poco: non c'e' traffico fra macchine da
+  # incapsulare, ed e' li' che Calico si rompe
+  ansible-playbook playbooks/21-rancher-single.yml -e '{"rsn_cni":["calico"]}'
 
   # non toccare /etc/hosts del control node (postazione senza sudo)
   ansible-playbook playbooks/21-rancher-single.yml -e rsn_update_control_node_hosts=false

@@ -4,9 +4,26 @@
 # come configurarsi. Per questo il ruolo sta fra master1_install e
 # master1_config nel playbook, e non dopo.
 
-- name: Salta se il CNI non e' Calico
-  meta: end_host
-  when: "'calico' not in (rke2_cni | default([]) | join(','))"
+# Il ruolo non ha senso con un CNI diverso da Calico, e la guardia sta qui oltre
+# che nel "when" del playbook: se rke2_cni cambia e qualcuno dimentica il
+# playbook, il ruolo non posa una configurazione di Calico su un cluster canal.
+#
+# NON "meta: end_host". Questo ruolo gira in mezzo a un play che dopo di lui ha
+# master1_config e master1_kubectl: end_host chiuderebbe il play PER QUEL NODO,
+# quindi rke2-server non verrebbe nemmeno avviato — un master che non entra nel
+# cluster e nessun errore che lo dica. Con un "when" si salta questo ruolo e
+# basta, che e' quello che serve.
+- name: Stabilisci se il CNI e' Calico
+  set_fact:
+    calico_attivo: "{{ 'calico' in (rke2_cni | default([]) | join(',')) }}"
+
+- name: Niente da configurare, il CNI non e' Calico
+  debug:
+    msg: >-
+      CNI dichiarato: {{ rke2_cni | default([]) | join(', ') | default('canal (default RKE2)', true) }}.
+      Nessuna configurazione di Calico da posare: con canal l'indirizzo del nodo
+      lo decide l'InternalIP del Node e la MTU la fissa il chart rke2-canal.
+  when: not (calico_attivo | default(false) | bool)
 
 - name: Crea la directory dei manifest RKE2
   file:
@@ -15,6 +32,7 @@
     owner: root
     group: root
     mode: '0755'
+  when: calico_attivo | default(false) | bool
 
 - name: Configurazione di Calico per il chart packaged
   template:
@@ -23,3 +41,4 @@
     owner: root
     group: root
     mode: '0600'
+  when: calico_attivo | default(false) | bool

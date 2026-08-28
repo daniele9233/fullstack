@@ -203,9 +203,13 @@
           # c'e' solo quando il file esiste su tutti i nodi: una chiave che
           # compare o non compare non si scrive con un "when" in mezzo a un body.
           #
-          # disable: stesso standard del cluster locale — Calico come CNI e
-          # Traefik come ingress, quindi il nginx packaged non va installato.
-          # Traefik lo mette il ruolo traefik_install sui nodi [new_managers].
+          # cni: quello di cluster_cni, che e' lo stesso standard del cluster
+          # locale — adesso canal (il perche' sta in group_vars/all.yml).
+          #
+          # disable: l'ingress e' Traefik, quindi il nginx packaged non va
+          # installato. Lo mette il ruolo traefik_install sui [new_managers].
+          # rke2-canal NON si disabilita: con cluster_cni: canal e' il CNI, e
+          # disabilitarlo lascerebbe i nodi downstream senza rete.
           machineGlobalConfig: >-
             {{ {
                  'cni': cluster_cni,
@@ -217,11 +221,16 @@
                  if (cluster_resolv_conf | default('') | length > 0
                      and cluster_resolv_senza | length == 0)
                  else {}) }}
-          # Valori per i chart packaged del cluster downstream. Serve a imporre a
-          # Calico con quale indirizzo annunciarsi: senza, sceglie la prima
+          # Valori per i chart packaged del cluster downstream. Con Calico serve
+          # a imporgli con quale indirizzo annunciarsi: senza, sceglie la prima
           # interfaccia che trova e su una macchina con piu' interfacce prende
           # quella sbagliata — e il traffico fra pod di nodi diversi sparisce in
-          # silenzio. Vedi cluster_chart_values in group_vars/all.yml.
+          # silenzio.
+          #
+          # CON CANAL E' VUOTO, e non e' una dimenticanza: l'indirizzo lo prende
+          # dall'InternalIP del Node e la MTU la fissa il chart rke2-canal a
+          # 1450. cluster_chart_values deriva da cluster_cni, quindi si riempie
+          # da solo se si torna a Calico. Vedi group_vars/all.yml.
           chartValues: "{{ cluster_chart_values | default({}) }}"
           machineSelectorConfig:
             - config:

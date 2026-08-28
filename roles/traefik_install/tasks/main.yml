@@ -189,13 +189,30 @@
           Poi "systemctl restart rke2-server" sui nodi, o reinstallazione.
 
           IL PRIMO RISOLVE E IL SECONDO NO -> non c'entra il DNS: CoreDNS sta
-          bene, e' il traffico fra pod di NODI DIVERSI che non passa. Con Calico
-          quel traffico e' VXLAN su UDP 4789; con canal e' UDP 8472. Se la rete
-          lascia passare una porta e non l'altra, il cluster sembra sano (tutti
-          i nodi Ready) ma i pod non si raggiungono fra macchine. La cura e'
-          calico_vxlan_port in group_vars/all.yml: mettici la porta che questa
-          rete consente davvero. Su un nodo singolo il guasto non si vede mai,
-          perche' li' non si incapsula niente.
+          bene, e' il traffico fra pod di NODI DIVERSI che non passa. Quel
+          traffico e' incapsulato in VXLAN: con canal su UDP 8472 (interfaccia
+          flannel.1), con Calico su UDP 4789 (interfaccia vxlan.calico). Se la
+          rete lascia passare una porta e non l'altra, il cluster sembra sano
+          (tutti i nodi Ready) ma i pod non si raggiungono fra macchine. Su un
+          nodo singolo il guasto non si vede mai, perche' li' non si incapsula
+          niente.
+
+          {% if 'calico' in ((rke2_cni | default([]) | join(',')) ~ ',' ~ (cluster_cni | default(''))) %}
+          Qui il CNI e' CALICO: la porta si sposta con calico_vxlan_port in
+          group_vars/all.yml, mettendoci quella che questa rete consente
+          davvero. Se anche cosi' non passa, e' il caso gia' visto qui: si torna
+          a canal (rke2_cni e cluster_cni), con cui questo ambiente ha sempre
+          funzionato.
+          {% else %}
+          Qui il CNI e' CANAL, cioe' la 8472, che su questa rete e' aperta: se il
+          traffico non passa lo stesso, la porta non c'entra. Da guardare, in
+          quest'ordine: "ip -d addr show flannel.1" su due nodi (il campo "local"
+          deve essere l'indirizzo che il nodo ha in "kubectl get nodes -o wide"),
+          "ip route | grep 10.42" per le rotte verso i blocchi pod degli altri
+          nodi, e un tcpdump sulla 8472 fra due nodi. Il playbook di diagnosi
+          raccoglie tutto in un colpo solo:
+          ansible-playbook playbooks/diagnostica-rete.yml
+          {% endif %}
 
           Con traefik_ferma_se_non_pronto=false il playbook prosegue lo stesso,
           ma quello che viene dopo (l'Ingress di Rancher) non puo' funzionare.
