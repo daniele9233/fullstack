@@ -210,6 +210,53 @@
   retries: "{{ rke2_ready_retries }}"
   delay: "{{ rke2_ready_delay }}"
   changed_when: false
+  failed_when: false
+
+# Se l'API server non e' mai arrivato, la causa sta nel journal di rke2-server e
+# non in questo task. Leggerlo qui evita di lasciare l'operatore davanti a
+# "60 retries left" ripetuto sessanta volte e poi a un fallimento muto.
+#
+# Il caso che questa guardia esiste per prendere: ingress-controller in
+# config.yaml su una versione di RKE2 che non conosce quell'opzione. Il server
+# rifiuta la configurazione e non parte, e senza questo messaggio sembrerebbe un
+# problema di avvio generico.
+- name: Leggi perche' rke2-server non e' partito
+  shell: journalctl -u rke2-server -n 30 --no-pager -o cat 2>&1 | tail -30
+  args:
+    executable: /bin/bash
+  register: rke2_journal
+  changed_when: false
+  failed_when: false
+  when: rke2_readyz.rc != 0
+
+- name: Fermati spiegando perche' rke2-server non e' partito
+  fail:
+    msg: |
+      Su {{ inventory_hostname }} l'API server non ha risposto entro
+      {{ rke2_ready_retries | int * rke2_ready_delay | int }} secondi.
+
+      Ultime righe del journal di rke2-server:
+      {{ rke2_journal.stdout | default('(journal non leggibile)') }}
+
+      {% if 'ingress-controller' in (rke2_journal.stdout | default('')) or 'not defined' in (rke2_journal.stdout | default('')) or 'unknown' in (rke2_journal.stdout | default('') | lower) %}
+      IL JOURNAL PARLA DI UN'OPZIONE NON RICONOSCIUTA.
+
+      config.yaml contiene "ingress-controller: {{ rke2_ingress_controller }}",
+      che esiste solo da RKE2 1.36 in poi. Se il canale
+      "{{ rke2_channel | default('stable') }}" ha portato una versione
+      precedente, quell'opzione non e' conosciuta e il server rifiuta di
+      partire.
+
+      Due modi per uscirne, in group_vars/all.yml:
+        - svuota rke2_ingress_controller (torna Traefik installato dal chart,
+          funziona su ogni versione), oppure
+        - porta la versione a una 1.36 verificata su
+          github.com/rancher/rke2/releases, valorizzando rke2_version.
+
+      Dopo la modifica i nodi vanno rifatti:
+        ansible-playbook playbooks/20-rancher.yml -e clean_nodes_before_join=true
+      {% endif %}
+  when: rke2_readyz.rc != 0
 
 # Conta i nodi etcd in stato Ready e attende che siano tanti quanti i master
 # avviati fino a questo punto: e' la prova che il nodo corrente e' davvero

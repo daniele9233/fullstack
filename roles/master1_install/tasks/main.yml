@@ -4,7 +4,55 @@
 # la direttiva "server:" bootstrappa un cluster proprio invece di unirsi al
 # primo master, e i tre nodi non formano mai un quorum etcd.
 
+# INSTALL_RKE2_VERSION e INSTALL_RKE2_CHANNEL insieme: quando la prima e'
+# valorizzata vince lei, altrimenti decide il canale. Entrambe vuote lasciano
+# fare al default dello script.
+#
+# Il canale e' il modo che non puo' sbagliare: la versione la sceglie il server
+# di aggiornamento di Rancher. Una versione scritta a mano invece deve
+# corrispondere a un tag di rilascio che esiste davvero, e se non esiste lo
+# script muore con un "curl: (22) ... 404" che non dice quale sia il problema.
 - name: Install RKE2 on master
   shell: curl -sfL https://get.rke2.io | sh -
   environment:
-    INSTALL_RKE2_VERSION: "{{ rke2_version }}"
+    INSTALL_RKE2_VERSION: "{{ rke2_version | default('') }}"
+    INSTALL_RKE2_CHANNEL: "{{ rke2_channel | default('stable') }}"
+  register: rke2_install
+  failed_when: false
+
+- name: Fermati spiegando perche' l'installazione di RKE2 non e' riuscita
+  fail:
+    msg: |
+      L'installazione di RKE2 su {{ inventory_hostname }} non e' riuscita
+      (codice {{ rke2_install.rc }}).
+
+      Uscita dello script:
+      {{ rke2_install.stdout | default('(vuota)') }}
+      {{ rke2_install.stderr | default('') }}
+
+      {% if '404' in (rke2_install.stderr | default('')) %}
+      IL 404 DICE CHE LA VERSIONE CHIESTA NON ESISTE.
+
+      rke2_version e' impostata a "{{ rke2_version | default('') }}", e
+      get.rke2.io la cerca fra i tag di rilascio su
+      github.com/rancher/rke2/releases: se quel tag non c'e', il download
+      fallisce con questo errore. Il numero non si indovina — va letto da
+      quell'elenco, nella forma esatta "v1.36.4+rke2r1".
+
+      La cura piu' semplice e' non fissarla affatto: svuota rke2_version in
+      group_vars/all.yml e lascia scegliere a rke2_channel
+      ("{{ rke2_channel | default('stable') }}"), che e' il canale e non un
+      numero — la versione la decide il server di aggiornamento di Rancher.
+      {% else %}
+      Se qui sopra leggi un errore di rete, il nodo non raggiunge get.rke2.io
+      o github.com: e' la rete dell'HOST, non quella dei pod.
+      {% endif %}
+  when: rke2_install.rc != 0
+
+- name: Versione di RKE2 installata
+  debug:
+    msg: >-
+      {{ inventory_hostname }}:
+      {{ (rke2_install.stdout_lines | default([])
+          | select('search', 'as release') | first)
+         | default('versione non riportata dallo script', true) }}
