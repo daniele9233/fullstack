@@ -149,7 +149,13 @@
               e incapsula su UDP {{ rpv_tunnel_porta }}. E' quella la porta che deve
               passare fra i nodi, ed e' quella su cui puntare il tcpdump.
 
-              DA DOVE PARTIRE, in ordine:
+              DA DOVE PARTIRE. Il primo passo e' uno solo, e raccoglie da se'
+              tutto quello che segue (rotte, ip rule, tabelle aggiuntive,
+              rp_filter, firewall, e il ping dentro al tunnel fra i nodi):
+
+                ansible-playbook -i inventory.ini playbooks/diagnostica-rete.yml
+
+              Se preferisci andare a mano, in quest'ordine:
 
               1. Confronta un pod sul nodo di CoreDNS con uno su un altro nodo:
 
