@@ -88,12 +88,16 @@
 # installa se il release non c'e' e riconcilia se qualche valore e' cambiato.
 # La versione resta fissata da rancher_version, quindi rilanciare il playbook
 # non fa saltare Rancher a una release nuova.
-# NIENTE "--set ingress.ingressClassName". Era la riga che teneva la console
-# irraggiungibile: chiedeva la classe "traefik" a un cluster dove l'ingress
-# controller e' rke2-ingress-nginx, quindi l'Ingress veniva creato e non lo
-# serviva nessuno. Senza, il chart lo crea senza classe esplicita e lo prende
-# la IngressClass di default, che e' nginx. E' quello che fa il playbook di
-# riferimento, ed e' il motivo per cui li' la console risponde.
+# "--set ingress.ingressClassName" SOLO SE SI E' SCELTO L'INGRESS, e derivato
+# dalla stessa variabile che lo sceglie (rancher_ingress_class deriva da
+# rke2_ingress_controller in group_vars/all.yml). Le due cose non possono
+# divergere, e prima divergevano: la riga c'era sempre e chiedeva la classe
+# "traefik" a un cluster dove l'ingress controller era rke2-ingress-nginx.
+# L'Ingress veniva creato e non lo serviva nessuno — console muta.
+#
+# Con la variabile vuota (default) la riga non c'e' e il chart crea l'Ingress
+# senza classe esplicita: lo prende la IngressClass di default. E' la
+# configurazione con cui la console risponde adesso.
 - name: Install Rancher with Helm
   command: >
     helm upgrade --install rancher rancher-stable/rancher
@@ -102,6 +106,7 @@
     {% if rancher_release.rc != 0 %}--set bootstrapPassword={{ rancher_password }}{% endif %}
     --version {{ rancher_version }}
     --set ingress.tls.source=secret
+    {% if rancher_ingress_class | default('') | trim | length > 0 %}--set ingress.ingressClassName={{ rancher_ingress_class | trim }}{% endif %}
     --set privateCA=true
   register: rancher_helm
   # changed solo alla prima installazione. Un upgrade che non cambia niente

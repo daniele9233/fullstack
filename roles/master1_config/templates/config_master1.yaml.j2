@@ -1,13 +1,17 @@
 {{ '#' }} {{ ansible_managed }} - roles/master1_config/templates/config_master1.yaml.j2
 {% set first_master = groups['masters'][0] %}
-{{ '#' }} QUI DENTRO NON C'E' NE' IL CNI NE' L'INGRESS, ED E' VOLUTO.
+{{ '#' }} QUI DENTRO NON C'E' IL CNI, ED E' VOLUTO.
 {{ '#' }}
-{{ '#' }} Niente "cni:", niente "ingress-controller:", niente "disable:", niente
-{{ '#' }} "resolv-conf:". RKE2 posa i suoi default — canal per la rete dei pod,
-{{ '#' }} rke2-ingress-nginx per l'ingress — e nessuno glieli contraddice. Quelle
-{{ '#' }} quattro righe sono le quattro che hanno tenuto giu' l'installazione.
+{{ '#' }} Niente "cni:", niente "disable:", niente "resolv-conf:". RKE2 posa il
+{{ '#' }} suo default, canal, e nessuno glielo contraddice: quelle righe sono
+{{ '#' }} quelle che hanno tenuto giu' l'installazione.
 {{ '#' }}
-{{ '#' }} Quello che c'e' serve tutto a UNA cosa: fare di piu' macchine UN cluster.
+{{ '#' }} L'ingress compare solo se lo si e' chiesto (rke2_ingress_controller in
+{{ '#' }} group_vars/all.yml), e master1_config verifica PRIMA che questo RKE2
+{{ '#' }} conosca l'opzione: scriverla su una versione che non la conosce fa
+{{ '#' }} rifiutare la configurazione al server, che non parte affatto.
+{{ '#' }}
+{{ '#' }} Il resto serve a fare di piu' macchine UN cluster.
 
 {{ '#' }} L'indirizzo con cui questo nodo si annuncia agli altri. Senza, RKE2 lo
 {{ '#' }} deduce dall'interfaccia di default, che su una macchina con piu' schede
@@ -23,6 +27,19 @@ tls-san:
 {%- for san in rke2_extra_tls_san | default([]) %}
   - {{ san }}
 {%- endfor %}
+{% if rke2_ingress_controller | default([]) | length > 0 %}
+
+{{ '#' }} Ingress controller, scelto invece di lasciare il default di RKE2.
+{{ '#' }} E' una LISTA perche' RKE2 la dichiara ripetibile, e il PRIMO valore
+{{ '#' }} diventa anche la IngressClass predefinita — quella che rancher_ingress_class
+{{ '#' }} passa poi al chart Rancher, cosi' le due non possono divergere.
+{{ '#' }} Con "traefik" il chart e' rke2-traefik, impacchettato dentro RKE2:
+{{ '#' }} niente da scaricare da traefik.github.io mentre il cluster si costruisce.
+ingress-controller:
+{%- for controller in rke2_ingress_controller %}
+  - {{ controller }}
+{%- endfor %}
+{% endif %}
 {% if groups['masters'] | length > 1 %}
 
 {{ '#' }} --- Cluster a piu' server -------------------------------------------

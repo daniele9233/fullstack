@@ -53,6 +53,60 @@
     - rke2_token | default('') | length == 0
     - inventory_hostname != groups['masters'][0]
 
+# --- Ingress controller ------------------------------------------------------
+# SI CHIEDE AL BINARIO PRIMA DI SCRIVERE, e non e' pignoleria: "ingress-controller"
+# non esiste su tutte le versioni di RKE2, e un config.yaml con dentro
+# un'opzione sconosciuta fa RIFIUTARE la configurazione a rke2-server, che non
+# parte affatto. E' successo, ed e' costata l'installazione: il fallimento
+# arrivava come un avvio che non riusciva, senza dire che il problema era una
+# riga scritta da noi.
+#
+# Il costo di questo controllo e' una chiamata a --help. Il costo di non farlo
+# e' un cluster che non si alza.
+
+- name: Chiedi a RKE2 se conosce l'opzione ingress-controller
+  command: rke2 server --help
+  register: rke2_help
+  changed_when: false
+  failed_when: false
+  when: rke2_ingress_controller | default([]) | length > 0
+
+- name: Fermati se questo RKE2 non conosce ingress-controller
+  fail:
+    msg: |
+      Su {{ inventory_hostname }} e' stato chiesto
+      rke2_ingress_controller: {{ rke2_ingress_controller | join(', ') }}
+      ma questo RKE2 non dichiara l'opzione "--ingress-controller".
+
+      Scrivendola lo stesso in config.yaml, rke2-server rifiuterebbe la
+      configurazione e non partirebbe: non e' un avvio lento, e' un cluster che
+      non si alza.
+
+      Verifica sul nodo che cosa conosce:
+        rke2 --version
+        rke2 server --help | grep -i ingress
+
+      Due strade: svuotare rke2_ingress_controller in group_vars/all.yml (torna
+      il default di RKE2, cioe' ingress-nginx), oppure portare RKE2 a una
+      versione che l'opzione ce l'ha.
+  when:
+    - rke2_ingress_controller | default([]) | length > 0
+    - "'--ingress-controller' not in (rke2_help.stdout | default(''))"
+
+# I valori li dichiara RKE2 nel proprio --help. Uno scritto male non fa partire
+# il server, esattamente come l'opzione sconosciuta.
+- name: Verifica che i valori di ingress-controller siano ammessi
+  assert:
+    that:
+      - rke2_ingress_controller | difference(['none', 'ingress-nginx', 'traefik']) | length == 0
+    fail_msg: >-
+      rke2_ingress_controller contiene
+      {{ rke2_ingress_controller | difference(['none', 'ingress-nginx', 'traefik']) | join(', ') }},
+      che RKE2 non accetta. I valori ammessi sono: none, ingress-nginx, traefik.
+      Il primo della lista diventa anche la IngressClass predefinita.
+    quiet: yes
+  when: rke2_ingress_controller | default([]) | length > 0
+
 - name: Create /etc/rancher/rke2/config.yaml
   template:
     src: config_master1.yaml.j2

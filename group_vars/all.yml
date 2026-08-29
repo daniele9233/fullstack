@@ -235,6 +235,91 @@ rke2_channel: "stable"
 rke2_ready_retries: 60
 rke2_ready_delay: 10
 
+# --- Ingress controller -----------------------------------------------------
+#
+# LISTA VUOTA (default) = non si scrive niente in config.yaml e decide RKE2, che
+# oggi installa rke2-ingress-nginx. E' la configurazione con cui la console
+# risponde: l'Ingress di Rancher nasce senza classe esplicita e lo serve la
+# IngressClass di default.
+#
+# VALORIZZATA = finisce in config.yaml come "ingress-controller:". I valori
+# ammessi sono quelli dichiarati da RKE2:
+#
+#   none            nessun ingress controller
+#   ingress-nginx   il default di oggi
+#   traefik         il chart rke2-traefik, IMPACCHETTATO dentro RKE2
+#
+# Il PRIMO valore della lista diventa anche la IngressClass predefinita, e da
+# quello deriva rancher_ingress_class qui sotto: e' cosi' che la classe scritta
+# sull'Ingress della console e l'ingress controller installato non possono
+# divergere. Prima divergevano, ed era il guasto.
+#
+#   rke2_ingress_controller:
+#     - traefik
+#
+# TRAEFIK NON SI SCARICA DA INTERNET: il chart e' dentro RKE2. E' l'opposto di
+# quello che faceva il vecchio ruolo traefik_install, che lo prendeva da
+# traefik.github.io mentre il cluster si stava costruendo.
+#
+# ATTENZIONE, TRE COSE:
+#
+# 1. L'OPZIONE NON ESISTE SU TUTTE LE VERSIONI. Su un RKE2 che non la conosce,
+#    rke2-server rifiuta la configurazione e NON PARTE — e' successo, ed e'
+#    costato l'installazione. master1_config adesso interroga il binario
+#    ("rke2 server --help") PRIMA di scrivere la riga, e si ferma spiegando cosa
+#    fare invece di lasciare un cluster morto. Per verificarlo a mano:
+#      rke2 server --help | grep -i ingress
+#
+# 2. I DUE CONTROLLER NON CONVIVONO: vogliono entrambi le porte 80 e 443 dei
+#    nodi. Cambiando ingress su un cluster gia' in piedi, la console non
+#    risponde per il tempo dello scambio. E se il chart vecchio non se ne va da
+#    solo, va tolto a mano:
+#      kubectl -n kube-system get helmchart | grep ingress
+#
+# 3. LA CLASSE SULL'INGRESS GIA' ESISTENTE NON SI SPOSTA DA SOLA. Se Kubernetes
+#    ci ha scritto dentro una classe alla creazione, cambiare il default non la
+#    tocca. Si controlla cosi':
+#      kubectl -n cattle-system get ingress rancher -o jsonpath='{.spec.ingressClassName}'
+#    Vuoto = segue la classe di default e si sistema da se'. Valorizzato = va
+#    riportato in pari, e ci pensa il playbook rilanciandolo, perche' passa
+#    "--set ingress.ingressClassName" al chart Rancher.
+rke2_ingress_controller: []
+
+# IL NOME DEL CONTROLLER NON E' IL NOME DELLA INGRESSCLASS.
+#
+# RKE2 accetta "ingress-nginx" come valore di ingress-controller, ma la
+# IngressClass che ne risulta si chiama "nginx":
+#
+#   $ kubectl get ingressclass
+#   NAME    CONTROLLER             PARAMETERS   AGE
+#   nginx   k8s.io/ingress-nginx   <none>       16m
+#
+# Chiedere all'Ingress della console la classe "ingress-nginx" vorrebbe dire
+# chiedere una classe che non esiste: Ingress creato, e servito da nessuno. E'
+# LO STESSO identico guasto di prima, con un nome diverso — per questo la
+# corrispondenza sta scritta qui una volta sola invece di essere data per
+# scontata. Un controller non elencato qui usa il proprio nome come classe.
+rke2_ingress_class_names:
+  ingress-nginx: nginx
+  traefik: traefik
+
+# IngressClass scritta sull'Ingress della console Rancher.
+#
+# DERIVATA, non scritta a mano, e per una ragione precisa: e' la coppia
+# "quale ingress installo" / "quale classe chiedo" che deve restare d'accordo.
+# Tenerle allineate a mano vuol dire dimenticarsene una volta, e quella volta la
+# console non risponde senza che niente fallisca.
+#
+# Vuota quando l'ingress non e' stato scelto (l'Ingress nasce senza classe e
+# segue quella di default del cluster) o quando e' "none" (non c'e' nessuno a
+# servirla).
+rancher_ingress_class: >-
+  {{ rke2_ingress_class_names.get(rke2_ingress_controller | first,
+                                  rke2_ingress_controller | first)
+  if (rke2_ingress_controller | default([]) | length > 0
+      and (rke2_ingress_controller | first) != 'none')
+  else '' }}
+
 # Indirizzo del nodo Rancher, usato da kubectl_setup per gli hostAliases dei
 # pod agent del cluster downstream. Derivato dall'inventario.
 master_node_ip: "{{ hostvars[groups['masters'][0]]['ansible_host'] }}"

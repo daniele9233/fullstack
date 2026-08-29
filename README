@@ -178,6 +178,66 @@ rancher_endpoint_ip va portata sull'IP del bilanciatore nginx, che sta in
 IL CLUSTER DOWNSTREAM SI SALTA DA SE' se [new_managers], [workers] e [ingress]
 sono tutti vuoti: e' il caso di chi vuole il solo Rancher.
 
+
+  TRAEFIK INVECE DI INGRESS-NGINX
+
+Una variabile in group_vars/all.yml, vuota di default:
+
+  rke2_ingress_controller:
+    - traefik
+
+Finisce in config.yaml come "ingress-controller:". I valori sono quelli che
+dichiara RKE2 — none, ingress-nginx, traefik — e il PRIMO diventa anche la
+IngressClass predefinita. Vuota (default) non si scrive niente e decide RKE2,
+che oggi installa rke2-ingress-nginx.
+
+Con "traefik" il chart e' rke2-traefik, IMPACCHETTATO dentro RKE2: non si
+scarica niente da traefik.github.io mentre il cluster si costruisce. E' la
+differenza con il vecchio ruolo traefik_install, che invece lo prendeva da
+fuori — e quel download e' quello che falliva con "i/o timeout" ogni volta che
+qualcosa non andava DENTRO al cluster.
+
+IL NOME DEL CONTROLLER NON E' IL NOME DELLA INGRESSCLASS, e la differenza conta:
+RKE2 accetta "ingress-nginx" come controller, ma la IngressClass che ne risulta
+si chiama "nginx". Chiedere all'Ingress della console una classe che non esiste
+e' esattamente il guasto costato l'installazione la prima volta. La
+corrispondenza sta in rke2_ingress_class_names, e rancher_ingress_class deriva
+da li': la classe passata al chart Rancher e l'ingress installato non possono
+divergere.
+
+TRE COSE DA SAPERE PRIMA DI CAMBIARLO.
+
+1. L'OPZIONE NON ESISTE SU TUTTE LE VERSIONI DI RKE2. Su una che non la conosce,
+   rke2-server rifiuta la configurazione e NON PARTE. master1_config adesso
+   interroga il binario prima di scrivere la riga e si ferma spiegando cosa
+   fare. A mano:
+
+     rke2 --version
+     rke2 server --help | grep -i ingress
+
+   La riga da cercare elenca i valori ammessi e il default.
+
+2. I DUE CONTROLLER NON CONVIVONO: vogliono entrambi le porte 80 e 443 dei nodi.
+   Su un cluster gia' in piedi la console non risponde per il tempo dello
+   scambio, e il chart vecchio va tolto se non se ne va da solo:
+
+     kubectl -n kube-system get helmchart | grep ingress
+     kubectl get ingressclass
+
+3. LA CLASSE SU UN INGRESS GIA' ESISTENTE NON SI SPOSTA DA SOLA. Se Kubernetes
+   ce l'ha scritta dentro alla creazione, cambiare la classe di default non la
+   tocca:
+
+     kubectl -n cattle-system get ingress rancher -o jsonpath='{.spec.ingressClassName}'
+
+   Vuoto = l'Ingress segue la classe di default e si sistema da se'.
+   Valorizzato = va riportato in pari, e ci pensa il playbook rilanciandolo,
+   perche' passa "--set ingress.ingressClassName" al chart Rancher.
+
+Il consiglio, con tre master: provalo prima a mano su UNO, riavvia solo quello e
+guarda che cosa succede. Se il server non riparte, hai ancora due nodi su tre in
+piedi e il cluster regge.
+
 CONFIGURAZIONE DI RKE2: /etc/rancher/rke2/config.yaml contiene tls-san, node-ip
 e — solo con piu' di un server — token e server. NIENTE scelta del CNI, niente
 ingress-controller, niente disable, niente resolv-conf. RKE2 posa i suoi default
