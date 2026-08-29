@@ -224,9 +224,25 @@ rke2_extra_tls_san: []
 # inventata fallisce con "curl: (22) ... 404" al primo nodo.
 #
 # rke2_channel NON e' un numero: e' un canale, e a scegliere la versione ci
-# pensa il server di aggiornamento di Rancher. E' il modo che non puo'
-# sbagliare, ed e' per questo che qui la prima e' vuota e la seconda no.
-rke2_version: ""
+# pensa il server di aggiornamento di Rancher. Non puo' sbagliare il tag, ma ha
+# un effetto collaterale che su un cluster GIA' IN PIEDI e' grosso:
+#
+#   master1_install rilancia "curl -sfL https://get.rke2.io | sh -" a ogni
+#   esecuzione del playbook. Con il canale, quello che scarica e' l'ULTIMA
+#   stabile del momento: se nel frattempo il canale e' avanzato, rilanciare il
+#   playbook per cambiare una riga di configurazione AGGIORNA RKE2 su tutti i
+#   master. Un upgrade di Kubernetes che nessuno ha chiesto, mentre si voleva
+#   toccare l'ingress.
+#
+# Per questo adesso la versione e' FISSATA a quella con cui il cluster e' stato
+# installato, letta dai nodi con "rke2 --version". Il canale resta come ripiego
+# per un'installazione da zero su macchine nuove: svuotare rke2_version e
+# decide lui.
+#
+# PER AGGIORNARE RKE2 di proposito: si cambia questo numero, verificandolo prima
+# su github.com/rancher/rke2/releases, e si rilancia il playbook — che porta su
+# i master uno alla volta (serial: 1) aspettando che ognuno rientri nel cluster.
+rke2_version: "v1.35.7+rke2r1"
 rke2_channel: "stable"
 
 # Attesa che l'API server risponda e che il nodo diventi Ready dopo il primo
@@ -283,7 +299,15 @@ rke2_ready_delay: 10
 #    Vuoto = segue la classe di default e si sistema da se'. Valorizzato = va
 #    riportato in pari, e ci pensa il playbook rilanciandolo, perche' passa
 #    "--set ingress.ingressClassName" al chart Rancher.
-rke2_ingress_controller: []
+#
+# TRAEFIK, scelto: ingress-nginx e' andato in EOL a marzo 2026, RKE2 lo tiene in
+# v1.36 come deprecato e lo rimuove del tutto in v1.37. Non e' una preferenza
+# estetica, e' una migrazione da fare comunque — tanto vale farla adesso, che il
+# cluster e' nuovo e non ci sono ancora Ingress applicativi da riportare in pari.
+#
+# Per tornare a ingress-nginx basta rimettere qui la lista vuota.
+rke2_ingress_controller:
+  - traefik
 
 # IL NOME DEL CONTROLLER NON E' IL NOME DELLA INGRESSCLASS.
 #
