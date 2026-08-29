@@ -158,13 +158,64 @@ ansibleSshHost: "localhost"
 #                                rimettere a mano in config.yaml e'
 #                                "resolv-conf: /run/systemd/resolve/resolv.conf".
 #
-#   rke2_token, rke2_supervisor_port, rke2_node_name, rke2_node_ip,
-#   rke2_settle_seconds, rke2_ferma_se_cni_diverso, calico_vxlan_port,
-#   rke2_extra_tls_san, rke2_write_kubeconfig_mode
-#                                servivano a unire piu' server in un cluster e a
-#                                sorvegliare i modi in cui quella cosa si rompe.
-#                                Rancher sta su un nodo solo: non c'e' nessuno a
-#                                cui unirsi.
+#   rke2_node_name               scriveva in config.yaml il nome di inventario
+#   rke2_ferma_se_cni_diverso    invece dell'hostname, e sorvegliava i modi in
+#   rke2_write_kubeconfig_mode   cui quel nome puo' divergere. RKE2 fissa il nome
+#                                del nodo alla PRIMA registrazione e non lo
+#                                cambia mai piu': scriverlo a mano su una
+#                                macchina gia' registrata non la rinomina, ne
+#                                registra una seconda e lascia la prima come
+#                                fantasma. Adesso vale l'hostname, che e' il
+#                                default di RKE2 e quello che usa il playbook di
+#                                riferimento. Se l'hostname di una macchina
+#                                riusata e' sbagliato, si corregge PRIMA di
+#                                installare.
+#
+# IL CLUSTER A PIU' SERVER INVECE E' TORNATO. Era stato tolto insieme al resto,
+# ed era troppo: tre server RKE2 con canal e ingress-nginx sono una
+# configurazione standard, e il guasto era del CNI e dell'ingress, non del
+# numero di nodi. rke2_token, rke2_supervisor_port, rke2_node_ip,
+# rke2_settle_seconds e rke2_extra_tls_san sono qui sotto.
+
+# --- Cluster a piu' server --------------------------------------------------
+# [masters] puo' avere 1 o 3 host, mai 2: etcd ha bisogno di un numero DISPARI
+# per il quorum. Il primo host dell'inventario bootstrappa, gli altri si
+# uniscono a lui — l'ordine delle righe conta e non va cambiato a cluster fatto.
+#
+# Rancher resta UNO: il chart si installa solo sul primo master e Kubernetes
+# distribuisce le sue repliche sui nodi. Tre Rancher separati sarebbero un'altra
+# cosa, e sbagliata.
+
+# Segreto condiviso dai server del cluster.
+#
+# VUOTO (default) = completamente automatico: il primo master bootstrappa e
+# genera il proprio token, i master successivi lo leggono da lui in
+# /var/lib/rancher/rke2/server/node-token. Nessun segreto nel repository.
+#
+# VALORIZZATO = token pre-condiviso, scritto uguale nel config.yaml di tutti i
+# master prima del primo avvio. Serve solo se il token deve essere noto in
+# anticipo. Generalo con: openssl rand -hex 32
+rke2_token: ""
+
+# Porta del SUPERVISOR RKE2, quella su cui i server aggiuntivi si registrano.
+# NON e' 6443 (API server): usare 6443 qui e' l'errore piu' comune su RKE2.
+rke2_supervisor_port: 9345
+
+# node-ip: l'indirizzo con cui il nodo si annuncia agli altri, e verso cui canal
+# incapsula il traffico fra i pod. Senza, RKE2 lo deduce dall'interfaccia di
+# default, che su una macchina con piu' schede puo' non essere quella su cui gli
+# altri nodi lo raggiungono — ed e' uno dei modi in cui la rete fra i pod smette
+# di funzionare senza dare un errore.
+rke2_node_ip: "{{ ansible_host | default(ansible_default_ipv4.address | default(inventory_hostname)) }}"
+
+# Margine per la promozione del nodo da learner etcd a membro votante, applicato
+# fra un master e il successivo. Alzarlo se l'avvio del terzo master fallisce.
+rke2_settle_seconds: 45
+
+# SAN aggiuntivi nel certificato dell'API server. Il dominio Rancher e gli IP di
+# tutti i master ci sono gia': qui vanno solo eventuali VIP o FQDN del
+# bilanciatore davanti ai master.
+rke2_extra_tls_san: []
 
 # --- Versione di RKE2 -------------------------------------------------------
 #
@@ -190,9 +241,28 @@ master_node_ip: "{{ hostvars[groups['masters'][0]]['ansible_host'] }}"
 master_node_user: "root"
 
 # IP a cui far puntare rancher_domain in /etc/hosts su tutti i nodi.
-# Di default e' l'host di [masters]. Valorizzarlo diversamente serve quando la
-# console sta dietro al bilanciatore nginx: allora il dominio deve puntare li'.
-rancher_endpoint_ip: "10.205.166.214"
+#
+# QUI C'ERA UN IP SCRITTO A MANO, e non era una scelta: era l'indirizzo del
+# primo master di UN inventario preciso, rimasto scolpito qui. Cambiando gli IP
+# nell'inventario, /etc/hosts continuava a far puntare il dominio alla macchina
+# vecchia — su tutti i nodi e sul control node. Il playbook non se ne accorgeva:
+# scriveva la riga, nslookup la confermava, e il primo a caderci era "ping", che
+# pero' e' un task con ignore_errors. Il guasto vero arrivava mezz'ora dopo, con
+# le chiamate all'API di Rancher che finivano su un indirizzo di un'altra rete.
+#
+# Adesso deriva dall'inventario: e' l'indirizzo del PRIMO host di [masters].
+# Cambiando l'inventario, cambia da se'.
+#
+# CON PIU' MASTER conviene valorizzarla a mano con l'IP del bilanciatore nginx:
+# cosi' com'e', il dominio punta al primo master e la caduta di quello lascia
+# la console irraggiungibile anche se gli altri due sono su.
+#
+# L'if/else invece di "| default(...)" perche' il filtro default() di Jinja NON
+# e' pigro: valuta sempre il ripiego, e con [masters] vuoto quel [0] farebbe
+# fallire chiunque legga questa variabile.
+rancher_endpoint_ip: >-
+  {{ hostvars[groups['masters'][0]]['ansible_host']
+  if (groups['masters'] | default([]) | length > 0) else '' }}
 
 # Variabili blocco Rancher
 nginx_server_name: "kikko.app.inail-svil.almaviva.it"

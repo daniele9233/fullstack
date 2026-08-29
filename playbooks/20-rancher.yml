@@ -3,11 +3,10 @@
 #
 #   ansible-playbook playbooks/20-rancher.yml
 #
-# QUESTO PLAYBOOK E' LA TRASCRIZIONE DEL site.yml CHE FUNZIONA, quello del
-# Rancher a nodo singolo gia' in esercizio. Non e' una riscrittura: e' la stessa
-# sequenza, con gli stessi ruoli, adattata all'inventario e alle variabili di
-# questo repository. Quello che c'era prima al suo posto — 20-rancher.yml a tre
-# master e 21-rancher-single.yml — e' stato tolto insieme ai ruoli che serviva:
+# QUESTO PLAYBOOK E' LA SEQUENZA DEL site.yml CHE FUNZIONA, quello del Rancher
+# gia' in esercizio, adattata all'inventario e alle variabili di questo
+# repository. Quello che c'era prima al suo posto — 20-rancher.yml e
+# 21-rancher-single.yml — e' stato tolto insieme ai ruoli che serviva:
 # calico_config, calico_vxlan_port, traefik_install, rete_pod_verifica,
 # rancher_single_node.
 #
@@ -20,18 +19,28 @@
 #     nessun chart Traefik scaricato da traefik.github.io. RKE2 installa
 #     rke2-ingress-nginx e l'Ingress della console lo serve lui, perche' il
 #     chart Rancher lo crea senza classe esplicita e nginx e' quella di default.
-#   - non mette Rancher su tre nodi. Rancher sta su UN master, come nel
-#     playbook che funziona. Il cluster a piu' nodi e' quello DOWNSTREAM, ed e'
-#     Rancher a costruirlo.
 #
-# Le tre cose sopra sono, in ordine, le tre cause dei fallimenti che venivano
-# raccontati come "problemi di rete": vedi README, sezione RANCHER.
+# Le due cose sopra sono le due cause dei fallimenti che venivano raccontati
+# come "problemi di rete": vedi README, sezione RANCHER.
+#
+# IL NUMERO DI MASTER NON ERA UNA DI QUELLE DUE. Era stato tolto anche il
+# cluster a piu' server, ed era troppo: tre server RKE2 con canal e
+# ingress-nginx sono una configurazione standard. Tre master avevano solo reso
+# VISIBILE il guasto del CNI — con un nodo solo il traffico fra pod di nodi
+# diversi non esiste, quindi non poteva rompersi. Adesso che il CNI e' canal,
+# i tre server sono di nuovo supportati e stanno qui sotto.
+#
+# [masters] PUO' AVERE 1 O 3 HOST, mai 2: etcd ha bisogno di un numero dispari
+# per il quorum. Con 3 il primo host bootstrappa e gli altri si uniscono a lui,
+# uno alla volta. RANCHER RESTA UNO: il chart si installa solo sul primo master
+# e Kubernetes distribuisce le sue repliche sui tre nodi. Tre Rancher separati
+# sullo stesso dominio sarebbero un'altra cosa, e sbagliata.
 #
 # CHE COSA SERVE PRIMA:
 #
-#   inventory.ini      UN host in [masters] (il nodo che ospita Rancher), piu'
-#                      i nodi del cluster downstream in [new_managers],
-#                      [workers] e [ingress]
+#   inventory.ini      1 o 3 host in [masters]. Se serve anche il cluster
+#                      downstream, i suoi nodi in [new_managers], [workers] e
+#                      [ingress]; lasciandoli vuoti si installa il solo Rancher
 #   rancher_domain     il nome con cui si apre la console
 #   rancher_password   la password di bootstrap dell'utente admin
 #   i tre .pem         in roles/master1_helm_cert_manager_install/files/
@@ -90,55 +99,83 @@
       when: clean_nodes_before_join | default(false) | bool
 
 
-# RKE2 E RANCHER SUL MASTER.
+# IL CLUSTER RKE2, UN SERVER ALLA VOLTA.
 #
-# Un host solo, e il play si ferma se ne trova di piu': questi quattro ruoli non
-# sanno unire due server in un cluster — non scrivono ne' "server:" ne' "token:"
-# in config.yaml — quindi su tre macchine bootstrapperebbero tre cluster
-# separati, ognuno con il suo Rancher convinto di essere l'unico, tutti e tre a
-# rispondere sullo stesso rancher_domain.
+# serial: 1 non e' un'ottimizzazione, e' un requisito: i server etcd vanno
+# aggiunti in sequenza, e il primo host deve aver finito il bootstrap prima che
+# il secondo provi a unirsi. master1_config contiene la barriera che aspetta che
+# il nodo sia davvero ENTRATO nel cluster prima di liberare il successivo.
 #
-# Alta disponibilita' della CONSOLE non vuol dire tre Rancher: vuol dire un
-# cluster RKE2 a tre server con sopra un Rancher solo. Non e' quello che fa
-# questo playbook, e non e' quello che finora ha funzionato in questo ambiente.
-- name: RKE2 e Rancher sul master
+# order: inventory e' il default di Ansible, scritto esplicito perche' qui la
+# correttezza ci dipende: il PRIMO host dell'inventario e' quello che
+# bootstrappa, e gli altri si registrano sul suo supervisor.
+- name: Cluster RKE2 sui master
   hosts: masters
   become: yes
   gather_facts: no
+  serial: 1
+  order: inventory
   pre_tasks:
-    - name: Un solo host in [masters]
+    # 1 o 3, mai 2 e mai piu' di 3: etcd decide a maggioranza, e con un numero
+    # pari non c'e' maggioranza. Con 2 server la caduta di uno blocca il
+    # cluster invece di lasciarlo in piedi — e' PEGGIO di un nodo solo.
+    - name: Il numero di master dev'essere dispari
       assert:
         that:
-          - groups['masters'] | default([]) | length == 1
+          - groups['masters'] | default([]) | length in [1, 3]
         fail_msg: >-
           [masters] contiene {{ groups['masters'] | default([]) | length }} host
-          ({{ groups['masters'] | default([]) | join(', ') }}), ma questo
-          playbook installa Rancher su UNO. Ogni host bootstrapperebbe un
-          cluster RKE2 suo, con un Rancher suo, tutti sullo stesso
-          rancher_domain. Lascia in [masters] il solo nodo che ospita la
-          console: gli altri vanno in [new_managers], [workers] o [ingress],
-          dove entrano nel cluster downstream che Rancher costruisce da se'.
+          ({{ groups['masters'] | default([]) | join(', ') }}). I server etcd
+          devono essere in numero DISPARI, perche' il quorum e' una
+          maggioranza: 1 o 3. Con 2 la caduta di un nodo ferma il cluster
+          invece di lasciarlo in piedi, quindi due server sono peggio di uno.
+          I nodi in piu' vanno in [new_managers], [workers] o [ingress], dove
+          entrano nel cluster downstream.
         quiet: yes
       run_once: true
   roles:
     - role: master1_install
     - role: master1_config
     - role: master1_kubectl
+
+
+# RANCHER, SOLO SUL PRIMO MASTER.
+#
+# Helm agisce sul CLUSTER, non sul nodo: "helm install rancher" e "kubectl
+# create namespace cattle-system" ripetuti sugli altri due master lavorerebbero
+# sullo stesso cluster una seconda e una terza volta. Le repliche di Rancher le
+# distribuisce Kubernetes sui nodi disponibili.
+#
+# Play separato dal precedente anche per un'altra ragione: quello gira con
+# serial: 1, e installare Rancher mentre il cluster ha ancora un nodo solo
+# significherebbe farlo con due terzi del cluster ancora da venire. Qui i master
+# ci sono tutti.
+- name: Rancher sul primo master
+  hosts: masters[0]
+  become: yes
+  gather_facts: no
+  roles:
     - role: master1_helm_cert_manager_install
 
 
-# CREAZIONE DEL CLUSTER DOWNSTREAM.
+# CREAZIONE DEL CLUSTER DOWNSTREAM, solo dal primo master.
 #
 # Chiamate all'API di Rancher delegate al control node, poi
 # system-agent-install.sh sui nodi di [new_managers], [workers] e [ingress].
-# Play separato dal precedente per tenere distinte le due cose: sopra si
-# installa Rancher su una macchina, qui si parla con Rancher via HTTPS.
+#
+# SI SALTA DA SE' se quei tre gruppi sono vuoti: e' il caso di chi vuole il solo
+# Rancher. Prima veniva creato lo stesso un cluster vuoto in Rancher, che poi
+# restava cinque minuti ad aspettare macchine che non sarebbero mai arrivate.
 - name: Cluster downstream
-  hosts: masters
+  hosts: masters[0]
   become: yes
   gather_facts: no
   roles:
     - role: master1_create_cluster
+      when: >-
+        ((groups['new_managers'] | default([]) | length)
+         + (groups['workers'] | default([]) | length)
+         + (groups['ingress'] | default([]) | length)) > 0
 
 
 # IL DNS DELL'AGENT DENTRO AL CLUSTER DOWNSTREAM.
@@ -167,7 +204,7 @@
 
 
 - name: Riepilogo
-  hosts: masters
+  hosts: masters[0]
   become: no
   gather_facts: no
   tasks:
@@ -175,17 +212,29 @@
       debug:
         msg:
           - "Console: https://{{ rancher_domain }} (utente admin, password in rancher_password)"
-          - "Nodo Rancher: {{ inventory_hostname }} ({{ ansible_host }}) — uno solo"
+          - >-
+            Cluster RKE2: {{ groups['masters'] | length }} server
+            ({{ groups['masters'] | join(', ') }}) — un solo Rancher, con le
+            repliche distribuite da Kubernetes.
           - "CNI: default RKE2 (canal) — Ingress: default RKE2 (ingress-nginx)"
           - >-
-            Cluster downstream {{ cluster_name }} ({{ cluster_k8s_version }}, CNI
-            {{ cluster_cni }}): {{ nodi_attesi | int }} macchine agganciate fra
-            [new_managers], [workers] e [ingress]. Il provisioning prosegue da
-            solo dentro a Rancher.
+            Cluster downstream:
+            {{ (cluster_name ~ ' (' ~ cluster_k8s_version ~ ', CNI ' ~ cluster_cni ~ '): '
+                ~ (nodi_attesi | int | string) ~ ' macchine agganciate fra [new_managers],'
+                ~ ' [workers] e [ingress]. Il provisioning prosegue da solo in Rancher.')
+               if (nodi_attesi | int) > 0
+               else 'non creato — i gruppi [new_managers], [workers] e [ingress] sono vuoti.' }}
           - >-
-            /etc/hosts: la riga "{{ rancher_endpoint_ip | default(ansible_host) }}
-            {{ rancher_domain }}" e' stata scritta sui nodi e sul control node.
-            Se apri la console da un'ALTRA macchina, quella riga serve anche li'.
+            /etc/hosts: la riga "{{ rancher_endpoint_ip | trim }} {{ rancher_domain }}"
+            e' stata scritta sui nodi e sul control node. Se apri la console da
+            un'ALTRA macchina, quella riga serve anche li'.
+          - >-
+            {{ 'Con piu di un master il dominio punta al PRIMO: se cade quello, la
+                console non risponde anche se gli altri due sono su. Per una console
+                davvero ridondante, rancher_endpoint_ip va portata sul bilanciatore
+                nginx ([nginx_servers], playbooks/10-bilanciatori.yml).'
+               if (groups['masters'] | length > 1) else
+               'Un solo master: il dominio punta a lui.' }}
       vars:
         nodi_attesi: >-
           {{ (groups['new_managers'] | default([]) | length)

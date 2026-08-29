@@ -141,26 +141,49 @@ RANCHER
 
   ansible-playbook -i inventory.ini playbooks/20-rancher.yml
 
-Rancher gira su UNA macchina: l'unico host del gruppo [masters]. Il playbook
-installa RKE2 su quel nodo, ci mette kubectl e helm, crea i secret con i .pem
-del dominio e installa Rancher dal chart. Poi, via API, crea il cluster
-DOWNSTREAM e ci aggancia i nodi di [new_managers], [workers] e [ingress] con
-system-agent-install.sh.
+Il playbook installa RKE2 sui nodi di [masters], ci mette kubectl e helm, crea i
+secret con i .pem del dominio e installa Rancher dal chart. Poi, via API, crea il
+cluster DOWNSTREAM e ci aggancia i nodi di [new_managers], [workers] e [ingress]
+con system-agent-install.sh.
 
-  [masters]        1 host. Rancher. Il playbook si ferma se ne trova di piu'.
+  [masters]        1 o 3 host, mai 2. Il cluster RKE2 che ospita Rancher.
   [new_managers]   control plane (etcd + controlplane) del cluster downstream
   [workers]        worker del cluster downstream
   [ingress]        worker del cluster downstream, con la label node=ingress
 
-Il cluster a piu' nodi e' quello DOWNSTREAM, ed e' Rancher a costruirlo: RKE2
-lo installa il rancher-system-agent su ogni macchina, non questo playbook.
+CON 1 O 3 SERVER, MAI 2. I server etcd decidono a maggioranza: con due nodi non
+c'e' maggioranza, e la caduta di uno ferma il cluster invece di lasciarlo in
+piedi. Due server sono PEGGIO di uno, e il playbook si ferma se il numero e'
+pari.
 
-CONFIGURAZIONE DI RKE2 SUL NODO RANCHER: /etc/rancher/rke2/config.yaml contiene
-SOLO tls-san. Niente scelta del CNI, niente ingress-controller, niente disable,
-niente resolv-conf. RKE2 posa i suoi default — canal per la rete dei pod,
-rke2-ingress-nginx per l'ingress — e nessuno glieli contraddice. L'Ingress della
-console lo crea il chart Rancher senza classe esplicita, e lo serve la
-IngressClass di default, che e' nginx.
+L'ORDINE DELLE RIGHE nell'inventario conta: il primo host bootstrappa, gli altri
+si registrano sul suo supervisor (porta 9345, non 6443). Il play gira con
+serial: 1 e porta su i server uno alla volta, aspettando che ciascuno risulti
+davvero ENTRATO nel cluster — non solo che il suo processo sia partito — prima
+di passare al successivo. Il token non va procurato: il primo master lo genera,
+gli altri lo leggono da lui.
+
+RANCHER RESTA UNO anche con tre server. Il chart si installa solo sul primo
+master, in un play a se': helm agisce sul CLUSTER, non sul nodo, e ripeterlo
+sugli altri due vorrebbe dire lavorare tre volte sulla stessa cosa. Le repliche
+di Rancher le distribuisce Kubernetes sui nodi disponibili. Tre Rancher separati
+sullo stesso rancher_domain sarebbero un'altra cosa, e sbagliata.
+
+CON PIU' DI UN MASTER il dominio punta comunque al PRIMO
+(rancher_endpoint_ip, derivata dal gruppo): se cade quello, la console non
+risponde anche se gli altri due sono su. Per una console davvero ridondante
+rancher_endpoint_ip va portata sull'IP del bilanciatore nginx, che sta in
+[nginx_servers] e si installa con playbooks/10-bilanciatori.yml.
+
+IL CLUSTER DOWNSTREAM SI SALTA DA SE' se [new_managers], [workers] e [ingress]
+sono tutti vuoti: e' il caso di chi vuole il solo Rancher.
+
+CONFIGURAZIONE DI RKE2: /etc/rancher/rke2/config.yaml contiene tls-san, node-ip
+e — solo con piu' di un server — token e server. NIENTE scelta del CNI, niente
+ingress-controller, niente disable, niente resolv-conf. RKE2 posa i suoi default
+— canal per la rete dei pod, rke2-ingress-nginx per l'ingress — e nessuno glieli
+contraddice. L'Ingress della console lo crea il chart Rancher senza classe
+esplicita, e lo serve la IngressClass di default, che e' nginx.
 
   ansible-playbook playbooks/20-rancher.yml -e clean_nodes_before_join=true
 
@@ -172,41 +195,36 @@ davvero a fondo — non solo RKE2 — c'e' playbooks/99-azzera.yml.
 
 PERCHE' QUESTO PLAYBOOK ADESSO E' COSI' CORTO
 
-Perche' e' la trascrizione di un site.yml che funziona, quello del Rancher gia'
-in esercizio, adattato all'inventario e alle variabili di questo repository.
-Quello che c'era prima — 20-rancher.yml a tre master e 21-rancher-single.yml —
-e' stato tolto insieme ai ruoli che serviva: calico_config, calico_vxlan_port,
-traefik_install, rete_pod_verifica, rancher_single_node, e il playbook
-diagnostica-rete.yml.
+Perche' segue un site.yml che funziona, quello del Rancher gia' in esercizio,
+adattato all'inventario e alle variabili di questo repository. Quello che c'era
+prima — 20-rancher.yml e 21-rancher-single.yml — e' stato tolto insieme ai ruoli
+che serviva: calico_config, calico_vxlan_port, traefik_install,
+rete_pod_verifica, rancher_single_node, e il playbook diagnostica-rete.yml.
 
 Sono state tolte anche le variabili che li governavano: rke2_cni,
-rke2_ingress_controller, rke2_disable, rke2_resolv_conf, rke2_token,
-rke2_supervisor_port, rke2_node_name, rke2_node_ip, rke2_settle_seconds,
-rke2_ferma_se_cni_diverso, rke2_extra_tls_san, rke2_write_kubeconfig_mode,
-calico_vxlan_port, tutte le traefik_*, rancher_ingress_class, cluster_disable,
-cluster_chart_values, cluster_resolv_conf e tutte le rsn_*. Chi le cerca le
-trova nella storia di git.
+rke2_ingress_controller, rke2_disable, rke2_resolv_conf, rke2_node_name,
+rke2_ferma_se_cni_diverso, rke2_write_kubeconfig_mode, calico_vxlan_port, tutte
+le traefik_*, rancher_ingress_class, cluster_disable, cluster_chart_values,
+cluster_resolv_conf e tutte le rsn_*. Chi le cerca le trova nella storia di git.
 
 QUELLO CHE ANDAVA STORTO, in ordine di quanto e' costato.
 
-1. IL PLAYBOOK METTEVA RANCHER SU TRE MASTER.
+1. L'IP DEL DOMINIO ERA SCRITTO A MANO IN group_vars.
 
-   Con tre nodi il cluster locale diventa multi-nodo, e li' e' emerso che il
-   traffico fra pod di nodi diversi non passava: i tre nodi risultavano tutti
-   Ready, i pod sulla stessa macchina si parlavano, e le query a CoreDNS
-   sull'altro nodo andavano in timeout. Il primo a caderci era il job che
-   scaricava il chart di Traefik, che falliva parlando di traefik.github.io e
-   faceva sembrare il guasto un problema di Internet.
+   rancher_endpoint_ip conteneva un indirizzo fisso, quello del primo master di
+   UN inventario preciso. Cambiando gli IP nell'inventario, update_hosts_file
+   continuava a far puntare rancher_domain alla macchina vecchia — su tutti i
+   nodi E sul control node.
 
-   Da qui e' partita la caccia a Calico, alla porta VXLAN, al resolv.conf: tre
-   spiegazioni plausibili di un sintomo che nessuna delle tre ha mai spiegato.
-   L'installazione che funziona non ha quel sintomo perche' non ha quel
-   problema: su un nodo solo non esiste traffico fra pod di nodi diversi.
+   Il playbook non se ne accorgeva: scriveva la riga, nslookup la confermava
+   (risolveva, eccome: sull'IP sbagliato), e l'unico task che protestava era il
+   "ping", che pero' ha ignore_errors. Il guasto vero arrivava mezz'ora dopo,
+   con le chiamate all'API di Rancher che finivano su una rete che non c'era.
 
-   Attenzione a cosa vuol dire "Rancher in alta disponibilita'": non tre
-   Rancher, ma un cluster RKE2 a tre server con sopra un Rancher solo. E' una
-   cosa diversa da quella che il vecchio playbook provava a fare, e va rifatta
-   da zero se un giorno servira'.
+   Adesso deriva dal primo host di [masters]: cambiando l'inventario cambia da
+   se'. Il sintomo da riconoscere e' proprio quello — "Test connectivity to
+   rancher domain" che fallisce con 100% packet loss verso un IP che non
+   somiglia a quelli dell'inventario.
 
 2. IL CNI ERA CALICO INVECE DI CANAL.
 
@@ -220,6 +238,13 @@ QUELLO CHE ANDAVA STORTO, in ordine di quanto e' costato.
    con calico_config — il sintomo e' rimasto identico. Adesso il CNI e' il
    default di RKE2, canal, su tutti e due i cluster: incapsula sulla 8472 e
    prende l'indirizzo dall'InternalIP del Node.
+
+   Il numero di master, da solo, NON era una causa: tre server RKE2 con canal e
+   ingress-nginx sono una configurazione standard e supportata. Tre nodi avevano
+   soltanto reso VISIBILE il guasto di Calico — con un nodo solo il traffico fra
+   pod di nodi diversi non esiste, quindi non puo' rompersi. Per un periodo il
+   playbook era stato ridotto al nodo singolo anche per questo; adesso i tre
+   server sono tornati, con il CNI giusto sotto.
 
 3. L'INGRESS ERA CHIESTO IN TRE MODI CHE NON POTEVANO ANDARE D'ACCORDO.
 
@@ -277,12 +302,28 @@ CNI ne' con l'ingress:
                     playbook senza che si fermi al secondo giro.
 
 
+SE IL DOMINIO PUNTA ALL'INDIRIZZO SBAGLIATO
+
+Il segno e' questo, nel play "Risoluzione del dominio Rancher":
+
+  Test connectivity to rancher domain ... 2 packets transmitted, 0 received
+
+con dentro un IP che non somiglia a quelli dell'inventario. Non e' un problema
+di rete: e' rancher_endpoint_ip che punta altrove. Adesso deriva dal primo host
+di [masters], quindi il caso normale e' che sia gia' giusta — se non lo e', o
+[masters] e' vuoto, o rancher_endpoint_ip e' stata valorizzata a mano.
+
+Il task del ping ha ignore_errors, quindi il playbook TIRA DRITTO. Vale la pena
+fermarlo li' e guardare, perche' tutto quello che viene dopo parla con Rancher
+attraverso quel nome.
+
+
 SE LA CONSOLE NON RISPONDE
 
-Sul nodo Rancher, in quest'ordine:
+Sul primo master, in quest'ordine:
 
   systemctl status rke2-server              il server e' partito?
-  kubectl get nodes                         il nodo e' Ready?
+  kubectl get nodes                         i nodi sono tutti Ready?
   kubectl -n cattle-system get pods         Rancher e' su?
   kubectl get ingress -A                    l'Ingress c'e'?
   kubectl get ingressclass                  quale classe lo serve?

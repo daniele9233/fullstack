@@ -1,12 +1,10 @@
 ---
 # Scrive /etc/rancher/rke2/config.yaml e avvia rke2-server.
 #
-# Il file contiene SOLO tls-san (vedi il template): nessuna scelta di CNI,
-# nessun componente disabilitato, nessun ingress-controller. E' la
-# configurazione del playbook che funziona, e la ragione per cui questo ruolo
-# adesso e' lungo cinquanta righe invece di quattrocento — i controlli su CNI
-# gia' presente, nome del nodo gia' registrato e porta del supervisor
-# occupata servivano tutti a percorsi che non esistono piu'.
+# Il file NON sceglie ne' il CNI ne' l'ingress (vedi il template): quelle sono
+# le righe che tenevano giu' l'installazione. Quello che c'e' serve a fare di
+# piu' macchine un cluster solo, e gira con serial: 1 dal playbook — prima il
+# bootstrap, poi i server che si uniscono, uno alla volta.
 
 - name: Crea la directory di configurazione RKE2
   file:
@@ -21,6 +19,39 @@
     name: rke2-server
   register: rke2_service_state
   failed_when: false
+
+# --- Token del cluster -------------------------------------------------------
+# Con rke2_token valorizzato si usa quello su tutti i server. Con rke2_token
+# vuoto (default) il primo master bootstrappa senza token, RKE2 gliene genera
+# uno, e i master successivi lo leggono direttamente da lui.
+#
+# La lettura e' delegata al primo master invece di appoggiarsi a un fact
+# propagato fra i batch di serial: 1. Cosi' funziona anche rilanciando il
+# playbook con --limit su un solo nodo aggiuntivo.
+
+- name: Usa il token pre-condiviso se configurato
+  set_fact:
+    rke2_effective_token: "{{ rke2_token }}"
+  when: rke2_token | default('') | length > 0
+
+- name: Leggi il node-token generato dal primo master
+  slurp:
+    src: /var/lib/rancher/rke2/server/node-token
+  delegate_to: "{{ groups['masters'][0] }}"
+  register: rke2_node_token_raw
+  when:
+    - groups['masters'] | length > 1
+    - rke2_token | default('') | length == 0
+    - inventory_hostname != groups['masters'][0]
+
+- name: Usa il node-token letto dal primo master
+  set_fact:
+    # trim obbligatorio: il file termina con newline, che finirebbe nel token.
+    rke2_effective_token: "{{ rke2_node_token_raw.content | b64decode | trim }}"
+  when:
+    - groups['masters'] | length > 1
+    - rke2_token | default('') | length == 0
+    - inventory_hostname != groups['masters'][0]
 
 - name: Create /etc/rancher/rke2/config.yaml
   template:
@@ -101,19 +132,41 @@
       {{ rke2_journal.stdout | default('(journal non leggibile)') }}
   when: rke2_readyz.rc != 0
 
-- name: Attendi che il nodo sia Ready
+# BARRIERA PRIMA DI PASSARE AL MASTER SUCCESSIVO.
+#
+# Conta i server etcd in stato Ready e attende che siano tanti quanti i master
+# avviati fino a questo punto: e' la prova che il nodo corrente e' davvero
+# ENTRATO nel cluster, non solo che il suo processo e' partito. /readyz da solo
+# non basta — risponde ok appena l'API server locale e' su, quando il nodo puo'
+# non essere ancora registrato.
+#
+# Con un master solo l'indice e' 0 e la condizione e' ">= 1": la stessa
+# espressione vale per tutti e due i casi.
+- name: Attendi che tutti i master avviati finora siano Ready
   shell: >-
     set -o pipefail;
     /var/lib/rancher/rke2/bin/kubectl
     --kubeconfig /etc/rancher/rke2/rke2.yaml
-    get nodes --no-headers | awk '$2 == "Ready"' | wc -l
+    get nodes -l node-role.kubernetes.io/etcd=true --no-headers
+    | awk '$2 == "Ready"' | wc -l
   args:
     executable: /bin/bash
-  register: rke2_ready_nodes
-  until: rke2_ready_nodes.stdout | int >= 1
+  register: rke2_ready_masters
+  until: rke2_ready_masters.stdout | int >= (groups['masters'].index(inventory_hostname) + 1)
   retries: "{{ rke2_ready_retries }}"
   delay: "{{ rke2_ready_delay }}"
   changed_when: false
+
+# RKE2 aggiunge ogni nuovo server come learner etcd e lo promuove a membro
+# votante poco DOPO che il nodo risulta Ready. Aggiungere il server successivo
+# dentro a quella finestra fa fallire l'avvio di rke2-server. Solo fra un master
+# e il successivo: sull'ultimo (e sul nodo singolo) non si aspetta niente.
+- name: Lascia stabilizzare etcd prima del master successivo
+  pause:
+    seconds: "{{ rke2_settle_seconds }}"
+  when:
+    - groups['masters'] | length > 1
+    - inventory_hostname != groups['masters'][-1]
 
 - name: Mostra lo stato del cluster locale
   command: >-
@@ -126,5 +179,6 @@
 - name: Riepilogo nodo
   debug:
     msg: |
-      {{ inventory_hostname }} — CNI e ingress: default RKE2 (canal, ingress-nginx)
+      {{ inventory_hostname }} ({{ 'bootstrap' if inventory_hostname == groups['masters'][0] else 'join su ' + hostvars[groups['masters'][0]].ansible_host }})
+      CNI e ingress: default RKE2 (canal, ingress-nginx)
       {{ rke2_nodes.stdout }}
