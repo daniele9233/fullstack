@@ -1,39 +1,50 @@
 ---
-# CLUSTER RANCHER E CLUSTER DOWNSTREAM.
+# RANCHER E CLUSTER DOWNSTREAM.
 #
-# Copre i gruppi [masters], [new_managers], [workers] e [ingress]: installa
-# RKE2 sui master, Traefik, Rancher via Helm, e crea il cluster downstream
-# agganciandoci manager, worker e nodi ingress.
-#
-# Eseguibile da solo:
 #   ansible-playbook playbooks/20-rancher.yml
 #
-# E' l'unico dei quattro playbook che usa update_hosts_file: il dominio Rancher
-# serve a chi parla con Rancher. I nodi database e Gluster si scrivono
-# /etc/hosts da soli, dentro ai rispettivi ruoli.
+# QUESTO PLAYBOOK E' LA TRASCRIZIONE DEL site.yml CHE FUNZIONA, quello del
+# Rancher a nodo singolo gia' in esercizio. Non e' una riscrittura: e' la stessa
+# sequenza, con gli stessi ruoli, adattata all'inventario e alle variabili di
+# questo repository. Quello che c'era prima al suo posto — 20-rancher.yml a tre
+# master e 21-rancher-single.yml — e' stato tolto insieme ai ruoli che serviva:
+# calico_config, calico_vxlan_port, traefik_install, rete_pod_verifica,
+# rancher_single_node.
 #
-# IL CNI DI ENTRAMBI I CLUSTER E' CANAL. Il perche' per esteso sta in
-# group_vars/all.yml (cluster_cni e rke2_cni); in breve: con Calico la console a
-# 3 nodi non viene su perche' il traffico fra pod di nodi diversi sparisce senza
-# un errore, e ne' la porta VXLAN ne' l'autodetection dell'indirizzo hanno
-# spiegato il perche'. Canal e' la configurazione con cui questo ambiente ha
-# sempre girato: incapsula sulla 8472, che qui passa, e segue il node-ip che
-# scriviamo noi. Se con canal viene su, il guasto non e' della rete: e' di Calico.
+# COSA NON FA PIU', ed e' il punto:
 #
-# Quello che cambia in questo playbook, e cambia da se' leggendo quelle due
-# variabili: calico_config non posa piu' niente prima dell'avvio, il play della
-# porta VXLAN non gira, e rke2_disable smette di disabilitare rke2-canal — che
-# adesso e' il CNI, e disabilitarlo lascerebbe i nodi senza rete. Il resto,
-# rete_pod_verifica compreso, e' identico: quella verifica non guarda il CNI, ma
-# se un pod raggiunge CoreDNS su un altro nodo.
+#   - non sceglie il CNI. Niente "cni:" in config.yaml: RKE2 posa il suo
+#     default, che e' canal. Nessun chart Calico, nessuna FelixConfiguration,
+#     nessuna porta VXLAN da correggere.
+#   - non sceglie l'ingress. Niente "ingress-controller:", niente "disable:",
+#     nessun chart Traefik scaricato da traefik.github.io. RKE2 installa
+#     rke2-ingress-nginx e l'Ingress della console lo serve lui, perche' il
+#     chart Rancher lo crea senza classe esplicita e nginx e' quella di default.
+#   - non mette Rancher su tre nodi. Rancher sta su UN master, come nel
+#     playbook che funziona. Il cluster a piu' nodi e' quello DOWNSTREAM, ed e'
+#     Rancher a costruirlo.
 #
-# ATTENZIONE sulle macchine che hanno gia' girato con Calico: il CNI non si
-# cambia a caldo. I nodi vanno azzerati, altrimenti in /etc/cni/net.d restano
-# due conflist e i pod non partono. master1_config se ne accorge e si ferma
-# dicendolo, ma la cura e' partire gia' con:
-#   ansible-playbook playbooks/20-rancher.yml -e clean_nodes_before_join=true
+# Le tre cose sopra sono, in ordine, le tre cause dei fallimenti che venivano
+# raccontati come "problemi di rete": vedi README, sezione RANCHER.
+#
+# CHE COSA SERVE PRIMA:
+#
+#   inventory.ini      UN host in [masters] (il nodo che ospita Rancher), piu'
+#                      i nodi del cluster downstream in [new_managers],
+#                      [workers] e [ingress]
+#   rancher_domain     il nome con cui si apre la console
+#   rancher_password   la password di bootstrap dell'utente admin
+#   i tre .pem         in roles/master1_helm_cert_manager_install/files/
+#
+# IL DISCO DATI (/var/lib/rancher) si predispone A MANO: il ruolo create_disk
+# esiste ancora in roles/ ma non lo invoca nessuno.
 
-- name: Prepara i nodi del cluster Rancher
+
+# Preparazione dei nodi: firewall, AppArmor, interfacce del CNI sottratte a
+# NetworkManager, lock di apt. Non c'e' nel playbook di riferimento, ma non
+# tocca ne' la rete dei pod ne' l'ingress: e' la stessa preparazione che usano
+# gli altri playbook di questo repository.
+- name: Prepara i nodi
   hosts: masters,new_managers,workers,ingress
   become: yes
   gather_facts: no
@@ -41,22 +52,14 @@
     - role: host_prep
 
 
-# Il disco dati (/var/lib/rancher) si predispone A MANO: il ruolo create_disk
-# esiste ancora in roles/ ma non viene invocato. Per riattivarlo, rimettere qui
-# questo play prima della risoluzione del dominio:
-#
-#   - name: Disco dati dei nodi RKE2
-#     hosts: masters,new_managers,workers,ingress
-#     become: yes
-#     gather_facts: yes
-#     roles:
-#       - role: create_disk
-
-
 # Risoluzione del dominio Rancher in /etc/hosts.
 #
-# [local] c'e' perche' master1_create_cluster delega al control node le
-# chiamate all'API di Rancher, e deve risolvere il dominio anche lui.
+# [local] c'e' perche' master1_create_cluster delega al control node le chiamate
+# all'API di Rancher, e deve risolvere il dominio anche lui. I nodi del cluster
+# downstream ci sono perche' l'agent di Rancher parla con il server PER NOME, e
+# continua a farlo per sempre: senza risoluzione il join fallisce subito con
+# "curl: (6) Could not resolve host".
+#
 # I bilanciatori non ci sono: nginx genera gli upstream per IP, il dominio lo
 # usa solo come server_name e non ha bisogno di risolverlo.
 - name: Risoluzione del dominio Rancher
@@ -67,178 +70,124 @@
     - role: update_hosts_file
 
 
-# PULIZIA OPZIONALE: azzera lo stato di una precedente installazione.
-# Deve girare PRIMA del play dei master, perche' anche il master va ripulito: su
-# rancher01c "helm install rancher" e "kubectl create namespace cattle-system"
-# falliscono se Rancher e' gia' installato.
-# Disattivata di default perche' distruttiva: su un nodo sano smonta RKE2.
-# Abilitare solo quando si riparte da capo su macchine gia' usate:
+# PULIZIA OPZIONALE: azzera lo stato di una precedente installazione di RKE2.
+# Deve girare PRIMA del play del master, perche' anche il master va ripulito:
+# "helm install rancher" e "kubectl create namespace cattle-system" trovano
+# roba gia' fatta se Rancher e' gia' installato.
+#
+# Disattivata di default perche' distruttiva. Serve quando si riparte da capo su
+# macchine gia' usate:
 #   ansible-playbook playbooks/20-rancher.yml -e clean_nodes_before_join=true
-- hosts: masters,new_managers,workers
+#
+# Per azzerare una macchina davvero a fondo — non solo RKE2 — c'e'
+# playbooks/99-azzera.yml.
+- name: Azzeramento dello stato RKE2 precedente (opzionale)
+  hosts: masters,new_managers,workers,ingress
   become: yes
   gather_facts: no
   roles:
     - role: clean_node_state
-      when: clean_nodes_before_join | bool
+      when: clean_nodes_before_join | default(false) | bool
 
 
-# Cluster RKE2 locale sui master, UN NODO ALLA VOLTA.
-# serial: 1 non e' un'ottimizzazione, e' un requisito: i server etcd vanno
-# aggiunti in sequenza e il primo host del gruppo deve completare il bootstrap
-# prima che il secondo provi a unirsi. master1_config contiene la barriera che
-# attende /readyz prima di liberare il nodo successivo.
-- hosts: masters
-  become: yes
-  gather_facts: no
-  serial: 1
-  # Default di Ansible, reso esplicito perche' qui la correttezza ci dipende:
-  # il primo host dell'inventario deve bootstrappare prima che gli altri
-  # provino a registrarsi sul suo supervisor.
-  order: inventory
-  roles:
-    - role: master1_install
-    # Fra install e config, e non altrove: posa la configurazione di Calico
-    # nella directory dei manifest PRIMA che master1_config avvii rke2-server.
-    # E' l'unico momento in cui si puo' dire a Calico come annunciarsi — dopo,
-    # il chart e' gia' installato e la rete del cluster gia' formata.
-    #
-    # CON CANAL NON C'E' NIENTE DA POSARE, ed e' il motivo per cui questo ruolo
-    # adesso e' condizionato: flannel prende l'indirizzo del nodo dall'InternalIP
-    # del Node (il node-ip che master1_config scrive in config.yaml) e la MTU dal
-    # chart rke2-canal, che la fissa a 1450. I due valori che a Calico vanno
-    # imposti a mano, con canal arrivano gia' giusti.
-    #
-    # Il "when" guarda rke2_cni: rimettendo "- calico" li', il ruolo torna a
-    # girare da solo senza toccare questo file.
-    - role: calico_config
-      when: "'calico' in (rke2_cni | default([]))"
-    - role: master1_config
-    - role: master1_kubectl
-
-
-# PORTA VXLAN DI CALICO, prima di Traefik e per una ragione precisa.
+# RKE2 E RANCHER SUL MASTER.
 #
-# Calico incapsula il traffico fra i pod di nodi diversi in VXLAN sulla porta
-# UDP 4789. Canal usa la 8472. Su questa rete e' aperta la 8472 e non la 4789 —
-# nessuno l'ha mai chiusa, semplicemente non e' mai servita.
+# Un host solo, e il play si ferma se ne trova di piu': questi quattro ruoli non
+# sanno unire due server in un cluster — non scrivono ne' "server:" ne' "token:"
+# in config.yaml — quindi su tre macchine bootstrapperebbero tre cluster
+# separati, ognuno con il suo Rancher convinto di essere l'unico, tutti e tre a
+# rispondere sullo stesso rancher_domain.
 #
-# Il guasto che ne segue non somiglia a un problema di rete: Calico si installa,
-# i tre master diventano Ready, e il primo a rompersi e' il job che scarica il
-# chart di Traefik, con un "i/o timeout" su traefik.github.io. Sembra Internet.
-# Invece e' che quel pod e' finito su un nodo e CoreDNS sta su un altro.
-#
-# CON CANAL QUESTO PLAY NON HA NIENTE DA FARE: il tunnel e' gia' sulla porta che
-# questa rete lascia passare, e non c'e' nessuna FelixConfiguration da correggere.
-# Il "when" lo spegne finche' rke2_cni non torna a calico.
-#
-# Va qui perche' Traefik e' il primo a dipendere dalla rete fra i nodi: prima
-# non serve a niente, dopo e' troppo tardi.
-- name: Porta VXLAN di Calico
-  hosts: masters[0]
-  become: yes
-  gather_facts: no
-  roles:
-    - role: calico_vxlan_port
-      when: "'calico' in (rke2_cni | default([]))"
-
-
-# LA RETE FRA I NODI PASSA? Si chiede QUI, prima di Traefik.
-#
-# Traefik e' il primo componente che dipende dal traffico fra pod di nodi
-# diversi: il job che scarica il suo chart interroga CoreDNS, che sta su un
-# altro nodo. Quando quella rete non passa, il cluster non lo dice — nodi tutti
-# Ready, nessun errore — e il guasto salta fuori cinque minuti dopo con un
-# messaggio su traefik.github.io che manda la diagnosi verso Internet.
-#
-# Questo play trasforma quel fallimento in una diagnosi giusta in un minuto. Su
-# un cluster a un nodo non ha niente da verificare e si salta da se'.
-- name: Verifica della rete fra i nodi
-  hosts: masters[0]
-  become: yes
-  gather_facts: no
-  roles:
-    - role: rete_pod_verifica
-
-
-# PLAY INGRESS: Traefik sul cluster locale.
-#
-# Deve stare fra il play dei master e quello di Rancher, non dentro al primo:
-# il play dei master gira con serial: 1, e installare l'ingress mentre il
-# cluster ha ancora un nodo solo significa farlo ripartire a ogni master che si
-# aggiunge. Qui i tre master ci sono tutti.
-#
-# E prima di Rancher perche' il chart Rancher crea il proprio Ingress: se la
-# IngressClass traefik non esiste ancora, quell'Ingress resta senza nessuno che
-# lo serva e la console non risponde.
-- name: Ingress Traefik sul cluster locale
+# Alta disponibilita' della CONSOLE non vuol dire tre Rancher: vuol dire un
+# cluster RKE2 a tre server con sopra un Rancher solo. Non e' quello che fa
+# questo playbook, e non e' quello che finora ha funzionato in questo ambiente.
+- name: RKE2 e Rancher sul master
   hosts: masters
   become: yes
   gather_facts: no
+  pre_tasks:
+    - name: Un solo host in [masters]
+      assert:
+        that:
+          - groups['masters'] | default([]) | length == 1
+        fail_msg: >-
+          [masters] contiene {{ groups['masters'] | default([]) | length }} host
+          ({{ groups['masters'] | default([]) | join(', ') }}), ma questo
+          playbook installa Rancher su UNO. Ogni host bootstrapperebbe un
+          cluster RKE2 suo, con un Rancher suo, tutti sullo stesso
+          rancher_domain. Lascia in [masters] il solo nodo che ospita la
+          console: gli altri vanno in [new_managers], [workers] o [ingress],
+          dove entrano nel cluster downstream che Rancher costruisce da se'.
+        quiet: yes
+      run_once: true
   roles:
-    - role: traefik_install
-
-
-# Rancher via Helm, SOLO sul primo master.
-# Helm agisce sul cluster, non sul nodo: ripetere "helm install rancher" e
-# "kubectl create namespace cattle-system" sugli altri due master fallirebbe
-# con "already exists". I 3 replica di Rancher li distribuisce Kubernetes.
-- hosts: masters[0]
-  become: yes
-  gather_facts: no
-  roles:
+    - role: master1_install
+    - role: master1_config
+    - role: master1_kubectl
     - role: master1_helm_cert_manager_install
 
 
-# Creazione del cluster downstream, SOLO dal primo master.
-# Sono chiamate all'API di Rancher delegate al control node: eseguirle da tutti
-# e tre i master creerebbe tre volte lo stesso cluster.
-- hosts: masters[0]
+# CREAZIONE DEL CLUSTER DOWNSTREAM.
+#
+# Chiamate all'API di Rancher delegate al control node, poi
+# system-agent-install.sh sui nodi di [new_managers], [workers] e [ingress].
+# Play separato dal precedente per tenere distinte le due cose: sopra si
+# installa Rancher su una macchina, qui si parla con Rancher via HTTPS.
+- name: Cluster downstream
+  hosts: masters
   become: yes
   gather_facts: no
   roles:
     - role: master1_create_cluster
 
-# Setup kubectl e fix DNS Cattle-System sui nuovi manager.
-# Il ruolo kubectl_setup esegue gia' sia il setup di kubectl sia il patch
-# hostAliases su cattle-cluster-agent: eseguirlo due volte riapplicava lo
-# stesso patch e faceva scadere una seconda volta il rollout (~10 min persi).
+
+# IL DNS DELL'AGENT DENTRO AL CLUSTER DOWNSTREAM.
 #
-# QUI C'ERA UNA PAUSA CIECA DI 180 SECONDI, ed e' stata tolta.
+# Sono DUE cluster con DUE CoreDNS. Il cattle-cluster-agent del cluster
+# downstream risolve i nomi con il CoreDNS di QUEL cluster, che di
+# rancher_domain non sa niente: /etc/hosts del nodo non lo copre, un pod non lo
+# legge. Senza questo play l'agent resta in CrashLoopBackOff con
+#   ERROR: https://<dominio>/ping is not accessible (Could not resolve host)
+# e il cluster non esce mai da "waiting for cluster agent to connect".
 #
-# Serviva perche' quando questo play parte i nodi downstream hanno appena
-# eseguito system-agent-install.sh: il rancher-system-agent si e' registrato,
-# ma RKE2 lo scarica e lo installa DOPO. kubectl_setup copiava
-# /var/lib/rancher/rke2/bin/kubectl dandolo per scontato, e quei 180 secondi
-# erano la speranza che nel frattempo comparisse. Quando bastavano andava,
-# quando non bastavano il playbook moriva sul primo task con
-# "Source /var/lib/rancher/rke2/bin/kubectl not found" — e senza quel ruolo il
-# patch degli hostAliases non veniva applicato, quindi il cluster downstream
-# non si agganciava mai.
+# La cura sono gli hostAliases sul deployment, e li scrive kubectl_setup — che
+# prima pero' aspetta: quando questo play parte, su quei nodi e' appena passato
+# system-agent-install.sh, il rancher-system-agent si e' registrato ma RKE2 lo
+# scarica e lo installa DOPO, e ci mette minuti. Il ruolo aspetta kubectl, il
+# kubeconfig e l'API server invece di darli per scontati.
 #
-# Adesso l'attesa sta dentro al ruolo, che aspetta il file finche' arriva
-# (ks_attesa_timeout) invece di sperarci: chi ci mette meno non perde 3 minuti,
-# chi ci mette di piu' non si rompe.
-- hosts: new_managers
+# Si puo' rilanciare da solo, se serve rimettere a posto solo questo:
+#   ansible-playbook playbooks/20-rancher.yml --limit new_managers
+- name: DNS dell'agent nel cluster downstream
+  hosts: new_managers
   become: yes
   gather_facts: no
   roles:
     - role: kubectl_setup
-    # Con cluster_cni: calico il downstream avrebbe lo stesso problema di porta
-    # VXLAN del cluster locale, e la stessa cura. Adesso nasce con canal, che
-    # incapsula gia' sulla 8472: il ruolo resta condizionato a cluster_cni e
-    # torna a girare da solo se si rimette calico.
-    #
-    # Va comunque PRIMA di traefik_install, quando serve: Traefik e' il primo
-    # componente che dipende dalla rete fra i nodi.
-    - role: calico_vxlan_port
-      when: cluster_cni | default('') == 'calico'
-    # Stessa verifica fatta sul cluster locale, qui sul downstream: il CNI non
-    # c'entra — si chiede se un pod raggiunge CoreDNS su un ALTRO nodo, che e'
-    # quello che serve sapere con canal esattamente come con Calico. Anche qui
-    # Traefik e' il primo a dipenderne, e anche qui il guasto sarebbe silenzioso.
-    - role: rete_pod_verifica
-    # Ingress del cluster downstream. Gira qui e non sui nodi [ingress] perche'
-    # il manifest va nella directory dei server RKE2: sono questi i nodi
-    # control plane. Dove girano i pod lo decide traefik_node_selector, in
-    # group_vars/new_managers.yml.
-    - role: traefik_install
+
+
+- name: Riepilogo
+  hosts: masters
+  become: no
+  gather_facts: no
+  tasks:
+    - name: Riepilogo
+      debug:
+        msg:
+          - "Console: https://{{ rancher_domain }} (utente admin, password in rancher_password)"
+          - "Nodo Rancher: {{ inventory_hostname }} ({{ ansible_host }}) — uno solo"
+          - "CNI: default RKE2 (canal) — Ingress: default RKE2 (ingress-nginx)"
+          - >-
+            Cluster downstream {{ cluster_name }} ({{ cluster_k8s_version }}, CNI
+            {{ cluster_cni }}): {{ nodi_attesi | int }} macchine agganciate fra
+            [new_managers], [workers] e [ingress]. Il provisioning prosegue da
+            solo dentro a Rancher.
+          - >-
+            /etc/hosts: la riga "{{ rancher_endpoint_ip | default(ansible_host) }}
+            {{ rancher_domain }}" e' stata scritta sui nodi e sul control node.
+            Se apri la console da un'ALTRA macchina, quella riga serve anche li'.
+      vars:
+        nodi_attesi: >-
+          {{ (groups['new_managers'] | default([]) | length)
+             + (groups['workers'] | default([]) | length)
+             + (groups['ingress'] | default([]) | length) }}

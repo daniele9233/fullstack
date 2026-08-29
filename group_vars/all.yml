@@ -62,388 +62,137 @@ privkey_pem_file: "privkey.pem"
 cacerts_pem_file: "cacerts.pem"
 remote_cert_path: "/root"
 
-# Cluster configuration (cluster DOWNSTREAM creato via API Rancher)
+# ---------------------------------------------------------------------------
+# CLUSTER DOWNSTREAM (creato via API Rancher dal ruolo master1_create_cluster)
+# ---------------------------------------------------------------------------
 cluster_name: "iacdevops"
 cluster_k8s_version: "v1.33.11+rke2r1"
-# CNI del cluster DOWNSTREAM. Canal, come il cluster locale (rke2_cni).
+
+# CNI del cluster downstream. Canal, che e' anche il default di RKE2.
 #
-# PERCHE' CANAL E NON CALICO, adesso
+# QUI C'ERA CALICO, e con Calico il cluster non veniva su: i nodi risultavano
+# tutti Ready, i pod sulla stessa macchina si parlavano, e il traffico fra pod
+# di nodi DIVERSI spariva senza un errore. Il primo a caderci era il job che
+# scaricava il chart di Traefik, che andava in timeout su CoreDNS e stampava un
+# messaggio su traefik.github.io: sembrava Internet, e non lo era.
 #
-# Il deploy della console a 3 nodi con Traefik e Calico non riesce, e il guasto
-# e' sempre lo stesso: i nodi risultano tutti Ready, i pod sulla stessa macchina
-# si parlano, e il traffico fra pod di nodi DIVERSI sparisce senza un errore. Il
-# primo a caderci e' il job che scarica il chart di Traefik, che va in timeout
-# su CoreDNS e stampa un messaggio su traefik.github.io: sembra Internet, e non
-# lo e'.
+# Canal incapsula sulla 8472, che su questa rete passa — la 4789 di Calico non
+# e' mai servita a nessuno, quindi nessuno l'ha mai aperta — e prende
+# l'indirizzo del nodo dall'InternalIP del Node invece di sceglierselo da solo
+# fra le interfacce. Due incognite in meno, ed e' la configurazione con cui
+# questo ambiente ha sempre girato.
 #
-# Con Calico le spiegazioni possibili sono due e finora nessuna delle due ha
-# retto alla prova: la porta VXLAN (4789 di Calico contro 8472 di flannel, e su
-# questa rete e' aperta la seconda) e l'autodetection dell'indirizzo con cui il
-# nodo si annuncia. Provate tutt'e due — calico_vxlan_port e calico_config — il
-# sintomo e' rimasto identico.
-#
-# Canal toglie di mezzo entrambe le incognite in un colpo solo, e non e' una
-# scelta al buio: e' la configurazione con cui QUESTO ambiente ha sempre girato,
-# con il cluster downstream a piu' nodi e sopra NFS provisioner, pgadmin e
-# Prometheus — roba che senza rete fra i pod non starebbe in piedi. Flannel
-# incapsula sulla 8472, che qui passa, e prende l'indirizzo del nodo dal Node
-# Kubernetes, cioe' dal node-ip che scriviamo noi in config.yaml: niente
-# autodetection che possa scegliere l'interfaccia sbagliata.
-#
-# Se con canal la console a 3 nodi viene su, il guasto NON e' della rete ne'
-# delle porte: e' di Calico, e si torna a cercarlo li'.
-#
-# PER TORNARE A CALICO basta rimettere "calico" qui (e "- calico" in rke2_cni
-# per il cluster locale): cluster_chart_values qui sotto si riaccende da solo,
-# perche' deriva da questa riga. Il cluster downstream pero' non cambia CNI a
-# caldo: i nodi vanno ricreati.
+# IL CNI NON SI CAMBIA A CALDO: cambiando questa riga i nodi del cluster
+# downstream vanno ricreati.
 cluster_cni: "canal"
 
-# Valori dei chart packaged del cluster DOWNSTREAM, passati a Rancher in
-# spec.rkeConfig.chartValues. E' l'equivalente, per il cluster creato via API,
-# del HelmChartConfig che il ruolo calico_config posa sul cluster locale.
-#
-# CON CANAL NON C'E' NIENTE DA IMPORRE, e vale la pena sapere perche' non e'
-# una dimenticanza: i due valori che a Calico vanno detti a mano — l'indirizzo
-# con cui il nodo si annuncia e la MTU del tunnel — con canal arrivano gia'
-# giusti. L'indirizzo lo prende dal Node Kubernetes (il node-ip che scriviamo
-# noi), e la MTU la fissa il chart rke2-canal a 1450, che e' il valore con cui
-# qui ha sempre funzionato.
-#
-# Il dizionario di Calico resta scritto qui sotto e si riaccende cambiando
-# cluster_cni: cosi' il ritorno a Calico non richiede di riscrivere niente.
-cluster_chart_values_calico:
-  rke2-calico:
-    installation:
-      calicoNetwork:
-        mtu: 1450
-        nodeAddressAutodetectionV4:
-          kubernetes: NodeInternalIP
+# NON CI SONO PIU' cluster_disable, cluster_chart_values E cluster_resolv_conf.
+# Erano tre modi di dire al cluster downstream come costruirsi, e servivano
+# tutti e tre allo stesso scopo: togliere rke2-ingress-nginx per far posto a un
+# Traefik da scaricare da Internet, dire a Calico la MTU e l'indirizzo con cui
+# annunciarsi, e far risolvere a CoreDNS i nomi esterni perche' quel chart
+# andava scaricato. Senza il chart da scaricare e senza Calico, il cluster non
+# ha piu' niente da prendere da fuori mentre si costruisce, e non c'e' niente da
+# imporgli: prende i default di RKE2, che sono canal e ingress-nginx.
 
-cluster_chart_values: >-
-  {{ cluster_chart_values_calico if cluster_cni == 'calico' else {} }}
-
-# Componenti packaged da non installare sul cluster downstream, stesso standard
-# del cluster locale (vedi rke2_disable). L'ingress e' Traefik.
-cluster_disable:
-  - rke2-ingress-nginx
-
-# resolv-conf del cluster DOWNSTREAM, stessa ragione di rke2_resolv_conf per il
-# cluster locale (spiegata li' sotto): senza, il CoreDNS di quel cluster inoltra
-# a 8.8.8.8 e su rete chiusa non risolve niente — a partire dal chart di Traefik.
+# Marcatura dei nodi [ingress] del cluster downstream: la label passata a
+# system-agent-install.sh al momento del join.
 #
-# Qui finisce dentro a machineGlobalConfig, cioe' nel config.yaml che Rancher
-# scrive sui nodi downstream. Il ruolo lo mette solo se il file esiste su TUTTI
-# quei nodi: se manca anche su uno solo la riga non viene scritta, perche' un
-# resolv-conf che punta al nulla e' peggio di nessun resolv-conf.
-# Vuoto = non scriverlo mai.
-cluster_resolv_conf: "/run/systemd/resolve/resolv.conf"
-
-# Marcatura dei nodi [ingress] del cluster downstream. Da queste due variabili
-# derivano TRE cose che devono restare d'accordo, e per questo stanno scritte
-# una volta sola:
+# IL TAINT NON C'E' PIU'. Aveva senso finche' su quei nodi girava un Traefik con
+# nodeSelector e tolleranza: teneva lontani gli altri carichi. Adesso l'ingress
+# e' rke2-ingress-nginx, che RKE2 installa come DaemonSet senza tolleranze — con
+# il taint quei nodi resterebbero gli unici senza ingress. La label resta, e
+# serve a puntarci un nodeSelector quando servira'.
 #
-#   - la label passata a system-agent-install.sh al momento del join
-#   - il taint <chiave>=<valore>:NoSchedule, che tiene lontani gli altri carichi
-#   - il nodeSelector e la tolleranza di Traefik, in group_vars/new_managers.yml
-#
-# Se divergessero, il selettore non troverebbe nessun nodo oppure il taint
-# respingerebbe i pod, e Traefik resterebbe Pending senza dire perche'.
-#
-# ATTENZIONE cambiandole su un cluster gia' in piedi: label e taint vengono
-# applicati al JOIN, quindi i nodi gia' registrati mantengono i vecchi. Vanno
-# aggiornati a mano, oppure i nodi vanno ricreati.
+# ATTENZIONE cambiandola su un cluster gia' in piedi: la label viene applicata
+# al JOIN, quindi i nodi gia' registrati mantengono la vecchia.
 ingress_node_key: "node"
 ingress_node_value: "ingress"
 
+# Host da cui partono le chiamate all'API di Rancher (delegate_to). E' il
+# control node, che quindi deve risolvere rancher_domain: ci pensa il play
+# update_hosts_file, che include [local] proprio per questo.
 ansibleSshHost: "localhost"
 
 # ---------------------------------------------------------------------------
-# Cluster RKE2 LOCALE (i nodi del gruppo [masters], quelli che ospitano Rancher)
+# NODO RANCHER (l'host di [masters], quello che ospita la console)
 # ---------------------------------------------------------------------------
-# Segreto condiviso dai server del cluster locale.
+# QUI NON C'E' PIU' NIENTE CHE SCELGA IL CNI O L'INGRESS, ed e' il punto di
+# tutta la revisione. /etc/rancher/rke2/config.yaml adesso contiene solo
+# tls-san: RKE2 posa i suoi default — canal per la rete dei pod,
+# rke2-ingress-nginx per l'ingress — e nessuno glieli contraddice.
 #
-# VUOTO (default) = completamente automatico: il primo master bootstrappa e
-# genera il proprio token, i master successivi lo leggono da lui in
-# /var/lib/rancher/rke2/server/node-token e se lo mettono nel config.yaml.
-# Nessun segreto committato nel repository.
+# QUELLO CHE C'ERA, E PERCHE' NON C'E' PIU':
 #
-# VALORIZZATO = token pre-condiviso, scritto uguale sul config.yaml di tutti i
-# master prima del primo avvio. Serve solo se il token deve essere noto in
-# anticipo (ad esempio per aggiungere nodi da un altro playbook).
-# In quel caso generalo con: openssl rand -hex 32
-rke2_token: ""
-
-# Porta del supervisor RKE2, quella su cui i server aggiuntivi si registrano.
-# NON e' 6443 (API server): usare 6443 qui e' l'errore piu' comune su RKE2.
-rke2_supervisor_port: 9345
-
-# --- Identita' dei nodi master ----------------------------------------------
-# node-name viene SCRITTO in config.yaml invece di lasciare che RKE2 usi
-# l'hostname della macchina. E' la stessa scelta gia' fatta per il nodo singolo
-# con rsn_node_name, e qui mancava: e' costata un cluster intero.
+#   rke2_cni: [calico]           il traffico fra pod di nodi diversi non
+#                                passava, e ne' la porta VXLAN ne'
+#                                l'autodetection dell'indirizzo hanno spiegato
+#                                il perche'. Vedi cluster_cni piu' sopra.
 #
-# RKE2 fissa il nome del nodo alla PRIMA registrazione e non lo cambia mai piu'.
-# Su una macchina riusata, con l'hostname rimasto da un'installazione
-# precedente, il nodo entra nel cluster con quel nome e ci resta. E' successo
-# davvero: 10.205.166.218, che l'inventario chiama rancher03c, aveva ancora
-# l'hostname "balancer02c" di quando faceva il bilanciatore, ed e' entrato nel
-# cluster come "balancer02c" — tre master a posto secondo etcd, ma uno con
-# l'identita' di un'altra macchina, e "kubectl get nodes" che non corrispondeva
-# piu' all'inventario.
+#   rke2_ingress_controller      "ingress-controller: traefik" in config.yaml
+#                                esiste solo su RKE2 dalla 1.36 in poi, e
+#                                rke2_channel qui e' "stable", che quella
+#                                versione non la porta. Su una versione che non
+#                                conosce l'opzione, rke2-server la rifiuta e non
+#                                parte. E anche partendo, l'Ingress della console
+#                                nasceva con ingressClassName "traefik" mentre
+#                                l'ingress controller installato era nginx:
+#                                creato, e servito da nessuno.
 #
-# Cambiare l'hostname DOPO non ripara niente: il nome nel cluster resta quello,
-# mentre il kubelet al riavvio prova a registrarsi con il nome nuovo. Per questo
-# host_prep tiene set_hostname_from_inventory a false. La cura e' qui, prima del
-# primo avvio.
-rke2_node_name: "{{ inventory_hostname }}"
-
-# node-ip: l'indirizzo con cui il nodo si annuncia agli altri. Senza, RKE2 lo
-# deduce dall'interfaccia di default, che su una macchina con piu' interfacce
-# (un ex bilanciatore con i VIP di keepalived, per dire) puo' non essere quella
-# su cui gli altri nodi lo raggiungono.
-rke2_node_ip: "{{ ansible_host | default(ansible_default_ipv4.address | default(inventory_hostname)) }}"
+#   rke2_disable                 toglieva rke2-ingress-nginx per far posto a
+#                                Traefik. Con Traefik non installato, toglieva
+#                                l'unico ingress che c'era.
+#
+#   traefik_*                    il chart Traefik veniva scaricato da
+#                                traefik.github.io. E' il download che falliva
+#                                con "i/o timeout" ogni volta che qualcosa non
+#                                andava dentro al cluster, mandando la diagnosi
+#                                verso Internet. Adesso non c'e' piu' niente da
+#                                scaricare.
+#
+#   rke2_resolv_conf             serviva a far risolvere a CoreDNS i nomi
+#                                esterni, e serviva perche' c'era un chart da
+#                                scaricare. Senza quel chart, RKE2 fa come ha
+#                                sempre fatto. Se dovesse riemergere un problema
+#                                di risoluzione DENTRO ai pod, la riga da
+#                                rimettere a mano in config.yaml e'
+#                                "resolv-conf: /run/systemd/resolve/resolv.conf".
+#
+#   rke2_token, rke2_supervisor_port, rke2_node_name, rke2_node_ip,
+#   rke2_settle_seconds, rke2_ferma_se_cni_diverso, calico_vxlan_port,
+#   rke2_extra_tls_san, rke2_write_kubeconfig_mode
+#                                servivano a unire piu' server in un cluster e a
+#                                sorvegliare i modi in cui quella cosa si rompe.
+#                                Rancher sta su un nodo solo: non c'e' nessuno a
+#                                cui unirsi.
 
 # --- Versione di RKE2 -------------------------------------------------------
 #
-# DUE MODI, e conviene usare il secondo.
-#
 # rke2_version fissa una versione ESATTA, e deve corrispondere a un tag di
-# rilascio che esiste davvero: get.rke2.io scarica da
-# github.com/rancher/rke2/releases/download/<tag>/... e una versione inventata
-# fallisce con "curl: (22) ... error: 404" sul primo nodo. E' successo con una
-# "v1.36.4+rke2r1" scritta senza averla verificata sull'elenco dei rilasci.
-# Prima di valorizzarla, il tag va letto qui:
-#   https://github.com/rancher/rke2/releases
+# rilascio che esiste davvero su github.com/rancher/rke2/releases: una versione
+# inventata fallisce con "curl: (22) ... 404" al primo nodo.
 #
-# rke2_channel invece NON e' un numero: e' un canale, e a scegliere la versione
-# ci pensa il server di aggiornamento di Rancher. "stable" prende l'ultima
-# stabile, "latest" l'ultima in assoluto. E' il modo che non puo' sbagliare, e
-# per questo qui e' vuota la prima e valorizzata la seconda.
+# rke2_channel NON e' un numero: e' un canale, e a scegliere la versione ci
+# pensa il server di aggiornamento di Rancher. E' il modo che non puo'
+# sbagliare, ed e' per questo che qui la prima e' vuota e la seconda no.
 rke2_version: ""
 rke2_channel: "stable"
 
-# --- Ingress del cluster locale ---------------------------------------------
-#
-# VUOTO = Traefik installato dal chart, scaricato da traefik.github.io dal ruolo
-#         traefik_install. Funziona su qualunque versione di RKE2, ma dipende da
-#         Internet: e' il download che e' fallito ripetutamente con "i/o
-#         timeout", facendo sembrare un problema di connettivita' esterna un
-#         guasto che era fra due macchine dello stesso rack.
-#
-# "traefik" = Traefik IMPACCHETTATO dentro RKE2, scelto con "ingress-controller:
-#         traefik" in config.yaml. Nessun download, nessuna dipendenza da
-#         Internet per l'ingress. RICHIEDE RKE2 >= 1.36: su versioni precedenti
-#         quell'opzione non esiste e rke2-server non parte.
-#
-# Altri valori accettati da RKE2: "none", "ingress-nginx". Il primo valore
-# diventa anche la IngressClass predefinita.
-#
-# ATTENZIONE alla combinazione con il canale: "stable" prende l'ultima stabile,
-# e se quella fosse ancora una 1.35 l'opzione ingress-controller non esiste e
-# rke2-server non parte. Il fallimento pero' e' immediato e rumoroso — il
-# servizio non si avvia al primo nodo, non e' un guasto silenzioso che si scopre
-# mezz'ora dopo — e master1_config lo intercetta spiegando cosa fare.
-rke2_ingress_controller: "traefik"
-
-# CNI del cluster locale. Deve essere identico su tutti i master: se diverge,
-# in /etc/cni/net.d convivono conflist di CNI diversi e i pod restano bloccati
-# in ContainerCreating. Lista vuota = default RKE2 (canal).
-#
-# CANAL, per la stessa ragione scritta per esteso in cluster_cni piu' sopra: la
-# console a 3 nodi con Traefik e Calico non viene su, il traffico fra pod di
-# nodi diversi sparisce in silenzio, e ne' la porta VXLAN ne' l'autodetection
-# dell'indirizzo hanno spiegato il perche'. Canal incapsula sulla 8472, che su
-# questa rete passa, e prende l'indirizzo del nodo dall'InternalIP del Node,
-# cioe' dal node-ip che scriviamo noi qui sotto: due incognite in meno.
-#
-# E' scritto "canal" invece di lasciare la lista vuota anche se il default di
-# RKE2 e' lo stesso: cosi' il CNI in uso e' leggibile in config.yaml sui nodi,
-# ed e' la stessa cosa che guarda master1_config quando controlla che il nodo
-# non stia gia' girando con un altro CNI.
-#
-# PER TORNARE A CALICO basta rimettere "- calico" qui: rke2_disable, il ruolo
-# calico_config e il play della porta VXLAN si riaccendono da soli, perche'
-# derivano tutti da questa riga. I nodi pero' vanno azzerati: il CNI non si
-# cambia a caldo (vedi clean_nodes_before_join).
-rke2_cni:
-  - canal
-
-# true = master1_config si ferma se in /etc/cni/net.d del nodo c'e' gia' la
-# configurazione di un CNI DIVERSO da quello richiesto qui sopra. E' la guardia
-# che serve proprio adesso, passando da Calico a canal su macchine gia' usate:
-# le due conflist convivono, vince quella prima in ordine alfabetico e i pod
-# restano in ContainerCreating con un errore che parla di un plugin mancante.
-# La cura e' azzerare i nodi (clean_nodes_before_join=true), e il messaggio lo
-# dice. false = prosegui lo stesso, sapendo cosa si rischia.
-rke2_ferma_se_cni_diverso: true
-
-# Componenti packaged da disabilitare. DERIVATA da rke2_cni e da
-# rke2_ingress_controller: non modificarla a mano.
-#
-# rke2-canal si disabilita SOLO quando il CNI e' un altro. Con Calico serve,
-# altrimenti in /etc/cni/net.d convivono due conflist e i pod restano in
-# ContainerCreating; con canal disabilitarlo vorrebbe dire lasciare il nodo
-# senza rete del tutto. E' lo stesso calcolo che fa gia' rsn_disable_effettivo
-# per il nodo singolo.
-#
-# rke2-ingress-nginx: l'ingress standard e' Traefik, installato dal ruolo
-# traefik_install. Due ingress controller che pretendono entrambi le porte 80 e
-# 443 dei nodi non possono coesistere: il secondo resta in CrashLoopBackOff.
-#
-# Con ingress-controller valorizzato la scelta dell'ingress la fa quello, ed e'
-# il meccanismo previsto da RKE2 — nelle versioni recenti "rke2-ingress-nginx"
-# non e' nemmeno piu' fra i valori ammessi di "disable". Senza, si torna al modo
-# vecchio: nginx disattivato qui e Traefik installato dal chart.
-#
-# E' calcolata invece che scritta perche' queste cose devono per forza
-# corrispondere: canal disabilitato mentre e' lui il CNI significa un nodo senza
-# rete, e nginx acceso insieme a Traefik significa due ingress che pretendono le
-# porte 80 e 443. Tenerle allineate a mano vuol dire dimenticarsene una volta.
-rke2_disable: >-
-  {{ (['rke2-canal'] if (rke2_cni | length > 0 and 'canal' not in rke2_cni) else [])
-     + ([] if (rke2_ingress_controller | default('') | length > 0)
-        else ['rke2-ingress-nginx']) }}
-
-# PORTA VXLAN DI CALICO. Non si applica: con canal la porta e' la 8472 e la
-# decide flannel. Vuoto = non toccare niente.
-#
-# Serve a forzare la porta UDP su cui CALICO incapsula il traffico fra i pod di
-# nodi diversi. Calico usa la 4789, flannel e canal la 8472, e su una rete che
-# filtra per porta la differenza conta: qui e' aperta la 8472 — nessuno ha mai
-# chiuso la 4789, semplicemente non e' mai servita — ed e' uno dei motivi per
-# cui si e' tornati a canal.
-#
-# CON CALICO QUI NON ERA QUESTO, e lo si e' verificato invece di dedurlo: sul
-# cluster locale a tre nodi il traffico fra pod di macchine diverse non passava
-# ne' con la 4789 ne' con la 8472. Cambiata la porta e riavviato calico-node, il
-# job che scarica il chart di Traefik e' morto identico, con lo stesso i/o
-# timeout verso CoreDNS. La causa vera del comportamento di Calico qui non e'
-# ancora nota, ed e' la ragione per cui adesso il CNI e' canal.
-#
-# La variabile e il ruolo calico_vxlan_port restano perche' su un'altra rete
-# quella porta e' una spiegazione plausibile e provarla costa un minuto. Il ruolo
-# non gira affatto finche' il CNI e' canal: lo decidono i "when" in
-# playbooks/20-rancher.yml. Il sintomo da cui partire: tutti i nodi Ready, i pod
-# sullo stesso nodo si parlano, e il traffico fra nodi diversi sparisce senza un
-# errore. Si distingue cosi':
-#
-#   kubectl run t --rm -i --restart=Never --image=busybox:1.36 \
-#     --overrides='{"spec":{"nodeName":"<NODO>"}}' -- nslookup github.com
-#
-# lanciato sul nodo di CoreDNS e su un altro. Uno risolve e l'altro no = e' la
-# rete fra i nodi. Falliscono entrambi = e' il resolv.conf (rke2_resolv_conf).
-calico_vxlan_port: ""
-
-# SAN aggiuntivi nel certificato dell'API server. Il dominio Rancher e gli IP
-# di tutti i master sono gia' inclusi automaticamente dal template: qui vanno
-# solo eventuali VIP o FQDN del load balancer davanti ai master.
-rke2_extra_tls_san: []
-
-# Permessi di /etc/rancher/rke2/rke2.yaml. Vuoto = default RKE2 (0600).
-rke2_write_kubeconfig_mode: ""
-
-# resolv-conf PER IL KUBELET DEL CLUSTER LOCALE. Non e' un dettaglio: senza
-# questa riga il cluster a 3 nodi non riesce a scaricare NIENTE da internet.
-#
-# Su Ubuntu /etc/resolv.conf e' il link allo stub di systemd-resolved e contiene
-# "nameserver 127.0.0.53". RKE2 si accorge che e' un loopback e — invece di
-# usarlo — se ne genera uno suo con dentro 8.8.8.8. Su una rete aziendale chiusa
-# 8.8.8.8 non risponde, quindi CoreDNS non risolve NESSUN nome esterno.
-#
-# Il guasto non si presenta come un problema di DNS: si presenta come il job
-# helm-install-traefik che resta li' a riprovare ("lookup traefik.github.io:
-# i/o timeout"), Traefik che non parte, l'Ingress di Rancher che non lo serve
-# nessuno e — mezz'ora dopo, in un altro play — "Connection refused" sulla API
-# di Rancher. E' successo davvero, ed e' costato giorni.
-#
-# Questo e' il resolv.conf VERO, con i nameserver dell'azienda. Il ruolo lo
-# scrive in config.yaml SOLO se il file esiste davvero sul nodo: su una macchina
-# senza systemd-resolved la riga non compare e RKE2 fa come ha sempre fatto.
-# Vuoto = non scriverlo mai.
-rke2_resolv_conf: "/run/systemd/resolve/resolv.conf"
-
-# Attesa che ogni master sia entrato nel cluster prima di avviare il successivo.
+# Attesa che l'API server risponda e che il nodo diventi Ready dopo il primo
+# avvio. Al primo giro RKE2 scarica ed estrae le immagini dei componenti di
+# sistema: 10 minuti di margine non sono tanti su rete lenta.
 rke2_ready_retries: 60
 rke2_ready_delay: 10
 
-# Margine per la promozione del nodo da learner etcd a membro votante, applicato
-# tra un master e il successivo. Alzarlo se l'avvio del terzo master fallisce.
-rke2_settle_seconds: 45
-
-# Master node configuration (per kubectl setup sui new_managers)
-# Derivato dall'inventario: e' il primo host del gruppo [masters].
+# Indirizzo del nodo Rancher, usato da kubectl_setup per gli hostAliases dei
+# pod agent del cluster downstream. Derivato dall'inventario.
 master_node_ip: "{{ hostvars[groups['masters'][0]]['ansible_host'] }}"
 master_node_user: "root"
-# master_node_name usa rancher_domain (evita duplicazioni)
 
 # IP a cui far puntare rancher_domain in /etc/hosts su tutti i nodi.
-# Di default il primo master. Con 3 master in HA conviene puntarlo all'IP del
-# bilanciatore nginx, altrimenti la caduta del primo master isola tutti gli altri.
+# Di default e' l'host di [masters]. Valorizzarlo diversamente serve quando la
+# console sta dietro al bilanciatore nginx: allora il dominio deve puntare li'.
 rancher_endpoint_ip: "10.205.166.214"
-
-# ---------------------------------------------------------------------------
-# TRAEFIK SCARICATO DA INTERNET: adesso SPENTO, e vale la pena sapere perche'
-# ---------------------------------------------------------------------------
-# Questo ruolo scrive un HelmChart che fa scaricare il chart Traefik da
-# traefik.github.io. Serviva finche' il default di RKE2 era ingress-nginx e
-# Traefik andava preso da fuori.
-#
-# Da v1.36 Traefik e' IMPACCHETTATO in RKE2 e si ottiene con una riga in
-# config.yaml (rke2_ingress_controller). Quindi questo ruolo non serve piu' sul
-# cluster locale, ed e' meglio che sia spento che acceso: due ingress controller
-# vogliono entrambi le porte 80 e 443 dei nodi, e il secondo che parte resta in
-# CrashLoopBackOff.
-#
-# Toglie di mezzo anche una dipendenza da Internet che e' costata cara: il job
-# che scaricava questo chart e' quello che falliva con "i/o timeout" su
-# traefik.github.io ogni volta che la rete fra i nodi non consegnava, facendo
-# sembrare un problema di connettivita' esterna quello che era un guasto interno
-# al cluster. Con il chart impacchettato, quel messaggio non puo' piu' comparire.
-#
-# DERIVATA da rke2_ingress_controller, per la stessa ragione di rke2_disable:
-# scaricare il chart mentre RKE2 installa gia' Traefik da se' significa due
-# ingress sulle stesse porte.
-#
-# Vale per il cluster LOCALE. Il downstream nasce con cluster_k8s_version, che
-# e' un'altra versione e ha un'altra scelta: il suo valore sta in
-# group_vars/new_managers.yml.
-traefik_enabled: >-
-  {{ (rke2_ingress_controller | default('') | length == 0) }}
-
-traefik_namespace: "traefik"
-traefik_chart: "traefik"
-traefik_repo: "https://traefik.github.io/charts"
-
-# Vuoto = ultima versione disponibile nel repo, come rke2_version. Valorizzare
-# (es. "34.4.1") per fissarla e rendere le installazioni ripetibili.
-traefik_chart_version: ""
-
-# DaemonSet con hostPort, come faceva rke2-ingress-nginx: Traefik risponde
-# direttamente sulle porte 80 e 443 dei nodi, quindi i bilanciatori nginx
-# continuano a puntare a ingress_https_port senza modifiche.
-#
-# Dentro al container Traefik resta sulle porte alte (8000/8443) e le hostPort
-# fanno la mappatura: cosi' non serve NET_BIND_SERVICE per legare la 80.
-traefik_kind: "DaemonSet"
-traefik_host_http_port: 80
-traefik_host_https_port: 443
-
-# Traefik diventa la IngressClass di default: gli Ingress senza classe esplicita
-# finiscono a lui. Serve anche alla console Rancher, il cui Ingress viene creato
-# dal chart.
-traefik_default_ingress_class: true
-
-# Dove far girare i pod. Vuoti = su tutti i nodi schedulabili, che e' quello che
-# serve sul cluster locale, dove ci sono solo i master.
-# I nodi [ingress] del cluster downstream si dichiarano in
-# group_vars/new_managers.yml, derivati da ingress_node_key e
-# ingress_node_value.
-traefik_node_selector: {}
-traefik_tolerations: []
-
-# IngressClass con cui viene creato l'Ingress della console Rancher.
-rancher_ingress_class: "traefik"
 
 # Variabili blocco Rancher
 nginx_server_name: "kikko.app.inail-svil.almaviva.it"
@@ -1440,113 +1189,3 @@ logging_deploy_scripts: true
 # Verifica finale in sola lettura: rilegge template, alias e indici di scrittura
 # da Elasticsearch invece di fidarsi delle risposte alle PUT.
 logging_verify: true
-
-
-# ===========================================================================
-# RANCHER SU UN NODO SOLO  ->  gruppo [rancher_single], ruolo rancher_single_node
-# ===========================================================================
-# RKE2 + Traefik + Rancher su una macchina sola.
-#
-#   ansible-playbook -i inventory.ini playbooks/21-rancher-single.yml
-#
-# E' L'ALTERNATIVA a playbooks/20-rancher.yml (3 master + cluster downstream),
-# non un suo complemento: due Rancher sullo stesso rancher_domain non possono
-# stare su insieme. site.yml importa il 20; il nodo singolo si lancia da solo.
-#
-# CONDIVIDE con l'installazione a 3 nodi rancher_domain, rancher_password,
-# rancher_version, helm_version e i .pem dei certificati, che restano dichiarati
-# in cima a questo file: sullo stesso dominio non esistono due verita'.
-#
-# NIENTE /etc/hosts DA COMPILARE SULLE MACCHINE. A 3 nodi ogni host deve
-# risolvere il dominio e l'elenco lo si mantiene a mano. Qui il nodo e' uno, la
-# riga e' una, e la scrive il ruolo in tre posti:
-#   - sul nodo                (/etc/hosts, una riga)
-#   - dentro ai pod           (hostAliases su cattle-cluster-agent e fleet-agent:
-#                              e' l'unico posto che /etc/hosts del nodo NON copre)
-#   - sul control node        (rsn_update_control_node_hosts, serve root li')
-# L'unica cosa che resta a mano e' la stessa riga sulla postazione da cui si
-# apre il browser, se non e' il control node.
-
-rsn_group: "rancher_single"
-
-# --- Identita' del nodo -----------------------------------------------------
-# node-name viene SCRITTO in config.yaml invece di lasciare che RKE2 usi
-# l'hostname. RKE2 fissa il nome del nodo alla prima registrazione e non lo
-# cambia piu': su una macchina riusata, con l'hostname rimasto da
-# un'installazione precedente, il nodo entra con quel nome e ci resta — e il
-# nome sbagliato si porta dietro tutto quello che a quel nome e' agganciato.
-rsn_node_name: "{{ inventory_hostname }}"
-rsn_node_ip: "{{ ansible_host | default(ansible_default_ipv4.address | default(inventory_hostname)) }}"
-
-# --- Risoluzione del nome ---------------------------------------------------
-rsn_manage_node_hosts: true
-rsn_update_control_node_hosts: true
-rsn_patch_agent_hostaliases: true
-
-# Ubuntu mette di serie "127.0.1.1 <hostname>": su un nodo Kubernetes fa
-# risolvere il nome della macchina a un loopback, e chi risolve il proprio nome
-# per annunciarsi si annuncia li'.
-rsn_remove_127_0_1_1: true
-
-# --- RKE2 -------------------------------------------------------------------
-# Vuoto = ultima disponibile da get.rke2.io. Valorizzalo (es. "v1.33.11+rke2r1")
-# per rendere le installazioni ripetibili.
-rsn_rke2_version: ""
-
-# Lo stesso CNI dei 3 nodi, per non avere due standard: adesso canal, come
-# rke2_cni. Su UN NODO SOLO la scelta conta molto meno — non c'e' traffico fra
-# nodi, quindi non c'e' overlay VXLAN da far passare in mezzo a un firewall, che
-# e' il modo in cui Calico si rompe piu' spesso — ma tenere due CNI diversi nello
-# stesso repository significa diagnosticare due cose diverse.
-# Lista VUOTA = default RKE2 (canal), che qui e' lo stesso risultato.
-rsn_cni:
-  - canal
-rsn_disable_ingress_nginx: true
-
-# Il resolv.conf VERO, non lo stub 127.0.0.53 di systemd-resolved a cui punta
-# /etc/resolv.conf su Ubuntu. CoreDNS eredita questo file: con lo stub
-# proverebbe a inoltrare le query a se' stesso dentro al proprio pod e ogni
-# risoluzione esterna andrebbe in timeout. La riga viene scritta solo se il file
-# esiste davvero sul nodo.
-rsn_resolv_conf: "/run/systemd/resolve/resolv.conf"
-
-# --- Rancher ----------------------------------------------------------------
-# Da dove viene il certificato del dominio:
-#   "secret"   i .pem in roles/master1_helm_cert_manager_install/files/, come
-#              nell'installazione a 3 nodi
-#   "rancher"  Rancher si genera una CA sua e firma da solo. Nessun file da
-#              procurarsi, ma serve cert-manager, che il ruolo installa. Il
-#              browser mostrera' un avviso di certificato non fidato.
-rsn_tls_source: "secret"
-
-# UNA replica. Il chart ne vuole 3 di default e le tiene su nodi diversi
-# (anti-affinity): su un nodo solo due resterebbero Pending per sempre e il
-# deployment non diventerebbe mai pronto. E' l'errore che fa sembrare rotta
-# un'installazione che invece e' stata solo chiesta male.
-rsn_rancher_replicas: 1
-
-rsn_ingress_class: "{{ rancher_ingress_class | default('traefik') }}"
-rsn_rancher_wait_timeout: 900
-rsn_verify: true
-
-# --- Cluster downstream -----------------------------------------------------
-# true = dopo Rancher si crea il cluster downstream e ci si agganciano i nodi di
-# [new_managers], [workers] e [ingress], con lo STESSO ruolo del percorso a 3
-# nodi (master1_create_cluster): stesse API, stesso token di registrazione,
-# stesso system-agent-install.sh. Nome, versione di Kubernetes e CNI del cluster
-# downstream restano cluster_name, cluster_k8s_version e cluster_cni piu' sopra.
-#
-# Con i tre gruppi vuoti il cluster viene creato in Rancher e resta ad aspettare
-# nodi: e' voluto, ed e' quello che fa anche l'installazione a 3 nodi.
-rsn_crea_cluster_downstream: true
-
-# true = la riga di rancher_domain viene scritta anche in /etc/hosts dei nodi di
-# [new_managers], [workers] e [ingress].
-#
-# NON e' un extra: l'agent di Rancher parla con il server PER NOME. Senza
-# risoluzione il join fallisce subito ("curl: (6) Could not resolve host") e,
-# anche riuscendo, l'agent smetterebbe di funzionare al primo riavvio. La riga
-# la scrive update_hosts_file: a mano non c'e' niente da fare.
-#
-# false su una rete dove rancher_domain sta in un DNS vero.
-rsn_hosts_nodi_downstream: true

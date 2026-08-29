@@ -3,31 +3,24 @@
 
 # Pausa di assestamento prima di parlare con l'API di Rancher.
 #
-# Nel percorso a 3 nodi (playbooks/20-rancher.yml) questo ruolo parte subito
-# dopo "helm install rancher", quando l'API puo' gia' rispondere al login ma non
-# essere pronta a provisionare: la pausa e' cieca ma serve, e resta com'era.
+# Questo ruolo parte subito dopo "helm install rancher", quando l'API puo' gia'
+# rispondere al login ma non essere pronta a provisionare. La pausa e' cieca ma
+# serve, ed e' quella del playbook di riferimento: 280 secondi.
 #
-# Sul nodo singolo (playbooks/21-rancher-single.yml) non serve: li'
-# rancher_single_node ha gia' verificato che la console risponda, e il playbook
-# passa 0.
+# Non e' l'unica difesa: il login qui sotto riprova, quindi se Rancher ci mette
+# di piu' il playbook aspetta invece di cadere.
 cluster_pausa_iniziale: 280
 
 # Tentativi sul login all'API. E' l'attesa SUL FATTO che accompagna la pausa a
-# tempo qui sopra: se Rancher non e' ancora in piedi si riprova, invece di far
-# cadere il playbook al primo tentativo.
+# tempo qui sopra.
 cluster_login_retries: 30
 cluster_login_delay: 10
 
-# Attesa che le MACCHINE compaiano in Rancher. Compaiono in un minuto, appena
-# il rancher-system-agent contatta il server: sono la prova che il join e'
-# andato, ed e' l'unica cosa che dipende da questo playbook.
+# Attesa che i nodi del cluster downstream compaiano in Rancher.
 #
-# NON si aspettano invece i NODI (v3/nodes): quelli arrivano molto dopo, quando
-# il control plane del cluster downstream ha finito di installare RKE2 e il
-# cluster agent si e' connesso. Aspettarli qui vorrebbe dire tenere Ansible
-# fermo mezz'ora su una cosa che va avanti da sola — ed e' esattamente
-# l'attesa che, con il control plane ancora in "Waiting for Cluster control
-# plane to be initialized", finiva per dichiarare "0 nodi" un aggancio
-# riuscito.
+# Il join si vede subito — il rancher-system-agent contatta il server in un
+# minuto — ma il NODO Kubernetes compare solo quando RKE2 ha finito di
+# installarsi su quella macchina, e ci mette minuti. 30 x 10s e' un margine
+# ragionevole; se scade non e' un errore, il provisioning prosegue in Rancher.
 cluster_macchine_retries: 30
 cluster_macchine_delay: 10

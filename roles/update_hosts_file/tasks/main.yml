@@ -1,16 +1,15 @@
 ---
 # roles/update_hosts_file/tasks/main.yml
 
-# Default: il primo master. Con 3 master in HA conviene valorizzare
-# rancher_endpoint_ip con l'IP del bilanciatore nginx in group_vars/all.yml,
-# altrimenti la caduta del primo master isola tutti gli altri nodi.
+# Default: l'host di [masters], cioe' il nodo che ospita Rancher. Valorizzando
+# rancher_endpoint_ip in group_vars/all.yml si punta il dominio altrove — per
+# esempio all'IP del bilanciatore nginx davanti alla console.
 #
 # NIENTE "| default(hostvars[groups['masters'][0]]...)" QUI, e non e' stile.
 # Il filtro default() di Jinja NON e' pigro: l'argomento di ripiego viene
 # valutato sempre, anche quando la variabile a sinistra c'e'. Con [masters]
-# vuoto — il caso del nodo singolo, dove Rancher sta in [rancher_single] e
-# rancher_endpoint_ip viene passato esplicitamente — quel [0] fa fallire il
-# ruolo con "list object has no element 0" pur essendoci gia' la risposta.
+# vuoto quel [0] fa fallire il ruolo con "list object has no element 0" pur
+# essendoci gia' la risposta in rancher_endpoint_ip.
 #
 # L'if/else di Jinja invece e' pigro: il ramo else si valuta solo se serve.
 - name: Verifica di sapere a quale indirizzo punta il dominio
@@ -20,10 +19,9 @@
         or (groups['masters'] | default([]) | length > 0)
     fail_msg: >-
       Non so a quale indirizzo far puntare {{ rancher_domain }}: il gruppo
-      [masters] e' vuoto e rancher_endpoint_ip non e' valorizzata. Dichiara
-      rancher_endpoint_ip (l'IP del nodo che serve la console), oppure invoca
-      questo ruolo da un playbook che ce la passa — e' quello che fa
-      playbooks/21-rancher-single.yml con l'host di [rancher_single].
+      [masters] e' vuoto e rancher_endpoint_ip non e' valorizzata. Metti in
+      [masters] il nodo che ospita Rancher, oppure dichiara
+      rancher_endpoint_ip con l'IP a cui risponde la console.
   run_once: true
 
 - name: Get master node IP from inventory

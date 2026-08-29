@@ -1,63 +1,18 @@
 {{ '#' }} {{ ansible_managed }} - roles/master1_config/templates/config_master1.yaml.j2
-{% set first_master = groups['masters'][0] %}
-{{ '#' }} Nome e indirizzo con cui il nodo entra nel cluster. Scritti a mano e non
-{{ '#' }} lasciati dedurre a RKE2: l'hostname di una macchina riusata e' quello
-{{ '#' }} della sua vita precedente, e RKE2 fissa il nome alla prima
-{{ '#' }} registrazione senza cambiarlo mai piu'.
-node-name: {{ rke2_node_name }}
-node-ip: {{ rke2_node_ip }}
-{% if rke2_effective_token is defined and rke2_effective_token %}
-token: {{ rke2_effective_token }}
-{% else %}
-{{ '#' }} Nessun token: questo nodo bootstrappa il cluster e RKE2 ne genera uno
-{{ '#' }} in /var/lib/rancher/rke2/server/node-token, da cui lo leggono gli altri.
-{% endif %}
-{% if inventory_hostname != first_master %}
-{{ '#' }} Nodo aggiuntivo: si registra sul supervisor del primo master.
-{{ '#' }} La porta e' {{ rke2_supervisor_port }} (supervisor), non 6443 (API server).
-server: https://{{ hostvars[first_master].ansible_host }}:{{ rke2_supervisor_port }}
-{% endif %}
+{{ '#' }}
+{{ '#' }} QUESTO FILE CONTIENE SOLO tls-san, ED E' VOLUTO.
+{{ '#' }}
+{{ '#' }} Niente "cni:", niente "ingress-controller:", niente "disable:",
+{{ '#' }} niente "resolv-conf:". Ogni riga in piu' qui dentro e' una scelta
+{{ '#' }} tolta a RKE2, e le tre che c'erano prima sono le tre che hanno rotto
+{{ '#' }} l'installazione: calico al posto di canal, un ingress-controller che
+{{ '#' }} su questa versione non esiste, e ingress-nginx disabilitato in favore
+{{ '#' }} di un Traefik che andava scaricato da Internet.
+{{ '#' }}
+{{ '#' }} tls-san serve perche' il certificato dell'API server deve valere
+{{ '#' }} anche per il nome con cui si apre la console, non solo per l'IP.
 tls-san:
   - {{ rancher_domain }}
-{% for host in groups['masters'] %}
+{%- for host in groups['masters'] %}
   - {{ hostvars[host].ansible_host }}
-{% endfor %}
-{% for san in rke2_extra_tls_san %}
-  - {{ san }}
-{% endfor %}
-{% if rke2_cni | length > 0 %}
-cni:
-{% for plugin in rke2_cni %}
-  - {{ plugin }}
-{% endfor %}
-{% endif %}
-{% if rke2_ingress_controller | default('') | length > 0 %}
-
-{{ '#' }} Ingress controller, scelto esplicitamente e non lasciato al default
-{{ '#' }} della versione: fino a v1.35 era ingress-nginx, da v1.36 e' Traefik.
-{{ '#' }} Il primo valore diventa anche la IngressClass predefinita.
-{{ '#' }}
-{{ '#' }} Con "traefik" su RKE2 >= 1.36 il chart arriva IMPACCHETTATO con RKE2 e
-{{ '#' }} non viene scaricato da traefik.github.io: niente dipendenza da
-{{ '#' }} Internet per l'ingress, e niente job che fallisce parlando di un sito
-{{ '#' }} esterno quando il guasto e' dentro al cluster.
-ingress-controller: {{ rke2_ingress_controller }}
-{% endif %}
-{% if rke2_disable | length > 0 %}
-disable:
-{% for component in rke2_disable %}
-  - {{ component }}
-{% endfor %}
-{% endif %}
-{% if rke2_write_kubeconfig_mode %}
-write-kubeconfig-mode: "{{ rke2_write_kubeconfig_mode }}"
-{% endif %}
-{% if rke2_resolv_conf_presente | default(false) %}
-
-{{ '#' }} Il resolv.conf VERO, non lo stub 127.0.0.53 di systemd-resolved a cui
-{{ '#' }} punta /etc/resolv.conf su Ubuntu. RKE2 vede il loopback e se ne
-{{ '#' }} genera uno con 8.8.8.8 dentro: su rete aziendale chiusa non risponde,
-{{ '#' }} e CoreDNS non risolve piu' nessun nome esterno. Il primo a caderci e'
-{{ '#' }} il job che scarica il chart di Traefik da traefik.github.io.
-resolv-conf: {{ rke2_resolv_conf }}
-{% endif %}
+{%- endfor %}

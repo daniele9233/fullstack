@@ -1,10 +1,9 @@
 ---
 # kubectl SUL NODO + IL DNS DELL'AGENT DEL CLUSTER DOWNSTREAM.
 #
-# Gira sui [new_managers] dopo master1_create_cluster, in tutti e due i
-# percorsi: playbooks/20-rancher.yml (Rancher su 3 master) e
-# playbooks/21-rancher-single.yml (Rancher su un nodo solo). Che cosa fa e
-# perche' e' scritto in defaults/main.yml.
+# Gira sui [new_managers] dopo master1_create_cluster, nell'ultimo play di
+# playbooks/20-rancher.yml. Che cosa fa e perche' e' scritto in
+# defaults/main.yml.
 #
 # In breve: prima aspetta che RKE2 abbia messo kubectl e il kubeconfig sul nodo
 # — non li da' piu' per scontati, ed e' la correzione che serviva — poi scrive
@@ -16,10 +15,9 @@
 #
 # Il controllo sta in un block/rescue e non in un assert secco perche' il modo
 # in cui master_node_ip manca non e' "non c'e'": in group_vars/all.yml vale
-# hostvars[groups['masters'][0]]['ansible_host'], e con [masters] vuoto — il
-# caso del nodo singolo, dove Rancher sta in [rancher_single] — non e'
-# indefinita, e' una espressione che ESPLODE con "list object has no element 0".
-# default() non lo intercetta, il rescue si'.
+# hostvars[groups['masters'][0]]['ansible_host'], e con [masters] vuoto non e'
+# indefinita — e' una espressione che ESPLODE con "list object has no element
+# 0". default() non lo intercetta, il rescue si'.
 - name: Verifica di sapere nome e indirizzo di Rancher
   block:
     - name: Nome e indirizzo di Rancher
@@ -39,10 +37,8 @@
         msg: >-
           Non so a quale indirizzo risponde Rancher. In group_vars/all.yml
           master_node_ip vale hostvars[groups['masters'][0]]['ansible_host'], e
-          qui il gruppo [masters] e' vuoto: e' il caso dell'installazione su un
-          nodo solo, dove Rancher sta in [rancher_single]. Passala al ruolo —
-          e' quello che fa playbooks/21-rancher-single.yml — oppure valorizza
-          master_node_ip.
+          qui il gruppo [masters] e' vuoto. Mettici il nodo che ospita Rancher,
+          oppure passa master_node_ip a questo ruolo.
 
 - name: kubectl e kubeconfig sul nodo
   import_tasks: attesa.yml

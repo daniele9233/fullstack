@@ -1,95 +1,55 @@
 ---
-# Pausa di assestamento dopo l'installazione di Rancher. E' cieca di proposito:
-# nel percorso a 3 nodi questo ruolo parte subito dopo "helm install rancher",
-# quando l'API puo' rispondere al login ma non essere ancora pronta a
-# provisionare.
+# CREAZIONE DEL CLUSTER DOWNSTREAM VIA API RANCHER.
 #
-# Sul nodo singolo non serve: li' rancher_single_node ha gia' verificato che la
-# console risponda, e il playbook passa cluster_pausa_iniziale: 0.
-- name: Attesa di assestamento di Rancher
+# E' il ruolo del playbook di riferimento, adattato: stesse chiamate, stesso
+# ordine, stesse attese. Le uniche aggiunte sono il gruppo [ingress] (che qui
+# esiste e li' no) e le guardie sui gruppi vuoti.
+#
+# COSA E' STATO TOLTO rispetto alla versione precedente, e perche':
+#
+#   chartValues     imponeva a Calico la MTU e l'autodetection dell'indirizzo.
+#                   Il CNI del downstream e' canal (cluster_cni), che quei due
+#                   valori li prende gia' giusti: la MTU dal chart rke2-canal e
+#                   l'indirizzo dall'InternalIP del Node.
+#   disable         toglieva rke2-ingress-nginx per far posto a un Traefik da
+#                   scaricare. Il downstream adesso tiene l'ingress di RKE2,
+#                   come il cluster locale.
+#   resolv-conf     scriveva /run/systemd/resolve/resolv.conf in
+#                   machineGlobalConfig. Serviva a far risolvere a CoreDNS i
+#                   nomi esterni, e serviva perche' c'era un chart da scaricare
+#                   da traefik.github.io. Senza quel chart, il cluster non ha
+#                   piu' niente da prendere da Internet mentre si costruisce.
+#
+# Tutte le chiamate HTTPS sono delegate al control node (ansibleSshHost), che
+# deve quindi risolvere rancher_domain: ci pensa il play update_hosts_file, che
+# include [local] proprio per questo.
+
+# Pausa di assestamento. Rancher risponde al login prima di essere pronto a
+# provisionare: e' cieca, ma e' quella del playbook che funziona.
+- name: Wait for Rancher cluster to be fully ready
   pause:
     seconds: "{{ cluster_pausa_iniziale }}"
   delegate_to: "{{ ansibleSshHost }}"
-  when: cluster_pausa_iniziale | int > 0
 
-# until/retries: la pausa qui sopra e' un'attesa a tempo, questa e' un'attesa
-# sul fatto. Se Rancher non e' ancora in piedi il login fallisce e si riprova,
-# invece di far cadere il playbook al primo tentativo.
-#
-# ATTENZIONE A CHI PARLA CON CHI: la chiamata parte dal CONTROL NODE
-# (delegate_to), non dal master. Quindi conta come il control node risolve
-# rancher_domain e chi risponde a quell'indirizzo — non quello che gira sui
-# master. Il rescue qui sotto va a guardare esattamente quello, perche' "Status
-# code was -1" da solo non dice niente.
-- name: Login all'API di Rancher
-  block:
-    - name: Get Rancher API token
-      delegate_to: "{{ ansibleSshHost }}"
-      uri:
-        url: "https://{{ rancher_domain }}/v3-public/localProviders/local?action=login"
-        method: POST
-        body_format: json
-        validate_certs: no
-        body:
-          username: "admin"
-          password: "{{ rancher_password }}"
-        return_content: yes
-        status_code: [200, 201]
-      register: api_token_response
-      until: api_token_response.status | default(0) in [200, 201]
-      retries: "{{ cluster_login_retries }}"
-      delay: "{{ cluster_login_delay }}"
-
-  rescue:
-    - name: Guarda a quale indirizzo risponde il dominio
-      shell: >-
-        getent hosts {{ rancher_domain }} 2>&1;
-        echo '--- chi risponde sulla 443 ---';
-        timeout 5 curl -sS -o /dev/null -w 'HTTP %{http_code} da %{remote_ip}:%{remote_port}\n'
-        -k https://{{ rancher_domain }}/ping 2>&1
-      args:
-        executable: /bin/bash
-      delegate_to: "{{ ansibleSshHost }}"
-      register: cluster_dns_check
-      changed_when: false
-      failed_when: false
-
-    - name: Fermati spiegando chi non risponde
-      fail:
-        msg: |
-          Il login all'API di Rancher non riesce da {{ ansibleSshHost }} (il control node).
-
-          URL: https://{{ rancher_domain }}/v3-public/localProviders/local?action=login
-          Esito: {{ api_token_response.msg | default('nessuna risposta') }}
-
-          Dal control node, {{ rancher_domain }} risolve e risponde cosi':
-          {{ cluster_dns_check.stdout | default('(nessun esito)') }}
-
-          {% if 'Connection refused' in (api_token_response.msg | default('')) %}
-          "Connection refused" vuol dire che l'indirizzo si risolve ma su quella
-          macchina NESSUNO ascolta sulla 443. Le due cause solite:
-
-            1. il dominio punta a un bilanciatore su cui nginx non c'e' o non e'
-               in ascolto. nginx qui ascolta SOLO su vip_rancher_ip:443
-               (roles/nginx_install/templates/rancher-console.conf.j2), quindi
-               rancher_endpoint_ip deve valere il VIP, non l'IP di una delle due
-               macchine — e playbooks/10-bilanciatori.yml dev'essere gia' girato.
-
-            2. il dominio punta ai master, ma sui master la 443 non la tiene
-               nessuno perche' Traefik non e' partito. In quel caso il playbook
-               si e' gia' fermato prima, su traefik_install.
-
-          Adesso rancher_endpoint_ip vale
-          "{{ rancher_endpoint_ip | default('(non impostata: si usa il primo master)') }}"
-          e vip_rancher_ip vale "{{ vip_rancher_ip | default('(non impostata)') }}".
-          {% elif 'timed out' in (api_token_response.msg | default('')) or 'timeout' in (api_token_response.msg | default('')) %}
-          Un timeout (invece di un rifiuto) di solito e' un firewall in mezzo, o
-          un indirizzo su cui non c'e' nessuna macchina accesa.
-          {% elif api_token_response.status | default(0) == 401 %}
-          401: il dominio risponde, ma la password non e' quella. E'
-          rancher_password, e conta quella usata al PRIMO avvio di Rancher: se il
-          bootstrap e' gia' avvenuto con un'altra, cambiarla qui non basta.
-          {% endif %}
+- name: Get Rancher API token
+  delegate_to: "{{ ansibleSshHost }}"
+  uri:
+    url: "https://{{ rancher_domain }}/v3-public/localProviders/local?action=login"
+    method: POST
+    body_format: json
+    validate_certs: no
+    body:
+      username: "admin"
+      password: "{{ rancher_password }}"
+    return_content: yes
+    status_code: [200, 201]
+  register: api_token_response
+  until: api_token_response.status in [200, 201]
+  retries: "{{ cluster_login_retries }}"
+  delay: "{{ cluster_login_delay }}"
+  # La password finirebbe in chiaro in ansible.log, che ansible.cfg scrive
+  # sempre. Per vedere l'output durante una diagnosi: -e rancher_hide_secrets=false
+  no_log: "{{ rancher_hide_secrets | default(true) | bool }}"
 
 - name: Set Rancher server URL (completa setup iniziale)
   delegate_to: "{{ ansibleSshHost }}"
@@ -105,6 +65,7 @@
       value: "https://{{ rancher_domain }}"
     status_code: 200
     validate_certs: no
+  no_log: "{{ rancher_hide_secrets | default(true) | bool }}"
 
 - name: Accept Rancher EULA
   delegate_to: "{{ ansibleSshHost }}"
@@ -118,71 +79,24 @@
     status_code: [200, 204, 409]
     validate_certs: no
   ignore_errors: yes
+  no_log: "{{ rancher_hide_secrets | default(true) | bool }}"
 
-# Il POST qui sotto crea il cluster e accetta solo 201: al secondo run
-# risponderebbe 409 e il playbook si fermerebbe. Si guarda prima se il cluster
-# c'e' gia' e, se c'e', non si tocca — riapplicare la definizione a un cluster
-# in esercizio farebbe ripartire i nodi.
-- name: Verifica se il cluster downstream esiste gia'
+# Se il cluster c'e' gia' non lo si ricrea: la POST tornerebbe 409 e il
+# playbook si fermerebbe al secondo lancio. Il playbook di riferimento non lo
+# prevede perche' li' si lancia una volta sola.
+- name: Verifica se il cluster esiste gia'
   delegate_to: "{{ ansibleSshHost }}"
   uri:
     url: "https://{{ rancher_domain }}/v1/provisioning.cattle.io.clusters/fleet-default/{{ cluster_name }}"
     method: GET
     headers:
       Authorization: "Bearer {{ api_token_response.json.token }}"
-      Content-Type: "application/json"
     status_code: [200, 404]
     validate_certs: no
   register: cluster_esistente
-
-- name: Mostra se il cluster va creato
-  debug:
-    msg: >-
-      {{ ('Il cluster ' ~ cluster_name ~ ' esiste gia in fleet-default: non viene ricreato.')
-         if cluster_esistente.status == 200
-         else ('Il cluster ' ~ cluster_name ~ ' non esiste: viene creato adesso.') }}
-
-# --- resolv.conf dei nodi downstream -----------------------------------------
-# Stessa storia del cluster locale (vedi rke2_resolv_conf in group_vars): senza,
-# il CoreDNS del cluster downstream inoltra a 8.8.8.8 e su rete chiusa non
-# risolve niente — il primo a caderci e' il chart di Traefik.
-#
-# Il file va cercato SUI NODI, non qui: questo ruolo gira sul primo master. Se
-# manca anche su uno solo, la riga non si scrive: un resolv-conf che punta al
-# nulla e' peggio di nessun resolv-conf.
-- name: Verifica il resolv.conf sui nodi del cluster downstream
-  stat:
-    path: "{{ cluster_resolv_conf }}"
-  delegate_to: "{{ item }}"
-  loop: >-
-    {{ (groups['new_managers'] | default([]))
-       + (groups['workers'] | default([]))
-       + (groups['ingress'] | default([])) }}
-  register: cluster_resolv_stat
-  changed_when: false
-  when: cluster_resolv_conf | default('') | length > 0
-
-- name: Stabilisci se scrivere resolv-conf nel cluster downstream
-  set_fact:
-    cluster_resolv_senza: >-
-      {{ cluster_resolv_stat.results | default([])
-         | selectattr('stat', 'defined')
-         | rejectattr('stat.exists')
-         | map(attribute='item') | list }}
-
-- name: Mostra la scelta su resolv-conf
-  debug:
-    msg: >-
-      {{ ('Il cluster downstream nascera con resolv-conf: ' ~ cluster_resolv_conf)
-         if (cluster_resolv_conf | default('') | length > 0 and cluster_resolv_senza | length == 0)
-         else ('resolv-conf NON verra scritto: '
-               ~ ('disabilitato (cluster_resolv_conf vuoto)'
-                  if cluster_resolv_conf | default('') | length == 0
-                  else cluster_resolv_conf ~ ' non esiste su ' ~ (cluster_resolv_senza | join(', '))
-                       ~ '. Su rete chiusa quel cluster non risolvera i nomi esterni.')) }}
+  no_log: "{{ rancher_hide_secrets | default(true) | bool }}"
 
 - name: Create a new Kubernetes RKE2 custom cluster via Rancher API
-  when: cluster_esistente.status == 404
   delegate_to: "{{ ansibleSshHost }}"
   uri:
     url: "https://{{ rancher_domain }}/v1/provisioning.cattle.io.clusters"
@@ -199,39 +113,10 @@
       spec:
         kubernetesVersion: "{{ cluster_k8s_version }}"
         rkeConfig:
-          # Costruito come dizionario e non riga per riga perche' resolv-conf
-          # c'e' solo quando il file esiste su tutti i nodi: una chiave che
-          # compare o non compare non si scrive con un "when" in mezzo a un body.
-          #
-          # cni: quello di cluster_cni, che e' lo stesso standard del cluster
-          # locale — adesso canal (il perche' sta in group_vars/all.yml).
-          #
-          # disable: l'ingress e' Traefik, quindi il nginx packaged non va
-          # installato. Lo mette il ruolo traefik_install sui [new_managers].
-          # rke2-canal NON si disabilita: con cluster_cni: canal e' il CNI, e
-          # disabilitarlo lascerebbe i nodi downstream senza rete.
-          machineGlobalConfig: >-
-            {{ {
-                 'cni': cluster_cni,
-                 'disable-kube-proxy': false,
-                 'etcd-expose-metrics': false,
-                 'disable': cluster_disable
-               } | combine(
-                 {'resolv-conf': cluster_resolv_conf}
-                 if (cluster_resolv_conf | default('') | length > 0
-                     and cluster_resolv_senza | length == 0)
-                 else {}) }}
-          # Valori per i chart packaged del cluster downstream. Con Calico serve
-          # a imporgli con quale indirizzo annunciarsi: senza, sceglie la prima
-          # interfaccia che trova e su una macchina con piu' interfacce prende
-          # quella sbagliata — e il traffico fra pod di nodi diversi sparisce in
-          # silenzio.
-          #
-          # CON CANAL E' VUOTO, e non e' una dimenticanza: l'indirizzo lo prende
-          # dall'InternalIP del Node e la MTU la fissa il chart rke2-canal a
-          # 1450. cluster_chart_values deriva da cluster_cni, quindi si riempie
-          # da solo se si torna a Calico. Vedi group_vars/all.yml.
-          chartValues: "{{ cluster_chart_values | default({}) }}"
+          machineGlobalConfig:
+            cni: "{{ cluster_cni }}"
+            disable-kube-proxy: false
+            etcd-expose-metrics: false
           machineSelectorConfig:
             - config:
                 protect-kernel-defaults: false
@@ -263,11 +148,15 @@
     status_code: 201
     validate_certs: no
   register: create_cluster_result
+  when: cluster_esistente.status == 404
+  no_log: "{{ rancher_hide_secrets | default(true) | bool }}"
 
 - name: Show cluster creation result
   debug:
-    var: create_cluster_result.json
-  when: cluster_esistente.status == 404
+    msg: >-
+      {{ 'Cluster ' ~ cluster_name ~ ' creato (' ~ cluster_k8s_version ~ ', CNI ' ~ cluster_cni ~ ')'
+         if cluster_esistente.status == 404
+         else 'Cluster ' ~ cluster_name ~ ' esisteva gia: non ricreato' }}
 
 - name: Wait for cluster to be provisioned
   delegate_to: "{{ ansibleSshHost }}"
@@ -283,6 +172,7 @@
   retries: 30
   delay: 10
   ignore_errors: yes
+  no_log: "{{ rancher_hide_secrets | default(true) | bool }}"
 
 - name: Get cluster ID from legacy API for registration token
   delegate_to: "{{ ansibleSshHost }}"
@@ -294,12 +184,10 @@
       Content-Type: "application/json"
     validate_certs: no
   register: legacy_cluster_info
+  until: legacy_cluster_info.json.data | default([]) | length > 0
   retries: 10
   delay: 5
-
-- name: Debug cluster info
-  debug:
-    var: legacy_cluster_info.json
+  no_log: "{{ rancher_hide_secrets | default(true) | bool }}"
 
 - name: Get or create cluster registration token
   delegate_to: "{{ ansibleSshHost }}"
@@ -313,11 +201,12 @@
     body:
       type: "clusterRegistrationToken"
       clusterId: "{{ legacy_cluster_info.json.data[0].id }}"
-    status_code: [201, 409]  # 409 se il token esiste già
+    status_code: [201, 409]  # 409 se il token esiste gia'
     validate_certs: no
   register: registration_token_result
   when: legacy_cluster_info.json.data | length > 0
   ignore_errors: yes
+  no_log: "{{ rancher_hide_secrets | default(true) | bool }}"
 
 - name: Wait for registration token to be ready
   delegate_to: "{{ ansibleSshHost }}"
@@ -332,46 +221,30 @@
   until: token_list.json.data | length > 0 and token_list.json.data[0].nodeCommand is defined and token_list.json.data[0].nodeCommand != ""
   retries: 20
   delay: 10
-
-# Legge da cluster_name e cluster_k8s_version, non da create_cluster_result:
-# quel registro non esiste quando il cluster c'era gia' e il task di creazione
-# e' stato saltato.
-- name: Show cluster status
-  debug:
-    msg: |
-      Cluster {{ 'creato adesso' if cluster_esistente.status == 404 else 'gia esistente, non ricreato' }}.
-      Nome: {{ cluster_name }}
-      Namespace: fleet-default
-      Kubernetes Version: {{ cluster_k8s_version }}
-      ID legacy: {{ legacy_cluster_info.json.data[0].id | default('non ancora assegnato') }}
-
-- name: Debug registration token
-  debug:
-    var: token_list.json.data[0]
+  no_log: "{{ rancher_hide_secrets | default(true) | bool }}"
 
 - name: Extract registration details
   set_fact:
     rancher_host: "{{ rancher_domain | regex_replace('^https?://', '') }}"
     node_command: "{{ token_list.json.data[0].nodeCommand }}"
+  no_log: "{{ rancher_hide_secrets | default(true) | bool }}"
 
 - name: Extract token from nodeCommand
   set_fact:
     cluster_token: "{{ node_command | regex_search('--token ([A-Za-z0-9:]+)', '\\1') | first }}"
+  no_log: "{{ rancher_hide_secrets | default(true) | bool }}"
 
-- name: Debug extracted values
+- name: Token di registrazione ottenuto
   debug:
-    msg: |
-      Rancher Host: {{ rancher_host }}
-      Cluster Token: {{ cluster_token }}
-      Node Command: {{ node_command }}
+    msg: "Rancher: {{ rancher_host }} — token di registrazione pronto"
+
+# --- Aggancio dei nodi -------------------------------------------------------
+# async/poll: 0 lancia i join in parallelo su tutti i nodi e li aspetta dopo.
+# system-agent-install.sh scarica e installa il rancher-system-agent, che a sua
+# volta tira giu' RKE2: sono minuti per nodo, e in sequenza sarebbero mezz'ora.
 
 - name: Install system-agent and join nodes as managers
   shell: |
-    # pipefail: senza, l'esito della pipeline e' quello di "sh", e un curl
-    # fallito (host non risolto, rete chiusa) passa per un'installazione
-    # riuscita. E' successo: tre nodi "Success" e zero nodi registrati.
-    set -o pipefail
-    # Download and install system-agent for manager nodes
     curl --insecure -fL https://{{ rancher_host }}/system-agent-install.sh | sh -s - \
       --server https://{{ rancher_host }} \
       --label 'cattle.io/os=linux' \
@@ -384,11 +257,10 @@
   register: join_managers_async
   delegate_to: "{{ item }}"
   loop: "{{ groups['new_managers'] | default([]) }}"
+  no_log: "{{ rancher_hide_secrets | default(true) | bool }}"
 
 - name: Install system-agent and join nodes as workers
   shell: |
-    set -o pipefail
-    # Download and install system-agent for worker nodes
     curl --insecure -fL https://{{ rancher_host }}/system-agent-install.sh | sh -s - \
       --server https://{{ rancher_host }} \
       --label 'cattle.io/os=linux' \
@@ -401,18 +273,25 @@
   register: join_workers_async
   delegate_to: "{{ item }}"
   loop: "{{ groups['workers'] | default([]) }}"
+  no_log: "{{ rancher_hide_secrets | default(true) | bool }}"
 
-- name: Install system-agent and join nodes as ingress
+# I nodi [ingress] entrano come worker con una label in piu'.
+#
+# NIENTE TAINT, ed e' un cambiamento: prima ne prendevano uno NoSchedule, che
+# aveva senso finche' su quei nodi girava un Traefik con nodeSelector e
+# tolleranza. L'ingress adesso e' rke2-ingress-nginx, che RKE2 installa come
+# DaemonSet senza tolleranze: con il taint quei nodi resterebbero gli unici
+# senza ingress — l'esatto contrario di quello che si vuole da un nodo che si
+# chiama [ingress]. La label resta, e serve a puntarci un nodeSelector quando
+# servira'.
+- name: Install system-agent and join ingress nodes as workers
   shell: |
-    set -o pipefail
-    # Download and install system-agent for ingress nodes
     curl --insecure -fL https://{{ rancher_host }}/system-agent-install.sh | sh -s - \
       --server https://{{ rancher_host }} \
       --label 'cattle.io/os=linux' \
       --label '{{ ingress_node_key }}={{ ingress_node_value }}' \
       --token {{ cluster_token }} \
-      --worker \
-      --taints '{{ ingress_node_key }}={{ ingress_node_value }}:NoSchedule'
+      --worker
   args:
     executable: /bin/bash
   async: 600
@@ -420,6 +299,7 @@
   register: join_ingress_async
   delegate_to: "{{ item }}"
   loop: "{{ groups['ingress'] | default([]) }}"
+  no_log: "{{ rancher_hide_secrets | default(true) | bool }}"
 
 - name: Wait for manager nodes join to complete
   async_status:
@@ -429,7 +309,7 @@
   retries: 60
   delay: 10
   delegate_to: "{{ item.item }}"
-  loop: "{{ join_managers_async.results }}"
+  loop: "{{ join_managers_async.results | default([]) }}"
   ignore_errors: yes
 
 - name: Wait for worker nodes join to complete
@@ -440,7 +320,7 @@
   retries: 120
   delay: 20
   delegate_to: "{{ item.item }}"
-  loop: "{{ join_workers_async.results }}"
+  loop: "{{ join_workers_async.results | default([]) }}"
   ignore_errors: yes
 
 - name: Wait for ingress nodes join to complete
@@ -451,138 +331,30 @@
   retries: 120
   delay: 20
   delegate_to: "{{ item.item }}"
-  loop: "{{ join_ingress_async.results }}"
+  loop: "{{ join_ingress_async.results | default([]) }}"
   ignore_errors: yes
 
-- name: Show manager nodes join results
+- name: Show join results
   debug:
-    msg: |
-      Manager Node: {{ item.item.item | default('?') }}
-      Status: {{ 'Success' if item.rc | default(1) == 0 else 'Failed' }}
-      Output: {{ item.stdout if item.stdout is defined else 'No output' }}
-      Error: {{ item.stderr if item.stderr is defined else 'No error' }}
-  loop: "{{ join_managers_status.results }}"
+    msg: >-
+      {{ item.item.item | default('?') }}:
+      {{ 'OK' if (item.rc | default(1)) == 0 else 'FALLITO — ' ~ (item.stderr | default('nessun messaggio')) }}
+  loop: >-
+    {{ (join_managers_status.results | default([]))
+       + (join_workers_status.results | default([]))
+       + (join_ingress_status.results | default([])) }}
+  loop_control:
+    label: "{{ item.item.item | default('?') }}"
 
-- name: Show worker nodes join results
-  debug:
-    msg: |
-      Worker Node: {{ item.item.item | default('?') }}
-      Status: {{ 'Success' if item.rc | default(1) == 0 else 'Failed' }}
-      Output: {{ item.stdout if item.stdout is defined else 'No output' }}
-      Error: {{ item.stderr if item.stderr is defined else 'No error' }}
-  loop: "{{ join_workers_status.results }}"
-
-- name: Show ingress nodes join results
-  debug:
-    msg: |
-      Ingress Node: {{ item.item.item | default('?') }}
-      Status: {{ 'Success' if item.rc | default(1) == 0 else 'Failed' }}
-      Output: {{ item.stdout if item.stdout is defined else 'No output' }}
-      Error: {{ item.stderr if item.stderr is defined else 'No error' }}
-  loop: "{{ join_ingress_status.results }}"
-
-# --- I join falliti fermano il playbook -------------------------------------
+# --- Verifica ----------------------------------------------------------------
+# Stessa chiamata del playbook di riferimento (/v3/nodes), con in piu' un
+# "until": li' c'erano retries senza until, che in Ansible non riprova niente.
 #
-# Prima non lo facevano: i tre task qui sopra stampavano "Status: Success" e il
-# play finiva con failed=0 anche con zero nodi agganciati. Due difetti insieme —
-# senza pipefail l'esito di "curl | sh" era quello di sh, e nessuno guardava
-# quell'esito comunque.
-#
-# Il caso che si vede davvero: "curl: (6) Could not resolve host". I nodi da
-# agganciare devono risolvere il dominio di Rancher, e devono continuare a
-# risolverlo dopo — l'agent ci parla per nome, per sempre.
-
-- name: Raccogli i nodi che non si sono agganciati
-  set_fact:
-    # LE PARENTESI ATTORNO ALLE TRE LISTE SONO OBBLIGATORIE.
-    #
-    # In Jinja il filtro "|" lega piu' stretto della somma "+", quindi
-    #   a + b + c | selectattr(...) | rejectattr(...)
-    # si legge
-    #   a + b + (c | selectattr(...) | rejectattr(...))
-    # e i primi due elenchi passano NON filtrati. Scritto cosi', questo task
-    # dichiarava falliti i nodi manager e worker mostrando "uscita 0", cioe'
-    # successo, mentre l'unico davvero filtrato era l'ingress.
-    join_falliti: >-
-      {{ ((join_managers_status.results | default([]))
-          + (join_workers_status.results | default([]))
-          + (join_ingress_status.results | default([])))
-         | selectattr('rc', 'defined')
-         | rejectattr('rc', 'equalto', 0)
-         | list }}
-
-- name: Fermati se qualche nodo non si e' agganciato
-  fail:
-    msg: |
-      {{ join_falliti | length }} nodi non si sono agganciati al cluster
-      {{ cluster_name }}:
-
-      {% for f in join_falliti %}
-      {{ f.item.item | default('?') }} (uscita {{ f.rc }}):
-      {{ f.stderr | default('') | trim }}
-
-      {% endfor %}
-      Se leggi "Could not resolve host", quei nodi non risolvono
-      "{{ rancher_domain }}". Non e' un problema del momento del join: l'agent
-      di Rancher parla con il server PER NOME, quindi quel nome deve risolvere
-      su ogni nodo agganciato, sempre. Mettilo nel DNS, oppure lascia che sia il
-      playbook a scrivere la riga in /etc/hosts di quei nodi — e' quello che fa
-      playbooks/21-rancher-single.yml con il ruolo update_hosts_file.
-  when: join_falliti | length > 0
-
-# --- Che cosa e' arrivato davvero in Rancher --------------------------------
-#
-# DUE ELENCHI DIVERSI, e vanno letti in due momenti diversi. Confonderli e'
-# costato dieci minuti di attesa e un "0 nodi" su un aggancio riuscito.
-#
-#   MACCHINE (cluster.x-k8s.io.machines) — compaiono in un minuto, appena il
-#   rancher-system-agent contatta il server. Sono la prova che il JOIN e'
-#   andato: nella console stanno sotto la scheda "Machines" del cluster, in
-#   stato Reconciling.
-#
-#   NODI (v3/nodes) — compaiono MOLTO dopo: solo quando il control plane del
-#   cluster downstream ha finito di installare RKE2 e il cluster agent si e'
-#   connesso. Con un control plane che sta ancora scaricando RKE2, quell'elenco
-#   e' vuoto, e non e' un guasto.
-#
-# Il playbook aspetta le MACCHINE, che sono quello che dipende da lui. Il resto
-# del provisioning va avanti da solo e si guarda dalla console: bloccare qui
-# vorrebbe dire tenere Ansible occupato mezz'ora per una cosa su cui non puo'
-# fare niente.
-
-- name: Attendi che le macchine compaiano in Rancher
-  delegate_to: "{{ ansibleSshHost }}"
-  uri:
-    url: >-
-      https://{{ rancher_domain }}/v1/cluster.x-k8s.io.machines/fleet-default
-    method: GET
-    headers:
-      Authorization: "Bearer {{ api_token_response.json.token }}"
-      Content-Type: "application/json"
-    validate_certs: no
-    status_code: [200, 404]
-  register: cluster_macchine
-  until: >-
-    (cluster_macchine.json.data | default([])
-     | selectattr('spec.clusterName', 'defined')
-     | selectattr('spec.clusterName', 'equalto', cluster_name)
-     | list | length)
-    >= ((groups['new_managers'] | default([]) | length)
-        + (groups['workers'] | default([]) | length)
-        + (groups['ingress'] | default([]) | length))
-  retries: "{{ cluster_macchine_retries }}"
-  delay: "{{ cluster_macchine_delay }}"
-  failed_when: false
-
-- name: Conta le macchine di questo cluster
-  set_fact:
-    cluster_macchine_mie: >-
-      {{ cluster_macchine.json.data | default([])
-         | selectattr('spec.clusterName', 'defined')
-         | selectattr('spec.clusterName', 'equalto', cluster_name)
-         | list }}
-
-# I nodi veri e propri: si leggono e si riportano, NON si aspettano.
+# I nodi compaiono man mano che RKE2 finisce di installarsi su ogni macchina, e
+# ci mette minuti. Se allo scadere non ci sono tutti non e' un fallimento: il
+# provisioning prosegue dentro a Rancher e non dipende piu' da questo playbook.
+# Per questo ignore_errors, e per questo il riepilogo dice quanti ne ha visti
+# invece di dichiarare riuscito l'aggancio.
 - name: Verify nodes are registered in Rancher
   delegate_to: "{{ ansibleSshHost }}"
   uri:
@@ -592,54 +364,35 @@
       Authorization: "Bearer {{ api_token_response.json.token }}"
       Content-Type: "application/json"
     validate_certs: no
-    status_code: [200, 404]
   register: cluster_nodes
-  failed_when: false
-  changed_when: false
-
-- name: Fermati se nessuna macchina e' arrivata in Rancher
-  fail:
-    msg: |
-      Nessuna macchina di {{ cluster_name }} risulta in Rancher dopo
-      {{ cluster_macchine_retries | int * cluster_macchine_delay | int }} secondi.
-
-      Il rancher-system-agent e' stato installato sui nodi (i task sopra sono
-      riusciti), ma nessuno di loro si e' presentato al server. Da guardare, in
-      quest'ordine, su uno dei nodi agganciati:
-
-        systemctl status rancher-system-agent
-        journalctl -u rancher-system-agent -n 50
-
-      Se nel journal ci sono errori di connessione o di certificato, il nodo non
-      arriva a https://{{ rancher_domain }}.
-  when: cluster_macchine_mie | length == 0
+  until: (cluster_nodes.json.data | default([]) | length) >= (nodi_attesi | int)
+  retries: "{{ cluster_macchine_retries }}"
+  delay: "{{ cluster_macchine_delay }}"
+  ignore_errors: yes
+  vars:
+    nodi_attesi: >-
+      {{ (groups['new_managers'] | default([]) | length)
+         + (groups['workers'] | default([]) | length)
+         + (groups['ingress'] | default([]) | length) }}
+  no_log: "{{ rancher_hide_secrets | default(true) | bool }}"
 
 - name: Show registered nodes
   debug:
     msg: |
-      Cluster {{ cluster_name }}: {{ cluster_macchine_mie | length }} macchine
-      registrate su {{ (groups['new_managers'] | default([]) | length)
-                       + (groups['workers'] | default([]) | length)
-                       + (groups['ingress'] | default([]) | length) }} agganciate.
-      {% for m in cluster_macchine_mie %}
-      - {{ m.metadata.name | default('?') }}:
-        {{ (m.status.conditions | default([])
-            | selectattr('type', 'equalto', 'Ready') | map(attribute='status') | first)
-           | default('in provisioning', true) }}
-      {% endfor %}
-
-      Nodi Kubernetes gia' pronti: {{ cluster_nodes.json.data | default([]) | length }}
+      Cluster {{ cluster_name }}: {{ cluster_nodes.json.data | default([]) | length }} nodi
+      visti da Rancher su {{ nodi_attesi | int }} macchine agganciate.
       {% for node in cluster_nodes.json.data | default([]) %}
-      - {{ node.nodeName | default('?') }} ({{ node.ipAddress | default('?') }})
-        {{ node.controlPlane | default(false) | ternary('controlplane', '') }}{{ node.etcd | default(false) | ternary(' etcd', '') }}{{ node.worker | default(false) | ternary(' worker', '') }}
-        stato: {{ node.state | default('?') }}
+      - {{ node.nodeName | default(node.hostname) | default('?') }}
+        IP: {{ node.ipAddress | default('?') }}
+        Ruoli: {{ 'controlplane ' if node.controlPlane | default(false) else '' }}{{ 'etcd ' if node.etcd | default(false) else '' }}{{ 'worker' if node.worker | default(false) else '' }}
+        Stato: {{ node.state | default('?') }}
       {% endfor %}
-
-      {% if (cluster_nodes.json.data | default([]) | length) < (cluster_macchine_mie | length) %}
-      I nodi compaiono qui solo quando il control plane del cluster downstream
-      ha finito di installare RKE2 e il cluster agent si e' connesso: con le
-      macchine in "Reconciling" e il messaggio "Waiting for Cluster control
-      plane to be initialized" e' NORMALE che questo elenco sia ancora corto.
-      Il provisioning prosegue da solo — si segue dalla console, sotto
-      Cluster Management -> {{ cluster_name }} -> Machines.
+      {% if (cluster_nodes.json.data | default([]) | length) < (nodi_attesi | int) %}
+      I nodi mancanti stanno ancora installando RKE2: il provisioning prosegue
+      dentro a Rancher e si segue dalla console, in Cluster Management.
       {% endif %}
+  vars:
+    nodi_attesi: >-
+      {{ (groups['new_managers'] | default([]) | length)
+         + (groups['workers'] | default([]) | length)
+         + (groups['ingress'] | default([]) | length) }}

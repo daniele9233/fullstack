@@ -1,17 +1,22 @@
 ---
-# Installa solo il binario RKE2. L'avvio del servizio sta in master1_config,
-# DOPO la scrittura di /etc/rancher/rke2/config.yaml: un server che parte senza
-# la direttiva "server:" bootstrappa un cluster proprio invece di unirsi al
-# primo master, e i tre nodi non formano mai un quorum etcd.
+# Installa il binario RKE2. L'avvio sta in master1_config, dopo la scrittura di
+# /etc/rancher/rke2/config.yaml: e' l'unica differenza rispetto al playbook di
+# riferimento, che avvia qui e scrive la configurazione dopo — cosi' il tls-san
+# con rancher_domain c'e' gia' quando RKE2 genera il certificato dell'API
+# server, invece di arrivare a certificato fatto.
+#
+# Lo script prende il suo default e basta: nessuna variabile d'ambiente che
+# scelga un CNI o un ingress. RKE2 posa canal e ingress-nginx, che e' la
+# configurazione con cui questo ambiente ha sempre girato.
 
 # INSTALL_RKE2_VERSION e INSTALL_RKE2_CHANNEL insieme: quando la prima e'
-# valorizzata vince lei, altrimenti decide il canale. Entrambe vuote lasciano
-# fare al default dello script.
+# valorizzata vince lei, altrimenti decide il canale. Vuota la prima e "stable"
+# la seconda — i default di group_vars/all.yml — sono esattamente quello che fa
+# "curl -sfL https://get.rke2.io | sh -" da solo.
 #
-# Il canale e' il modo che non puo' sbagliare: la versione la sceglie il server
-# di aggiornamento di Rancher. Una versione scritta a mano invece deve
-# corrispondere a un tag di rilascio che esiste davvero, e se non esiste lo
-# script muore con un "curl: (22) ... 404" che non dice quale sia il problema.
+# Una versione scritta a mano deve corrispondere a un tag che esiste davvero su
+# github.com/rancher/rke2/releases: se non esiste, lo script muore con un
+# "curl: (22) ... 404" che non dice quale sia il problema.
 - name: Install RKE2 on master
   shell: curl -sfL https://get.rke2.io | sh -
   environment:
@@ -31,23 +36,22 @@
       {{ rke2_install.stderr | default('') }}
 
       {% if '404' in (rke2_install.stderr | default('')) %}
-      IL 404 DICE CHE LA VERSIONE CHIESTA NON ESISTE.
-
-      rke2_version e' impostata a "{{ rke2_version | default('') }}", e
-      get.rke2.io la cerca fra i tag di rilascio su
-      github.com/rancher/rke2/releases: se quel tag non c'e', il download
-      fallisce con questo errore. Il numero non si indovina — va letto da
-      quell'elenco, nella forma esatta "v1.36.4+rke2r1".
-
-      La cura piu' semplice e' non fissarla affatto: svuota rke2_version in
-      group_vars/all.yml e lascia scegliere a rke2_channel
-      ("{{ rke2_channel | default('stable') }}"), che e' il canale e non un
-      numero — la versione la decide il server di aggiornamento di Rancher.
+      IL 404 DICE CHE LA VERSIONE CHIESTA NON ESISTE. rke2_version vale
+      "{{ rke2_version | default('') }}" e get.rke2.io la cerca fra i tag di
+      rilascio: il numero non si indovina, va letto da
+      github.com/rancher/rke2/releases nella forma esatta "v1.33.11+rke2r1".
+      La cura piu' semplice e' svuotarla e lasciar scegliere a rke2_channel.
       {% else %}
       Se qui sopra leggi un errore di rete, il nodo non raggiunge get.rke2.io
       o github.com: e' la rete dell'HOST, non quella dei pod.
       {% endif %}
   when: rke2_install.rc != 0
+
+- name: Enable RKE2 server service
+  systemd:
+    name: rke2-server
+    enabled: yes
+    daemon_reload: yes
 
 - name: Versione di RKE2 installata
   debug:

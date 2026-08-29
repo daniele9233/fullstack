@@ -1,7 +1,12 @@
 ---
-# Scrive la configurazione RKE2 e avvia il server. Il play che invoca questo
-# ruolo gira con serial: 1, quindi i master vengono portati su uno alla volta
-# nell'ordine dell'inventario: prima il bootstrap, poi i due che si uniscono.
+# Scrive /etc/rancher/rke2/config.yaml e avvia rke2-server.
+#
+# Il file contiene SOLO tls-san (vedi il template): nessuna scelta di CNI,
+# nessun componente disabilitato, nessun ingress-controller. E' la
+# configurazione del playbook che funziona, e la ragione per cui questo ruolo
+# adesso e' lungo cinquanta righe invece di quattrocento — i controlli su CNI
+# gia' presente, nome del nodo gia' registrato e porta del supervisor
+# occupata servivano tutti a percorsi che non esistono piu'.
 
 - name: Crea la directory di configurazione RKE2
   file:
@@ -17,189 +22,6 @@
   register: rke2_service_state
   failed_when: false
 
-# --- Identita' del nodo -------------------------------------------------------
-# Un nodo gia' registrato ha il suo nome scolpito in /var/lib/rancher/rke2: RKE2
-# lo fissa alla prima registrazione e non lo cambia piu'. Se quel nome non e'
-# quello che stiamo per scrivere in config.yaml, riavviare il servizio non
-# rinomina il nodo — ne registra uno NUOVO, lasciando il vecchio come fantasma
-# nel cluster, con l'aggravante che il certificato del kubelet e' intestato al
-# nome vecchio.
-#
-# Meglio fermarsi qui e dirlo, che proseguire e scoprirlo mezz'ora dopo davanti
-# a un "kubectl get nodes" che non somiglia all'inventario.
-- name: Cerca il certificato del kubelet, che porta il nome del nodo
-  stat:
-    path: /var/lib/rancher/rke2/agent/client-kubelet.crt
-  register: rke2_cert_kubelet
-
-- name: Rileva il nome con cui il nodo e' gia' registrato
-  shell: >-
-    set -o pipefail;
-    openssl x509 -noout -subject
-    -in /var/lib/rancher/rke2/agent/client-kubelet.crt
-    | sed -n 's#.*CN *= *system:node:##p' | tr -d ' \n'
-  args:
-    executable: /bin/bash
-  register: rke2_nome_effettivo
-  failed_when: false
-  changed_when: false
-  when: rke2_cert_kubelet.stat.exists
-
-- name: Fermati se il nodo e' gia' nel cluster con un altro nome
-  fail:
-    msg: |
-      {{ inventory_hostname }} ({{ rke2_node_ip }}) e' gia' registrato nel
-      cluster come "{{ rke2_nome_effettivo.stdout }}", non come
-      "{{ rke2_node_name }}".
-
-      RKE2 fissa il nome del nodo alla prima registrazione e non lo cambia piu':
-      cambiare l'hostname adesso non rinomina il nodo, ne crea un secondo e
-      lascia il primo come fantasma. Il certificato del kubelet e' per di piu'
-      intestato a "system:node:{{ rke2_nome_effettivo.stdout }}".
-
-      La macchina va azzerata e rifatta entrare, non rinominata:
-
-        ansible-playbook playbooks/20-rancher.yml -e clean_nodes_before_join=true
-
-      Se il cluster contiene gia' nodi buoni che non vuoi perdere, azzera solo
-      questo: --limit {{ inventory_hostname }} -e clean_nodes_before_join=true
-      e poi rilancia il playbook intero.
-  when:
-    - rke2_nome_effettivo.stdout is defined
-    - rke2_nome_effettivo.stdout | length > 0
-    - rke2_nome_effettivo.stdout != rke2_node_name
-
-# --- Il CNI non si cambia a caldo --------------------------------------------
-# Passando da Calico a canal (o viceversa) su una macchina gia' usata, in
-# /etc/cni/net.d restano DUE conflist. Vince quella che viene prima in ordine
-# alfabetico, che non e' detto sia del CNI installato, e i pod restano in
-# ContainerCreating con 'failed to find plugin "<cni>-cni" in path [/opt/cni/bin]'
-# — un errore che parla di un plugin e non del fatto che il nodo ha due CNI.
-#
-# RKE2 non fa nessuna migrazione: la rete di un cluster si sceglie prima del
-# primo avvio. Meglio fermarsi qui, dove la cura e' una riga, che scoprirlo con
-# il cluster su e i pod fermi.
-# follow: yes perche' su un nodo RKE2 /etc/cni/net.d e' un link a
-# /var/lib/rancher/rke2/agent/etc/cni/net.d, e stat di suo NON segue i link:
-# senza, la directory risulterebbe "non una directory" su ogni nodo gia'
-# installato e il controllo non guarderebbe mai niente.
-#
-# Si guarda prima con stat perche' "find" su un percorso che non esiste — il
-# caso normale di un nodo nuovo — stampa un WARNING a ogni esecuzione. Un
-# avviso che compare sempre e non significa niente e' il modo migliore per far
-# ignorare quelli che invece significano qualcosa.
-- name: Verifica se sul nodo c'e' una directory di configurazione CNI
-  stat:
-    path: /etc/cni/net.d
-    follow: yes
-  register: rke2_cni_dir
-
-- name: Cerca la configurazione CNI gia' presente sul nodo
-  find:
-    paths: /etc/cni/net.d
-    patterns: "*.conf,*.conflist"
-  register: rke2_cni_presente
-  failed_when: false
-  changed_when: false
-  when: rke2_cni_dir.stat.isdir | default(false)
-
-- name: Stabilisci quale CNI c'e' sul nodo e quale ne stiamo chiedendo
-  set_fact:
-    # Il nome del CNI sta nel NOME del file: 10-canal.conflist, 10-calico.conflist,
-    # 05-cilium.conflist. Il contenuto no — quello di canal nomina calico, perche'
-    # canal e' flannel per la rete piu' calico per le policy.
-    rke2_cni_sul_nodo: >-
-      {{ (rke2_cni_presente.files | default([]) | map(attribute='path') | map('basename') | join(' '))
-         | regex_search('canal|calico|cilium|flannel') | default('', true) }}
-    # Lista vuota = default RKE2, che e' canal.
-    rke2_cni_richiesto: "{{ rke2_cni | default([]) | first | default('canal', true) }}"
-
-- name: Fermati se il nodo ha gia' un altro CNI
-  fail:
-    msg: |
-      Su {{ inventory_hostname }} in /etc/cni/net.d c'e' gia' la configurazione di
-      "{{ rke2_cni_sul_nodo }}", ma questo playbook sta per configurare
-      "{{ rke2_cni_richiesto }}".
-
-      File trovati: {{ rke2_cni_presente.files | default([]) | map(attribute='path') | map('basename') | join(', ') }}
-
-      IL CNI NON SI CAMBIA A CALDO. RKE2 non rimuove la configurazione del CNI
-      precedente: le due conflist convivono, vince quella che viene prima in
-      ordine alfabetico e i pod restano in ContainerCreating con
-      'failed to find plugin "<cni>-cni" in path [/opt/cni/bin]'.
-
-      La macchina va azzerata e rifatta entrare:
-
-        ansible-playbook playbooks/20-rancher.yml -e clean_nodes_before_join=true
-
-      Per azzerare un nodo solo, aggiungi --limit {{ inventory_hostname }} e poi
-      rilancia il playbook intero. La pulizia rimuove /etc/cni/net.d, /var/lib/cni
-      e /opt/cni insieme al resto dello stato di RKE2.
-
-      Se sai quello che fai e vuoi proseguire lo stesso:
-      -e rke2_ferma_se_cni_diverso=false
-  when:
-    - rke2_ferma_se_cni_diverso | bool
-    - rke2_cni_sul_nodo | length > 0
-    - rke2_cni_sul_nodo != rke2_cni_richiesto
-
-- name: Segnala il CNI diverso e prosegui, come richiesto
-  debug:
-    msg: >-
-      {{ inventory_hostname }}: sul nodo c'e' la configurazione di
-      "{{ rke2_cni_sul_nodo }}" e si sta configurando "{{ rke2_cni_richiesto }}",
-      ma rke2_ferma_se_cni_diverso e' false: si prosegue. I pod possono restare
-      in ContainerCreating.
-  when:
-    - not (rke2_ferma_se_cni_diverso | bool)
-    - rke2_cni_sul_nodo | length > 0
-    - rke2_cni_sul_nodo != rke2_cni_richiesto
-
-# --- Token del cluster -------------------------------------------------------
-# Con rke2_token valorizzato si usa quello su tutti i master. Con rke2_token
-# vuoto (default) il primo master bootstrappa senza token, RKE2 gliene genera
-# uno, e i master successivi lo leggono direttamente da lui.
-#
-# La lettura e' delegata al primo master invece di appoggiarsi a un fact
-# propagato tra i batch di serial: 1. Cosi' funziona anche rilanciando il
-# playbook con --limit su un solo nodo aggiuntivo.
-
-- name: Usa il token pre-condiviso se configurato
-  set_fact:
-    rke2_effective_token: "{{ rke2_token }}"
-  when: rke2_token | length > 0
-
-- name: Leggi il node-token generato dal primo master
-  slurp:
-    src: /var/lib/rancher/rke2/server/node-token
-  delegate_to: "{{ groups['masters'][0] }}"
-  register: rke2_node_token_raw
-  when:
-    - rke2_token | length == 0
-    - inventory_hostname != groups['masters'][0]
-
-- name: Usa il node-token letto dal primo master
-  set_fact:
-    # trim obbligatorio: il file termina con newline, che finirebbe nel token.
-    rke2_effective_token: "{{ rke2_node_token_raw.content | b64decode | trim }}"
-  when:
-    - rke2_token | length == 0
-    - inventory_hostname != groups['masters'][0]
-
-# --- resolv.conf --------------------------------------------------------------
-# Il file va cercato SUL NODO: su una macchina senza systemd-resolved non esiste,
-# e scrivere in config.yaml un resolv-conf che punta al nulla e' peggio che non
-# scriverlo. Vedi rke2_resolv_conf in group_vars/all.yml per il perche' serve.
-- name: Verifica se sul nodo c'e' il resolv.conf vero
-  stat:
-    path: "{{ rke2_resolv_conf }}"
-  register: rke2_resolv_stat
-  when: rke2_resolv_conf | default('') | length > 0
-
-- name: Stabilisci se scrivere resolv-conf in config.yaml
-  set_fact:
-    rke2_resolv_conf_presente: "{{ rke2_resolv_stat.stat.exists | default(false) }}"
-
 - name: Create /etc/rancher/rke2/config.yaml
   template:
     src: config_master1.yaml.j2
@@ -208,40 +30,6 @@
     group: root
     mode: '0600'
   register: rke2_config
-
-# La porta del supervisor deve essere libera prima di avviare. Se e' occupata
-# mentre rke2-server NON e' attivo, si tratta di un processo orfano di
-# un'installazione precedente: meglio dirlo subito che lasciare systemd in
-# restart loop con "bind: address already in use".
-- name: Verifica che la porta del supervisor sia libera
-  shell: >-
-    ss -lntp | awk '$4 ~ /:{{ rke2_supervisor_port }}$/' || true
-  args:
-    executable: /bin/bash
-  register: rke2_port_check
-  changed_when: false
-  when: rke2_service_state.status.ActiveState | default('inactive') != 'active'
-
-- name: Interrompi se la porta del supervisor e' gia' occupata
-  fail:
-    msg: |
-      Sul nodo {{ inventory_hostname }} la porta {{ rke2_supervisor_port }} e'
-      gia' occupata mentre rke2-server non e' attivo:
-
-      {{ rke2_port_check.stdout }}
-
-      Il processo indicato sopra dice cosa fare:
-
-        - rke2 o containerd: residuo di un'installazione precedente. Rilancia
-          con -e clean_nodes_before_join=true, oppure esegui sul nodo
-          /usr/local/bin/rke2-killall.sh
-
-        - nginx, haproxy o simili: e' un bilanciatore configurato in passato su
-          questa macchina, e va fermato o riconfigurato a mano. Il playbook non
-          lo tocca di proposito.
-  when:
-    - rke2_service_state.status.ActiveState | default('inactive') != 'active'
-    - rke2_port_check.stdout | default('') | length > 0
 
 # block/rescue: se rke2-server non parte, systemd restituisce solo "exited with
 # error code". Il motivo sta nel journal, che qui viene raccolto e stampato
@@ -268,8 +56,8 @@
           Ultime righe del journal:
           {{ rke2_journal.stdout }}
 
-# Il task sopra non riavvia un servizio gia' in esecuzione, quindi una modifica
-# alla configurazione su un nodo gia' attivo resterebbe senza effetto.
+# Il task sopra non riavvia un servizio gia' in esecuzione: senza questo, una
+# modifica al tls-san su un nodo gia' attivo resterebbe senza effetto.
 - name: Riavvia rke2-server se la configurazione e' cambiata
   systemd:
     name: rke2-server
@@ -278,15 +66,11 @@
     - rke2_config is changed
     - rke2_service_state.status.ActiveState | default('inactive') == 'active'
 
-# --- Barriera prima di passare al master successivo --------------------------
-# RKE2 aggiunge ogni nuovo server come learner etcd e lo promuove a membro
-# votante solo quando ha recuperato il log. Aggiungere il server successivo
-# durante quella finestra fa fallire l'avvio di rke2-server.
-#
-# /readyz da solo NON basta come barriera: risponde ok appena l'API server
-# locale e' su, quando il nodo non e' ancora registrato ne' promosso.
-
-- name: Attendi che l'API server del nodo risponda
+# Al primo avvio RKE2 scarica ed estrae le immagini dei componenti di sistema:
+# qualche minuto e' normale. I ruoli dopo questo copiano
+# /var/lib/rancher/rke2/bin/kubectl e /etc/rancher/rke2/rke2.yaml, che prima di
+# qui non esistono.
+- name: Attendi che l'API server risponda
   command: >-
     /var/lib/rancher/rke2/bin/kubectl
     --kubeconfig /etc/rancher/rke2/rke2.yaml
@@ -298,16 +82,8 @@
   changed_when: false
   failed_when: false
 
-# Se l'API server non e' mai arrivato, la causa sta nel journal di rke2-server e
-# non in questo task. Leggerlo qui evita di lasciare l'operatore davanti a
-# "60 retries left" ripetuto sessanta volte e poi a un fallimento muto.
-#
-# Il caso che questa guardia esiste per prendere: ingress-controller in
-# config.yaml su una versione di RKE2 che non conosce quell'opzione. Il server
-# rifiuta la configurazione e non parte, e senza questo messaggio sembrerebbe un
-# problema di avvio generico.
 - name: Leggi perche' rke2-server non e' partito
-  shell: journalctl -u rke2-server -n 30 --no-pager -o cat 2>&1 | tail -30
+  shell: journalctl -u rke2-server -n 40 --no-pager -o cat 2>&1 | tail -40
   args:
     executable: /bin/bash
   register: rke2_journal
@@ -323,53 +99,21 @@
 
       Ultime righe del journal di rke2-server:
       {{ rke2_journal.stdout | default('(journal non leggibile)') }}
-
-      {% if 'ingress-controller' in (rke2_journal.stdout | default('')) or 'not defined' in (rke2_journal.stdout | default('')) or 'unknown' in (rke2_journal.stdout | default('') | lower) %}
-      IL JOURNAL PARLA DI UN'OPZIONE NON RICONOSCIUTA.
-
-      config.yaml contiene "ingress-controller: {{ rke2_ingress_controller }}",
-      che esiste solo da RKE2 1.36 in poi. Se il canale
-      "{{ rke2_channel | default('stable') }}" ha portato una versione
-      precedente, quell'opzione non e' conosciuta e il server rifiuta di
-      partire.
-
-      Due modi per uscirne, in group_vars/all.yml:
-        - svuota rke2_ingress_controller (torna Traefik installato dal chart,
-          funziona su ogni versione), oppure
-        - porta la versione a una 1.36 verificata su
-          github.com/rancher/rke2/releases, valorizzando rke2_version.
-
-      Dopo la modifica i nodi vanno rifatti:
-        ansible-playbook playbooks/20-rancher.yml -e clean_nodes_before_join=true
-      {% endif %}
   when: rke2_readyz.rc != 0
 
-# Conta i nodi etcd in stato Ready e attende che siano tanti quanti i master
-# avviati fino a questo punto: e' la prova che il nodo corrente e' davvero
-# entrato nel cluster, non solo che il suo processo e' partito.
-- name: Attendi che tutti i master avviati finora siano Ready
+- name: Attendi che il nodo sia Ready
   shell: >-
     set -o pipefail;
     /var/lib/rancher/rke2/bin/kubectl
     --kubeconfig /etc/rancher/rke2/rke2.yaml
-    get nodes -l node-role.kubernetes.io/etcd=true --no-headers
-    | awk '$2 == "Ready"' | wc -l
+    get nodes --no-headers | awk '$2 == "Ready"' | wc -l
   args:
     executable: /bin/bash
-  register: rke2_ready_masters
-  until: rke2_ready_masters.stdout | int >= (groups['masters'].index(inventory_hostname) + 1)
+  register: rke2_ready_nodes
+  until: rke2_ready_nodes.stdout | int >= 1
   retries: "{{ rke2_ready_retries }}"
   delay: "{{ rke2_ready_delay }}"
   changed_when: false
-
-# Margine per la promozione da learner a membro votante, che avviene poco dopo
-# che il nodo risulta Ready. Solo tra un master e il successivo.
-- name: Lascia stabilizzare etcd prima del master successivo
-  pause:
-    seconds: "{{ rke2_settle_seconds }}"
-  when:
-    - groups['masters'] | length > 1
-    - inventory_hostname != groups['masters'][-1]
 
 - name: Mostra lo stato del cluster locale
   command: >-
@@ -382,6 +126,5 @@
 - name: Riepilogo nodo
   debug:
     msg: |
-      {{ inventory_hostname }} ({{ 'bootstrap' if inventory_hostname == groups['masters'][0] else 'join su ' + hostvars[groups['masters'][0]].ansible_host }})
-      CNI: {{ rke2_cni | join(', ') | default('canal (default RKE2)', true) }} — disabilitati: {{ rke2_disable | join(', ') | default('nessuno', true) }}
+      {{ inventory_hostname }} — CNI e ingress: default RKE2 (canal, ingress-nginx)
       {{ rke2_nodes.stdout }}
