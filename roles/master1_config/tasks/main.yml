@@ -63,9 +63,31 @@
 #
 # Il costo di questo controllo e' una chiamata a --help. Il costo di non farlo
 # e' un cluster che non si alza.
+#
+# "NON HO POTUTO CHIEDERE" NON E' "IL FLAG NON C'E'", e la prima versione di
+# questo controllo confondeva le due cose: eseguiva "rke2 server --help" con
+# failed_when: false e, se l'uscita era vuota — binario non sul PATH del task,
+# comando non riuscito, qualunque cosa — concludeva che l'opzione non esistesse
+# e fermava il playbook su un RKE2 che invece la conosceva benissimo.
+#
+# Adesso il binario si cerca per percorso assoluto, stderr si unisce a stdout
+# (rke2 stampa li' il banner di versione), e si blocca SOLO quando la domanda ha
+# davvero avuto risposta. Se la risposta non arriva si prosegue avvisando: in
+# quel caso un'opzione sconosciuta fa fallire l'avvio di rke2-server in modo
+# rumoroso, con il journal che lo dice — e' un rischio, ma minore di fermare
+# un'installazione che andrebbe bene.
 
-- name: Chiedi a RKE2 se conosce l'opzione ingress-controller
-  command: rke2 server --help
+- name: Chiedi a RKE2 quali opzioni conosce
+  shell: |
+    for b in /usr/local/bin/rke2 /usr/bin/rke2 "$(command -v rke2 2>/dev/null)"; do
+      if [ -n "$b" ] && [ -x "$b" ]; then
+        exec "$b" server --help 2>&1
+      fi
+    done
+    echo "rke2: binario non trovato"
+    exit 127
+  args:
+    executable: /bin/bash
   register: rke2_help
   changed_when: false
   failed_when: false
@@ -91,7 +113,23 @@
       versione che l'opzione ce l'ha.
   when:
     - rke2_ingress_controller | default([]) | length > 0
+    - rke2_help.rc | default(1) == 0
     - "'--ingress-controller' not in (rke2_help.stdout | default(''))"
+
+- name: Avvisa che non e' stato possibile interrogare il binario rke2
+  debug:
+    msg: |
+      Su {{ inventory_hostname }} non e' riuscito "rke2 server --help"
+      (codice {{ rke2_help.rc | default('?') }}), quindi non si sa se questo RKE2
+      conosca l'opzione "ingress-controller". Si prosegue: se non la conosce,
+      rke2-server non partira' e il journal lo dira' chiaramente.
+
+      Uscita del comando:
+      {{ (rke2_help.stdout | default('')) [:400] }}
+      {{ (rke2_help.stderr | default('')) [:400] }}
+  when:
+    - rke2_ingress_controller | default([]) | length > 0
+    - rke2_help.rc | default(1) != 0
 
 # I valori li dichiara RKE2 nel proprio --help. Uno scritto male non fa partire
 # il server, esattamente come l'opzione sconosciuta.
