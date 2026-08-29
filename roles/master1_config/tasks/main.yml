@@ -116,6 +116,88 @@
     mode: '0600'
   register: rke2_config
 
+# --- SI RILEGGE QUELLO CHE SI E' APPENA SCRITTO ------------------------------
+#
+# Non e' paranoia, e' la lezione di un guasto vero. Il template produceva
+#
+#   tls-san:
+#     - dominio  - 192.168.1.64  - 192.168.1.65  - 192.168.1.66
+#
+# perche' i tag Jinja "{%- for %}" con trim_blocks (che Ansible attiva di suo)
+# toglievano anche l'a-capo PRIMA del tag. Quella riga e' YAML VALIDO: un
+# elemento solo, una stringa senza senso. rke2-server partiva, il cluster
+# funzionava, e il dominio semplicemente NON entrava nel certificato dell'API
+# server — senza un errore da nessuna parte, per giorni.
+#
+# Lo stesso bug su "ingress-controller" produceva "ingress-controller:  - traefik",
+# che invece YAML valido non e', e li' rke2-server si e' rifiutato di partire.
+# Un difetto silenzioso e uno rumoroso, con la stessa unica causa.
+#
+# Quindi: si rilegge il file dal nodo, lo si interpreta come YAML, e si
+# controlla che dica quello che doveva dire. Costa due task e chiude tutta la
+# categoria.
+
+- name: Rileggi config.yaml dal nodo
+  slurp:
+    src: /etc/rancher/rke2/config.yaml
+  register: rke2_config_scritto
+
+- name: Interpreta config.yaml e verifica che dica quello che deve dire
+  block:
+    - name: Interpreta config.yaml come YAML
+      set_fact:
+        rke2_config_letto: "{{ rke2_config_scritto.content | b64decode | from_yaml }}"
+
+    - name: Controlla le chiavi di config.yaml
+      assert:
+        that:
+          # tls-san dev'essere una LISTA con il dominio piu' un IP per master.
+          # E' il controllo che avrebbe preso il guasto silenzioso.
+          - rke2_config_letto['tls-san'] is sequence
+          - rke2_config_letto['tls-san'] is not string
+          - rke2_config_letto['tls-san'] | length == (1 + (groups['masters'] | length)
+                                                        + (rke2_extra_tls_san | default([]) | length))
+          - rancher_domain in rke2_config_letto['tls-san']
+          - rke2_config_letto['node-ip'] | string == rke2_node_ip | string
+          # L'ingress solo se e' stato chiesto, e identico a come e' stato chiesto.
+          - (rke2_ingress_controller | default([]) | length == 0)
+            or (rke2_config_letto['ingress-controller'] | default([]) == rke2_ingress_controller)
+          # Con piu' di un master, chi non bootstrappa deve avere "server:".
+          - (groups['masters'] | length == 1)
+            or (inventory_hostname == groups['masters'][0])
+            or (rke2_config_letto['server'] | default('') | length > 0)
+        fail_msg: |
+          /etc/rancher/rke2/config.yaml su {{ inventory_hostname }} non contiene
+          quello che doveva contenere. Interpretato:
+
+          {{ rke2_config_letto | to_nice_yaml }}
+
+          rke2-server NON e' stato avviato: un config.yaml sbagliato-ma-valido
+          fa partire un cluster storto invece di fallire, ed e' peggio.
+        quiet: yes
+
+  rescue:
+    - name: Interrompi mostrando il file che non si lascia leggere
+      fail:
+        msg: |
+          /etc/rancher/rke2/config.yaml su {{ inventory_hostname }} non e' YAML
+          valido, oppure non dice quello che doveva dire.
+
+          Contenuto scritto dal playbook:
+          ---
+          {{ rke2_config_scritto.content | b64decode }}
+          ---
+
+          rke2-server NON e' stato avviato: sarebbe morto con "yaml: line N: ..."
+          e il playbook sarebbe finito a leggere il journal per scoprire una cosa
+          che si vede da qui.
+
+          Se le liste appaiono collassate su una riga sola, il difetto e' nei tag
+          Jinja del template (vedi il commento in testa a
+          templates/config_master1.yaml.j2): Ansible usa trim_blocks, quindi
+          "{%- for %}" toglie un a-capo di troppo.
+
+
 # block/rescue: se rke2-server non parte, systemd restituisce solo "exited with
 # error code". Il motivo sta nel journal, che qui viene raccolto e stampato
 # invece di lasciare il fallimento cieco.
@@ -128,8 +210,27 @@
         state: started
         daemon_reload: yes
   rescue:
+    # LE RIGHE DI ERRORE PRIMA, E POCHE. Prima si stampavano 80 righe di journal
+    # dalla piu' vecchia alla piu' recente: la causa e' l'ULTIMA, quindi finiva
+    # in fondo a un muro di INFO sui manifest applicati — e in un terminale o in
+    # un incollaggio quella coda si perde, lasciando in mano solo il rumore.
+    #
+    # Adesso si filtra prima per le righe che dicono qualcosa (fatal, error,
+    # flag sconosciuti, YAML che non si lascia leggere) e si mostrano quelle in
+    # cima. Le ultime 30 righe restano sotto, come contesto.
     - name: Raccogli gli ultimi log di rke2-server
-      command: journalctl -u rke2-server --no-pager -n 80
+      shell: |
+        set -o pipefail
+        echo "### RIGHE DI ERRORE ###"
+        journalctl -u rke2-server --no-pager -n 300 -o cat 2>&1 \
+          | grep -iE 'level=(fatal|error)|flag provided but not defined|not defined|cannot unmarshal|yaml:|invalid|panic:|Failed to' \
+          | tail -15 \
+          || echo "(nessuna riga di errore riconosciuta: guarda il contesto qui sotto)"
+        echo
+        echo "### ULTIME 30 RIGHE ###"
+        journalctl -u rke2-server --no-pager -n 30 -o cat 2>&1
+      args:
+        executable: /bin/bash
       register: rke2_journal
       failed_when: false
       changed_when: false
@@ -138,8 +239,12 @@
       fail:
         msg: |
           Avvio di rke2-server fallito su {{ inventory_hostname }}.
-          Ultime righe del journal:
+
           {{ rke2_journal.stdout }}
+
+          Il file che il playbook ha appena scritto e'
+          /etc/rancher/rke2/config.yaml: se l'errore qui sopra nomina
+          un'opzione, e' li' dentro.
 
 # Il task sopra non riavvia un servizio gia' in esecuzione: senza questo, una
 # modifica al tls-san su un nodo gia' attivo resterebbe senza effetto.
