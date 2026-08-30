@@ -100,3 +100,21 @@ ks_agent_deployments:
   - namespace: "cattle-fleet-system"
     nome: "fleet-agent"
     attendi: false
+
+
+# ===========================================================================
+# 3. PORTA VXLAN DI CALICO (tasks/calico.yml)
+# ===========================================================================
+# Il ruolo tocca la FelixConfiguration del cluster downstream SOLO se
+# cluster_calico_vxlan_port (group_vars/all.yml) e' valorizzata. Con i default
+# e' vuota e qui non succede niente.
+
+# Quanto aspettare che l'operator Tigera crei la FelixConfiguration "default".
+# Il ruolo gira subito dopo il join, quando Calico si sta ancora installando.
+ks_calico_retries: 60
+ks_calico_delay: 5
+
+# Il default di Calico. Serve solo a dire nei messaggi quale porta era in uso
+# quando la FelixConfiguration non ha il campo valorizzato — che e' il caso
+# normale, non un'anomalia.
+ks_calico_porta_default: 4789

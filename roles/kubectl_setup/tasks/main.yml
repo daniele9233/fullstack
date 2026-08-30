@@ -53,3 +53,10 @@
   loop_control:
     loop_var: agente
     label: "{{ agente.namespace }}/{{ agente.nome }}"
+
+# Non fa niente con i default: cluster_calico_vxlan_port e' vuota e la porta la
+# decide Calico. Sta qui perche' e' l'unico punto del playbook in cui si ha in
+# mano un kubectl del cluster DOWNSTREAM — FelixConfiguration e' una risorsa di
+# quel cluster, non del cluster Rancher. Il perche' per esteso e' nel file.
+- name: Porta VXLAN di Calico
+  import_tasks: calico.yml
