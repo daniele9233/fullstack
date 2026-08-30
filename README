@@ -238,12 +238,109 @@ Il consiglio, con tre master: provalo prima a mano su UNO, riavvia solo quello e
 guarda che cosa succede. Se il server non riparte, hai ancora due nodi su tre in
 piedi e il cluster regge.
 
-CONFIGURAZIONE DI RKE2: /etc/rancher/rke2/config.yaml contiene tls-san, node-ip
-e — solo con piu' di un server — token e server. NIENTE scelta del CNI, niente
-ingress-controller, niente disable, niente resolv-conf. RKE2 posa i suoi default
-— canal per la rete dei pod, rke2-ingress-nginx per l'ingress — e nessuno glieli
-contraddice. L'Ingress della console lo crea il chart Rancher senza classe
-esplicita, e lo serve la IngressClass di default, che e' nginx.
+CONFIGURAZIONE DI RKE2: /etc/rancher/rke2/config.yaml contiene tls-san, node-ip,
+ingress-controller e — solo con piu' di un server — token e server. NIENTE
+scelta del CNI, niente disable, niente resolv-conf: la rete dei pod la fa canal,
+il default di RKE2, e nessuno glielo contraddice. L'Ingress della console lo crea
+il chart Rancher con "--set ingress.ingressClassName={{ rancher_ingress_class }}",
+cioe' con la classe che deriva dall'ingress controller scelto.
+
+Il playbook lo rilegge: dopo aver scritto config.yaml lo riprende dal nodo, lo
+interpreta come YAML e controlla che dica quello che doveva dire. Non e'
+pignoleria — un config.yaml sbagliato-ma-valido fa partire un cluster storto
+invece di fallire, ed e' successo: i tag Jinja collassavano tls-san in un
+elemento solo e il dominio non entrava nel certificato dell'API server, senza un
+errore da nessuna parte, per giorni.
+
+
+  IL CLUSTER DOWNSTREAM: CALICO E TRAEFIK
+
+I due cluster NON hanno la stessa rete, e non e' una svista:
+
+  cluster RANCHER    ([masters])                CNI canal    ingress traefik
+  cluster DOWNSTREAM ([new_managers], ...)      CNI calico   ingress traefik
+
+Il CNI non si cambia a caldo. Il cluster Rancher e' installato e funziona con
+canal: portarlo a Calico vorrebbe dire rifare il cluster che ospita la console,
+per nessun guadagno. Il downstream invece nasce adesso, quindi la' Calico si
+sceglie subito, ed e' quello che chiedono le variabili in group_vars/all.yml:
+
+  cluster_cni: "calico"
+  cluster_ingress_controller: "traefik"
+
+Le due finiscono nel corpo della POST che crea il cluster (ruolo
+master1_create_cluster) e da li' in machineGlobalConfig, cioe' nel config.yaml
+che RANCHER scrive sui nodi downstream. Non c'e' un secondo momento in cui
+correggerle: da quando il cluster esiste, quella configurazione la tiene lui.
+
+CON CALICO SERVONO DUE VALORI CHE CON CANAL ARRIVANO GIA' GIUSTI, e sono la
+ragione per cui esiste cluster_chart_values:
+
+  l'indirizzo   Calico NON usa il node-ip di config.yaml: se lo sceglie da solo,
+                e il default e' "la prima interfaccia non-loopback che trovo".
+                Canal invece legge l'InternalIP del Node. E' la differenza che
+                spiega perche', a parita' di macchine e di porte, uno andava e
+                l'altro no. nodeAddressAutodetectionV4: kubernetes:
+                NodeInternalIP glielo impone.
+  la MTU        1450, il valore che il chart rke2-canal usa qui da sempre.
+                Lasciandola dedurre a Calico, su una scheda con MTU alta si
+                imposta di conseguenza: non e' sbagliato in se', ma vale solo se
+                TUTTO il percorso fra i nodi regge i jumbo frame — altrimenti i
+                pacchetti grandi spariscono e i piccoli passano.
+
+calicoNetwork e' scritto per intero (bgp, ipPools, mtu, autodetection) e non per
+verbosita': un valore omesso non e' garantito essere un valore ereditato, e un
+calicoNetwork parziale lascerebbe Calico senza incapsulamento e con BGP acceso
+ma senza peer — cioe' esattamente il sintomo che si sta cercando di non
+rivedere.
+
+LA PORTA VXLAN. Calico incapsula sulla UDP 4789, canal sulla 8472. Sulla vecchia
+rete 10.205.166.x la 8472 era aperta da sempre e la 4789 non era mai servita a
+nessuno, ed e' una delle tre spiegazioni con cui Calico e' stato abbandonato. Su
+192.168.1.0/24 non c'e' niente in mezzo e host_prep disattiva ufw, quindi si
+resta sullo standard. Se il sintomo dovesse tornare — nodi tutti Ready, pod
+sulla stessa macchina che si parlano, e traffico fra pod di nodi DIVERSI che
+sparisce senza errori — la prova costa una riga:
+
+  cluster_calico_vxlan_port: 8472
+
+e kubectl_setup applica il valore alla FelixConfiguration del cluster downstream
+dopo il join. Vuota (default) = la porta la decide Calico.
+
+LA TERZA SPIEGAZIONE ERA NETWORKMANAGER, e quella e' gia' coperta: se gestisce
+vxlan.calico e le cali*, gliele riconfigura sotto e il tunnel smette di
+consegnare. host_prep le sottrae a NetworkManager e disattiva nm-cloud-setup su
+TUTTI i nodi, downstream compresi. Quando Calico e' stato abbandonato quel ruolo
+era appena stato scritto e non ancora corretto — creava il file in una directory
+che su un'installazione minimale non esiste — quindi la prova con Calico e
+host_prep funzionante non e' mai stata fatta.
+
+SE IL CLUSTER ESISTE GIA', LA CONFIGURAZIONE NUOVA NON LO TOCCA. La POST non
+viene nemmeno rifatta, e il riepilogo finale legge le VARIABILI: da fuori sembra
+fatto. Per questo master1_create_cluster rilegge da Rancher il CNI e l'ingress
+del cluster esistente e li stampa accanto a quelli chiesti, dicendo quali
+divergono. Per cambiarli davvero il cluster va cancellato dalla console e i nodi
+ripuliti:
+
+  ansible-playbook playbooks/20-rancher.yml -e clean_nodes_before_join=true
+
+QUALI VERSIONI. cluster_k8s_version e' allineata a rke2_version del cluster
+Rancher (v1.35.7+rke2r1) perche' e' la versione su cui "ingress-controller"
+risulta verificata. Su un RKE2 che non conosce quell'opzione, rke2-server sui
+nodi downstream rifiuta la configurazione e non parte: le macchine si registrano
+in Rancher, il provisioning resta appeso, e il journal da leggere e' su
+un'altra macchina. Sul cluster locale master1_config puo' chiedere al binario;
+qui il binario non c'e' ancora, quindi master1_create_cluster confronta la
+versione dichiarata con cluster_ingress_controller_min_version e si ferma prima
+di chiedere qualcosa a Rancher. La versione deve anche essere una che QUESTO
+Rancher sa provisionare: l'elenco e' nella console, in Cluster Management ->
+Create -> Custom.
+
+IN [new_managers] CI VUOLE ALMENO UN HOST. Un cluster di soli worker non si
+costruisce — manca il piano di controllo — e in piu' kubectl_setup gira proprio
+li': senza, gli hostAliases non vengono scritti e l'agent non risolve il dominio
+di Rancher. Il playbook adesso si ferma dicendolo invece di lasciare le macchine
+appese a "waiting for cluster agent to connect".
 
   ansible-playbook playbooks/20-rancher.yml -e clean_nodes_before_join=true
 
@@ -289,15 +386,22 @@ QUELLO CHE ANDAVA STORTO, in ordine di quanto e' costato.
 2. IL CNI ERA CALICO INVECE DI CANAL.
 
    Calico incapsula il traffico fra i pod sulla porta UDP 4789; flannel e canal
-   sulla 8472. Su questa rete e' aperta la 8472 — nessuno ha mai chiuso la 4789,
-   semplicemente non e' mai servita. In piu' Calico l'indirizzo con cui il nodo
-   si annuncia se lo sceglie da solo fra le interfacce, invece di prenderlo dal
-   Node Kubernetes.
+   sulla 8472. Sulla rete di allora era aperta la 8472 — nessuno ha mai chiuso
+   la 4789, semplicemente non e' mai servita. In piu' Calico l'indirizzo con cui
+   il nodo si annuncia se lo sceglie da solo fra le interfacce, invece di
+   prenderlo dal Node Kubernetes.
 
    Provate tutt'e due le cure — la porta con calico_vxlan_port, l'autodetection
-   con calico_config — il sintomo e' rimasto identico. Adesso il CNI e' il
-   default di RKE2, canal, su tutti e due i cluster: incapsula sulla 8472 e
-   prende l'indirizzo dall'InternalIP del Node.
+   con calico_config — il sintomo e' rimasto identico, e il CNI e' tornato a
+   essere canal su tutti e due i cluster.
+
+   OGGI VALE SOLO PER IL CLUSTER RANCHER. Il downstream e' di nuovo su Calico:
+   la rete e' cambiata (192.168.1.0/24 piatto, ufw disattivato da host_prep, e
+   quindi niente che possa far passare una porta e non l'altra) e la terza
+   spiegazione mai verificata — NetworkManager che riconfigura vxlan.calico
+   sotto al CNI — nel frattempo e' coperta da host_prep, che quando Calico e'
+   stato abbandonato era appena stato scritto e non ancora corretto. Vedi "IL
+   CLUSTER DOWNSTREAM: CALICO E TRAEFIK" qui sopra.
 
    Il numero di master, da solo, NON era una causa: tre server RKE2 con canal e
    ingress-nginx sono una configurazione standard e supportata. Tre nodi avevano
@@ -639,9 +743,12 @@ precedente i nodi conservano lo stato vecchio e il cluster non si tira su:
 
   - /etc/cni/net.d contiene ancora il conflist del CNI precedente. Vince per
     ordine alfabetico su quello nuovo e ogni pod resta in ContainerCreating con
-    'failed to find plugin "<cni>-cni" in path [/opt/cni/bin]'. E' il caso delle
-    macchine che hanno gia' girato con Calico: il CNI non si cambia a caldo, RKE2
-    non rimuove la configurazione del precedente, e le due conflist convivono
+    'failed to find plugin "<cni>-cni" in path [/opt/cni/bin]'. Vale in tutte e
+    due le direzioni — una macchina che ha girato con canal e adesso deve fare
+    Calico, o il contrario: il CNI non si cambia a caldo, RKE2 non rimuove la
+    configurazione del precedente, e le due conflist convivono. E' la ragione
+    per cui cambiare cluster_cni su un cluster gia' esistente non basta: vanno
+    ripuliti anche i nodi
   - /var/lib/rancher/agent conserva il vecchio Cattle ID, che il nuovo Rancher
     non riconosce: 401 durante il download della connection info
 

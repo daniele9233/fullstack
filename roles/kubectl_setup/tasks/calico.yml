@@ -1,0 +1,104 @@
+---
+# PORTA VXLAN DI CALICO SUL CLUSTER DOWNSTREAM.
+#
+# Gira solo se cluster_calico_vxlan_port e' valorizzata, e solo se il CNI e'
+# Calico. Con i default non fa niente: la porta la decide Calico, cioe' 4789.
+#
+# PERCHE' ESISTE. Calico incapsula il traffico fra i pod su UDP 4789, il numero
+# IANA; flannel e quindi canal usano la 8472. Sono la stessa cosa per chi le
+# guarda da vicino e due mondi diversi per una rete che filtra per porta — ed e'
+# la differenza su cui questa infrastruttura si e' gia' fermata una volta, sulla
+# vecchia rete 10.205.166.x dove la 8472 era aperta da sempre e la 4789 non era
+# mai servita a nessuno.
+#
+# Il guasto non somiglia a un problema di porta: i nodi risultano tutti Ready, i
+# pod sulla stessa macchina si parlano, e sparisce SOLO il traffico fra pod di
+# nodi diversi. Il primo a caderci e' CoreDNS, che sta su un nodo e viene
+# interrogato dall'altro: da li' in poi ogni errore parla di nomi che non si
+# risolvono o di download che vanno in timeout, cioe' sembra Internet.
+#
+# QUESTO E' UN RIPIEGO, NON LA CONFIGURAZIONE NORMALE. Sul segmento
+# 192.168.1.0/24 non c'e' niente che filtri la 4789 e host_prep disattiva ufw:
+# la porta standard va bene. La variabile c'e' perche', se quel sintomo dovesse
+# tornare, la prova costa una riga in group_vars/all.yml invece di una giornata.
+
+# FelixConfiguration e' una risorsa DEL CLUSTER, non del nodo: si scrive una
+# volta sola. Con piu' di un manager questo ruolo gira su ognuno, e senza questa
+# guardia farebbero tutti la stessa patch — non e' dannoso, ma il primo che
+# arriva la fa e gli altri leggerebbero un "changed" che non e' loro.
+- name: Porta VXLAN di Calico sul cluster downstream
+  when:
+    - cluster_calico_vxlan_port | default('') | string | length > 0
+    - cluster_cni | default('') == 'calico'
+    - inventory_hostname == (groups['new_managers'] | default([]) | first)
+  block:
+
+    # Il ruolo gira subito dopo il join: l'operator Tigera puo' non aver ancora
+    # creato la FelixConfiguration di default. Si aspetta che esista invece di
+    # dare per scontato che ci sia.
+    - name: Attendi che Calico esponga la propria FelixConfiguration
+      command: >-
+        {{ ks_kubectl_bin }} get felixconfiguration default
+        -o jsonpath={.spec.vxlanPort}
+      environment:
+        KUBECONFIG: "{{ ks_kubeconfig }}"
+      register: ks_felix_porta
+      until: ks_felix_porta.rc == 0
+      retries: "{{ ks_calico_retries }}"
+      delay: "{{ ks_calico_delay }}"
+      changed_when: false
+      failed_when: false
+
+    - name: Fermati se Calico non risponde
+      fail:
+        msg: >-
+          Calico non ha esposto la FelixConfiguration "default" dopo
+          {{ ks_calico_retries | int * ks_calico_delay | int }} secondi, quindi
+          la porta VXLAN resta {{ ks_calico_porta_default }} e i pod su nodi
+          diversi potrebbero non raggiungersi. Guarda i pod del namespace
+          calico-system prima di proseguire:
+          "{{ ks_kubectl_bin }} -n calico-system get pod".
+          Ultimo errore: {{ ks_felix_porta.stderr | default('nessuno') | trim }}
+      when: ks_felix_porta.rc != 0
+
+    # jsonpath restituisce una stringa VUOTA quando il campo non e' valorizzato,
+    # e vuoto non vuol dire "nessuna porta": vuol dire che Calico sta usando il
+    # proprio default. Trattare i due casi allo stesso modo farebbe scrivere la
+    # patch a ogni esecuzione, o non farla mai.
+    - name: Stabilisci la porta in uso
+      set_fact:
+        ks_felix_porta_in_uso: >-
+          {{ (ks_felix_porta.stdout | trim)
+             if (ks_felix_porta.stdout | default('') | trim | length > 0)
+             else (ks_calico_porta_default | string) }}
+
+    # argv e non una riga di comando: il modulo command spezza la stringa con
+    # shlex, che sul JSON della patch TOGLIE LE VIRGOLETTE — kubectl si
+    # ritroverebbe {spec:{vxlanPort:8472}}, che JSON non e', e fallirebbe con un
+    # errore di parsing che non c'entra niente con quello che si sta facendo.
+    # Con argv gli argomenti passano come sono scritti.
+    - name: Sposta la porta VXLAN di Calico
+      command:
+        argv:
+          - "{{ ks_kubectl_bin }}"
+          - patch
+          - felixconfiguration
+          - default
+          - --type
+          - merge
+          - -p
+          - "{{ {'spec': {'vxlanPort': cluster_calico_vxlan_port | int}} | to_json }}"
+      environment:
+        KUBECONFIG: "{{ ks_kubeconfig }}"
+      when: (ks_felix_porta_in_uso | trim) != (cluster_calico_vxlan_port | string)
+
+    - name: Porta VXLAN
+      debug:
+        msg: >-
+          Calico incapsula sulla UDP
+          {{ cluster_calico_vxlan_port }}{{ ' (era ' ~ (ks_felix_porta_in_uso | trim) ~ ')'
+             if (ks_felix_porta_in_uso | trim) != (cluster_calico_vxlan_port | string)
+             else ' (era gia cosi)' }}.
+          Il cambio ha effetto sui tunnel man mano che i nodi lo recepiscono:
+          se il traffico fra pod di nodi diversi era fermo, dagli un minuto
+          prima di riprovare.

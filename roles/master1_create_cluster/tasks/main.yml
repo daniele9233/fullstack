@@ -2,27 +2,127 @@
 # CREAZIONE DEL CLUSTER DOWNSTREAM VIA API RANCHER.
 #
 # E' il ruolo del playbook di riferimento, adattato: stesse chiamate, stesso
-# ordine, stesse attese. Le uniche aggiunte sono il gruppo [ingress] (che qui
-# esiste e li' no) e le guardie sui gruppi vuoti.
+# ordine, stesse attese. Le aggiunte sono il gruppo [ingress] (che qui esiste e
+# li' no), le guardie sui gruppi vuoti, e la configurazione di rete e ingress
+# del cluster — CNI, chartValues e ingress-controller.
 #
-# COSA E' STATO TOLTO rispetto alla versione precedente, e perche':
+# QUELLO CHE IL CORPO DELLA POST DICE AL CLUSTER, e perche' passa tutto da qui:
+# da quando il cluster esiste, la configurazione dei nodi downstream la scrive
+# RANCHER, non questo playbook. Non c'e' un secondo momento in cui correggere:
+# machineGlobalConfig diventa il config.yaml di quei nodi, e chartValues
+# diventa il HelmChartConfig dei chart packaged.
 #
-#   chartValues     imponeva a Calico la MTU e l'autodetection dell'indirizzo.
-#                   Il CNI del downstream e' canal (cluster_cni), che quei due
-#                   valori li prende gia' giusti: la MTU dal chart rke2-canal e
-#                   l'indirizzo dall'InternalIP del Node.
-#   disable         toglieva rke2-ingress-nginx per far posto a un Traefik da
-#                   scaricare. Il downstream adesso tiene l'ingress di RKE2,
-#                   come il cluster locale.
-#   resolv-conf     scriveva /run/systemd/resolve/resolv.conf in
-#                   machineGlobalConfig. Serviva a far risolvere a CoreDNS i
-#                   nomi esterni, e serviva perche' c'era un chart da scaricare
-#                   da traefik.github.io. Senza quel chart, il cluster non ha
-#                   piu' niente da prendere da Internet mentre si costruisce.
+#   cni              cluster_cni. Calico.
+#   chartValues      cluster_chart_values. Dice a Calico la MTU e con quale
+#                    indirizzo annunciarsi: sono i due valori che canal prende
+#                    gia' giusti e Calico no. Vuoto con canal.
+#   ingress-controller  cluster_ingress_controller. Traefik, dal chart
+#                    rke2-traefik impacchettato dentro RKE2: niente da scaricare
+#                    da traefik.github.io mentre il cluster si costruisce.
+#
+# resolv-conf NON C'E' PIU', e non va rimesso per abitudine: scriveva
+# /run/systemd/resolve/resolv.conf in machineGlobalConfig per far risolvere a
+# CoreDNS i nomi esterni, e serviva perche' c'era un chart da scaricare da
+# Internet. Con i chart packaged non c'e' piu' niente da prendere da fuori
+# mentre il cluster si costruisce.
 #
 # Tutte le chiamate HTTPS sono delegate al control node (ansibleSshHost), che
 # deve quindi risolvere rancher_domain: ci pensa il play update_hosts_file, che
 # include [local] proprio per questo.
+
+
+# --- Controlli prima di chiedere qualcosa a Rancher --------------------------
+#
+# SI CONTROLLA PRIMA, e la ragione e' che qui non c'e' un secondo tentativo
+# comodo: un valore sbagliato non fa fallire la POST — Rancher la accetta — e si
+# manifesta minuti dopo come nodi che si registrano e non diventano mai Ready,
+# con il journal da leggere su un'altra macchina. Sul cluster locale
+# master1_config puo' chiedere al binario "rke2 server --help" prima di
+# scrivere; qui il binario su quei nodi non esiste ancora, quindi si controlla
+# quello che si puo': i valori ammessi e la versione dichiarata.
+
+- name: Verifica che il CNI del cluster downstream sia un valore ammesso
+  assert:
+    that:
+      - cluster_cni in ['calico', 'canal', 'cilium', 'flannel', 'none']
+    fail_msg: >-
+      cluster_cni vale "{{ cluster_cni }}", che RKE2 non accetta. I valori
+      ammessi sono: calico, canal, cilium, flannel, none. Un CNI scritto male
+      non fa fallire questa POST — Rancher la accetta — ma i nodi downstream
+      non diventeranno mai Ready.
+    quiet: yes
+
+- name: Verifica che l'ingress controller del cluster downstream sia ammesso
+  assert:
+    that:
+      - cluster_ingress_controller in ['none', 'ingress-nginx', 'traefik']
+    fail_msg: >-
+      cluster_ingress_controller vale "{{ cluster_ingress_controller }}", che
+      RKE2 non accetta. I valori ammessi sono: none, ingress-nginx, traefik.
+      Svuota la variabile per lasciar decidere RKE2 (oggi ingress-nginx).
+    quiet: yes
+  when: cluster_ingress_controller | default('') | length > 0
+
+# "ingress-controller:" non esiste su tutte le versioni di RKE2, e su una che non
+# la conosce rke2-server RIFIUTA la configurazione e non parte affatto. Qui non
+# si puo' chiedere al binario, quindi si confronta la versione dichiarata con
+# quella di cui si ha una prova.
+#
+# Le due stringhe vanno ripulite PRIMA del confronto: "v1.35.7+rke2r1" non e' un
+# numero di versione per nessuno: la "v" iniziale e il suffisso "+rke2rN" vanno
+# tolti, altrimenti il confronto non fa quello che sembra fare. split('+')[0] e
+# non una regex, cosi' non c'e' un backslash da far sopravvivere a YAML e Jinja.
+- name: Verifica che questa versione di RKE2 conosca ingress-controller
+  assert:
+    that:
+      - (cluster_k8s_version | regex_replace('^v', '')).split('+')[0]
+        is version((cluster_ingress_controller_min_version | regex_replace('^v', '')).split('+')[0], '>=')
+    fail_msg: >-
+      cluster_ingress_controller vale "{{ cluster_ingress_controller }}", ma
+      cluster_k8s_version e' {{ cluster_k8s_version }}, precedente a
+      {{ cluster_ingress_controller_min_version }} — la piu' vecchia su cui
+      quell'opzione risulta verificata (e' quella con cui gira il cluster
+      Rancher). Scrivendo "ingress-controller" in machineGlobalConfig su un RKE2
+      che non la conosce, rke2-server sui nodi downstream rifiuta la
+      configurazione e NON PARTE: le macchine si registrano in Rancher, il
+      provisioning resta appeso, e non c'e' niente in questo playbook che lo
+      dica. Due strade: alzare cluster_k8s_version a una versione che Rancher sa
+      provisionare e che l'opzione ce l'ha, oppure svuotare
+      cluster_ingress_controller e tenere il default di RKE2 (ingress-nginx).
+    quiet: yes
+  when: cluster_ingress_controller | default('') | length > 0
+
+# machineGlobalConfig si costruisce QUI e non dentro al corpo della POST perche'
+# "ingress-controller" c'e' solo se e' stato chiesto, e una chiave condizionale
+# dentro a un dizionario YAML letterale non si scrive: verrebbe fuori la chiave
+# con dentro una stringa vuota, che non e' "non chiedere niente" — e' chiedere
+# un ingress controller che non si chiama in nessun modo.
+#
+# Il valore e' una LISTA anche quando e' uno solo: RKE2 dichiara
+# "ingress-controller" come opzione ripetibile, ed e' la forma con cui il cluster
+# Rancher gira oggi (vedi il config.yaml scritto da master1_config).
+- name: Componi machineGlobalConfig del cluster downstream
+  set_fact:
+    cluster_machine_global_config: >-
+      {{ {'cni': cluster_cni,
+          'disable-kube-proxy': false,
+          'etcd-expose-metrics': false}
+         | combine({'ingress-controller': [cluster_ingress_controller]}
+                   if (cluster_ingress_controller | default('') | length > 0)
+                   else {}) }}
+
+- name: Configurazione con cui nascera' il cluster downstream
+  debug:
+    msg: >-
+      {{ cluster_name }} ({{ cluster_k8s_version }}): CNI {{ cluster_cni }},
+      ingress
+      {{ (cluster_ingress_controller ~ ' (IngressClass "' ~ cluster_ingress_class ~ '")')
+         if (cluster_ingress_controller | default('') | length > 0)
+         else 'lasciato al default di RKE2' }},
+      chartValues
+      {{ 'per ' ~ (cluster_chart_values.keys() | list | join(', '))
+         if (cluster_chart_values | default({}) | length > 0)
+         else 'nessuno' }}.
 
 # Pausa di assestamento. Rancher risponde al login prima di essere pronto a
 # provisionare: e' cieca, ma e' quella del playbook che funziona.
@@ -113,10 +213,13 @@
       spec:
         kubernetesVersion: "{{ cluster_k8s_version }}"
         rkeConfig:
-          machineGlobalConfig:
-            cni: "{{ cluster_cni }}"
-            disable-kube-proxy: false
-            etcd-expose-metrics: false
+          # cni, disable-kube-proxy, etcd-expose-metrics e — se chiesto —
+          # ingress-controller. Composto sopra: vedi il commento li'.
+          machineGlobalConfig: "{{ cluster_machine_global_config }}"
+          # Valori dei chart packaged. Con Calico dice la MTU del tunnel e con
+          # quale indirizzo il nodo si annuncia; con canal e' {} e non c'e'
+          # niente da imporre. Vedi cluster_chart_values in group_vars/all.yml.
+          chartValues: "{{ cluster_chart_values | default({}) }}"
           machineSelectorConfig:
             - config:
                 protect-kernel-defaults: false
@@ -157,6 +260,46 @@
       {{ 'Cluster ' ~ cluster_name ~ ' creato (' ~ cluster_k8s_version ~ ', CNI ' ~ cluster_cni ~ ')'
          if cluster_esistente.status == 404
          else 'Cluster ' ~ cluster_name ~ ' esisteva gia: non ricreato' }}
+
+# UN CLUSTER CHE ESISTE GIA' NON PRENDE LA CONFIGURAZIONE NUOVA, e questo e' il
+# modo in cui il cambio di CNI puo' passare inosservato: si cambia cluster_cni,
+# si rilancia il playbook, la POST non viene nemmeno rifatta (il cluster c'e'
+# gia'), il riepilogo finale legge la VARIABILE e annuncia "CNI calico" — mentre
+# nel cluster vero e' rimasto canal. Da fuori sembra fatto.
+#
+# Quindi si legge quello che Rancher ha davvero in pancia e lo si confronta con
+# quello che si e' chiesto. Non e' un errore che ferma il playbook: il cluster
+# esistente funziona, e la decisione di rifarlo non e' di un task.
+- name: Confronta la configurazione chiesta con quella del cluster esistente
+  vars:
+    cni_nel_cluster: >-
+      {{ cluster_esistente.json.spec.rkeConfig.machineGlobalConfig.cni
+         | default('(non dichiarato: default RKE2, canal)') }}
+    ingress_nel_cluster: >-
+      {{ cluster_esistente.json.spec.rkeConfig.machineGlobalConfig['ingress-controller']
+         | default([]) | join(', ') | default('(non dichiarato: default RKE2, ingress-nginx)', true) }}
+  debug:
+    msg: |
+      Il cluster {{ cluster_name }} ESISTE GIA' e non viene ricreato: la
+      configurazione qui sotto e' quella con cui e' nato, non quella di
+      group_vars/all.yml.
+
+        CNI      nel cluster: {{ cni_nel_cluster | trim }}   —   chiesto: {{ cluster_cni }}
+        Ingress  nel cluster: {{ ingress_nel_cluster | trim }}   —   chiesto: {{ cluster_ingress_controller | default('(default RKE2)', true) }}
+
+      {% if (cni_nel_cluster | trim) != cluster_cni %}
+      IL CNI DIVERGE. Non si cambia a caldo e non si cambia da qui: rilanciare
+      il playbook non lo tocca. Per averlo davvero, il cluster va cancellato
+      dalla console (Cluster Management -> {{ cluster_name }} -> Delete) e i
+      nodi ripuliti prima di riagganciarli:
+        ansible-playbook playbooks/20-rancher.yml -e clean_nodes_before_join=true
+      {% endif %}
+      {% if (ingress_nel_cluster | trim) != (cluster_ingress_controller | default('', true)) %}
+      L'INGRESS DIVERGE. Anche questo sta in machineGlobalConfig e vale per il
+      cluster, non per il singolo nodo: i nodi nuovi che si agganciano adesso
+      prendono la configurazione VECCHIA, non questa.
+      {% endif %}
+  when: cluster_esistente.status == 200
 
 - name: Wait for cluster to be provisioned
   delegate_to: "{{ ansibleSshHost }}"
@@ -278,12 +421,12 @@
 # I nodi [ingress] entrano come worker con una label in piu'.
 #
 # NIENTE TAINT, ed e' un cambiamento: prima ne prendevano uno NoSchedule, che
-# aveva senso finche' su quei nodi girava un Traefik con nodeSelector e
-# tolleranza. L'ingress adesso e' rke2-ingress-nginx, che RKE2 installa come
-# DaemonSet senza tolleranze: con il taint quei nodi resterebbero gli unici
-# senza ingress — l'esatto contrario di quello che si vuole da un nodo che si
-# chiama [ingress]. La label resta, e serve a puntarci un nodeSelector quando
-# servira'.
+# aveva senso finche' su quei nodi girava un Traefik installato a parte, con
+# nodeSelector e tolleranza scritti da noi. L'ingress adesso lo installa RKE2
+# con il proprio chart, che di quel taint non sa niente e non lo tollera: quei
+# nodi resterebbero gli unici senza ingress — l'esatto contrario di quello che
+# si vuole da un nodo che si chiama [ingress]. La label resta, e serve a
+# puntarci un nodeSelector quando servira'.
 - name: Install system-agent and join ingress nodes as workers
   shell: |
     curl --insecure -fL https://{{ rancher_host }}/system-agent-install.sh | sh -s - \

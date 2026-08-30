@@ -10,25 +10,38 @@
 # calico_config, calico_vxlan_port, traefik_install, rete_pod_verifica,
 # rancher_single_node.
 #
-# COSA NON FA PIU', ed e' il punto:
+# DUE CLUSTER, E NON HANNO LA STESSA RETE. Non e' una svista:
 #
-#   - non sceglie il CNI. Niente "cni:" in config.yaml: RKE2 posa il suo
-#     default, che e' canal. Nessun chart Calico, nessuna FelixConfiguration,
-#     nessuna porta VXLAN da correggere.
-#   - non sceglie l'ingress. Niente "ingress-controller:", niente "disable:",
-#     nessun chart Traefik scaricato da traefik.github.io. RKE2 installa
-#     rke2-ingress-nginx e l'Ingress della console lo serve lui, perche' il
-#     chart Rancher lo crea senza classe esplicita e nginx e' quella di default.
+#   il cluster RANCHER (i [masters])   CNI canal, ingress traefik.
+#   il cluster DOWNSTREAM (gli altri)  CNI calico, ingress traefik.
 #
-# Le due cose sopra sono le due cause dei fallimenti che venivano raccontati
-# come "problemi di rete": vedi README, sezione RANCHER.
+# Il CNI non si cambia a caldo, e il cluster Rancher e' installato e funziona:
+# portarlo a Calico vorrebbe dire rifare il cluster che ospita la console. Il
+# downstream invece nasce adesso, quindi la' Calico si sceglie subito.
 #
-# IL NUMERO DI MASTER NON ERA UNA DI QUELLE DUE. Era stato tolto anche il
-# cluster a piu' server, ed era troppo: tre server RKE2 con canal e
-# ingress-nginx sono una configurazione standard. Tre master avevano solo reso
-# VISIBILE il guasto del CNI — con un nodo solo il traffico fra pod di nodi
-# diversi non esiste, quindi non poteva rompersi. Adesso che il CNI e' canal,
-# i tre server sono di nuovo supportati e stanno qui sotto.
+# QUELLO CHE IL PLAYBOOK NON FA PIU', ed e' il punto:
+#
+#   - non scarica niente da Internet mentre i cluster si costruiscono. Traefik
+#     e' il chart rke2-traefik, IMPACCHETTATO dentro RKE2: non c'e' piu' un
+#     download da traefik.github.io che va in timeout ogni volta che qualcosa
+#     non va DENTRO al cluster, mandando la diagnosi fuori.
+#   - non lascia divergere l'ingress installato e la IngressClass chiesta.
+#     rancher_ingress_class e cluster_ingress_class DERIVANO dal controller
+#     scelto: prima erano scritte a mano e una volta si sono contraddette, con
+#     l'Ingress della console che chiedeva una classe inesistente.
+#   - non scrive "ingress-controller" senza sapere se quel RKE2 la conosca.
+#     master1_config lo chiede al binario, master1_create_cluster lo deduce
+#     dalla versione dichiarata: su un RKE2 che non la conosce, rke2-server
+#     rifiuta la configurazione e non parte affatto.
+#
+# La storia per esteso — cosa si e' rotto, in che ordine, e perche' sembrava
+# ogni volta un problema di rete — e' nel README, sezione RANCHER.
+#
+# IL NUMERO DI MASTER NON C'ENTRAVA. Era stato tolto anche il cluster a piu'
+# server, ed era troppo: tre server RKE2 con canal sono una configurazione
+# standard. Tre master avevano solo reso VISIBILE il guasto del CNI — con un
+# nodo solo il traffico fra pod di nodi diversi non esiste, quindi non poteva
+# rompersi.
 #
 # [masters] PUO' AVERE 1 O 3 HOST, mai 2: etcd ha bisogno di un numero dispari
 # per il quorum. Con 3 il primo host bootstrappa e gli altri si uniscono a lui,
@@ -40,7 +53,10 @@
 #
 #   inventory.ini      1 o 3 host in [masters]. Se serve anche il cluster
 #                      downstream, i suoi nodi in [new_managers], [workers] e
-#                      [ingress]; lasciandoli vuoti si installa il solo Rancher
+#                      [ingress]; lasciandoli vuoti si installa il solo Rancher.
+#                      In [new_managers] ci vuole ALMENO UN host: e' li' che
+#                      gira kubectl_setup, senza il quale il cluster downstream
+#                      non si aggancia mai a Rancher
 #   rancher_domain     il nome con cui si apre la console
 #   rancher_password   la password di bootstrap dell'utente admin
 #   i tre .pem         in roles/master1_helm_cert_manager_install/files/
@@ -170,6 +186,30 @@
   hosts: masters[0]
   become: yes
   gather_facts: no
+  pre_tasks:
+    # SENZA MANAGER NON C'E' CLUSTER, e il modo in cui la cosa fallisce non lo
+    # dice: i worker si agganciano, Rancher li vede, e il cluster resta per
+    # sempre in "Waiting for Cluster control plane to be initialized" perche'
+    # non c'e' un nodo etcd/controlplane. In piu' kubectl_setup gira sui
+    # [new_managers], quindi senza nessuno li' gli hostAliases non vengono
+    # scritti da nessuna parte e l'agent non risolverebbe comunque il dominio.
+    - name: Con dei nodi downstream ci vuole almeno un manager
+      assert:
+        that:
+          - (groups['new_managers'] | default([]) | length) > 0
+        fail_msg: >-
+          [new_managers] e' vuoto, ma in [workers] e [ingress] ci sono
+          {{ (groups['workers'] | default([]) | length)
+             + (groups['ingress'] | default([]) | length) }} host. Un cluster di
+          soli worker non si costruisce: manca il piano di controllo, e le
+          macchine resterebbero appese in Rancher a "waiting for cluster agent
+          to connect". Metti almeno un host in [new_managers] — meglio uno o
+          tre, mai due: anche qui etcd vuole un numero dispari.
+        quiet: yes
+      run_once: true
+      when: >-
+        ((groups['workers'] | default([]) | length)
+         + (groups['ingress'] | default([]) | length)) > 0
   roles:
     - role: master1_create_cluster
       when: >-
@@ -216,14 +256,27 @@
             Cluster RKE2: {{ groups['masters'] | length }} server
             ({{ groups['masters'] | join(', ') }}) — un solo Rancher, con le
             repliche distribuite da Kubernetes.
-          - "CNI: default RKE2 (canal) — Ingress: default RKE2 (ingress-nginx)"
+          - >-
+            Cluster Rancher: CNI canal (default RKE2) — Ingress
+            {{ (rke2_ingress_controller | join(', ') ~ ', IngressClass "' ~ rancher_ingress_class ~ '"')
+               if (rke2_ingress_controller | default([]) | length > 0)
+               else 'default RKE2 (ingress-nginx)' }}
           - >-
             Cluster downstream:
-            {{ (cluster_name ~ ' (' ~ cluster_k8s_version ~ ', CNI ' ~ cluster_cni ~ '): '
-                ~ (nodi_attesi | int | string) ~ ' macchine agganciate fra [new_managers],'
+            {{ (cluster_name ~ ' (' ~ cluster_k8s_version ~ '): CNI ' ~ cluster_cni
+                ~ ', Ingress ' ~ (cluster_ingress_controller ~ ' (IngressClass "' ~ cluster_ingress_class ~ '")'
+                                  if (cluster_ingress_controller | default('') | length > 0)
+                                  else 'default RKE2 (ingress-nginx)')
+                ~ ' — ' ~ (nodi_attesi | int | string) ~ ' macchine agganciate fra [new_managers],'
                 ~ ' [workers] e [ingress]. Il provisioning prosegue da solo in Rancher.')
                if (nodi_attesi | int) > 0
                else 'non creato — i gruppi [new_managers], [workers] e [ingress] sono vuoti.' }}
+          - >-
+            {{ 'ATTENZIONE: quella qui sopra e la configurazione CHIESTA. Se il cluster
+                ' ~ cluster_name ~ ' esisteva gia, ha tenuto la propria: il confronto fra
+                le due lo ha stampato master1_create_cluster, piu su in questo stesso
+                playbook.'
+               if (nodi_attesi | int) > 0 else '' }}
           - >-
             /etc/hosts: la riga "{{ rancher_endpoint_ip | trim }} {{ rancher_domain }}"
             e' stata scritta sui nodi e sul control node. Se apri la console da

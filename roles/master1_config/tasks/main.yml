@@ -377,5 +377,5 @@
   debug:
     msg: |
       {{ inventory_hostname }} ({{ 'bootstrap' if inventory_hostname == groups['masters'][0] else 'join su ' + hostvars[groups['masters'][0]].ansible_host }})
-      CNI e ingress: default RKE2 (canal, ingress-nginx)
+      CNI: default RKE2 (canal) — Ingress: {{ rke2_ingress_controller | join(', ') | default('default RKE2 (ingress-nginx)', true) }}
       {{ rke2_nodes.stdout }}
