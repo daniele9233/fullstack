@@ -182,6 +182,140 @@
 # SI SALTA DA SE' se quei tre gruppi sono vuoti: e' il caso di chi vuole il solo
 # Rancher. Prima veniva creato lo stesso un cluster vuoto in Rancher, che poi
 # restava cinque minuti ad aspettare macchine che non sarebbero mai arrivate.
+# STATO RKE2 RESIDUO SUI NODI DOWNSTREAM: SI GUARDA PRIMA DI AGGANCIARLI.
+#
+# Costa uno stat per nodo, e chiude un vicolo cieco da quaranta minuti.
+#
+# Che cosa succede senza. Il nodo si aggancia, Rancher gli installa RKE2, e
+# rke2-server muore all'avvio con
+#
+#   failed to bootstrap cluster data: failed to reconcile with local datastore:
+#   bootstrap data already found and encrypted with different token
+#
+# perche' in /var/lib/rancher/rke2/server/db c'e' ancora l'etcd di
+# un'installazione precedente, che il token nuovo non apre. Da qui in poi non
+# fallisce piu' niente in modo utile: "Verify nodes are registered" gira trenta
+# volte contando zero nodi, poi kubectl_setup ne gira altre sessanta aspettando
+# un API server che non arrivera' mai, e l'unica riga che spiega tutto sta nel
+# journal di un'ALTRA macchina.
+#
+# Il residuo non e' un caso raro: e' la norma su una macchina riusata, e
+# sopravvive alla cancellazione del cluster in Rancher — quella tocca Rancher,
+# non i dischi dei nodi.
+#
+# NON e' un controllo sui master: quelli il loro stato ce l'hanno di diritto,
+# e a questo punto del playbook sono un cluster in esercizio.
+- name: Stato RKE2 residuo sui nodi del cluster downstream
+  hosts: new_managers,workers,ingress
+  become: yes
+  gather_facts: no
+  tasks:
+    # Con la pulizia richiesta non c'e' niente da controllare: il play
+    # clean_node_state e' gia' passato su questi stessi nodi poco fa.
+    - name: Stato residuo di RKE2 sui nodi downstream
+      when: not (clean_nodes_before_join | default(false) | bool)
+      block:
+
+        - name: Cerca lo stato di un'installazione RKE2 precedente
+          stat:
+            path: "{{ item }}"
+          register: rke2_residuo
+          loop:
+            # L'etcd di un server. E' questo che produce l'errore sul token: il
+            # datastore c'e', ed e' cifrato con un segreto che non abbiamo piu'.
+            - /var/lib/rancher/rke2/server/db
+            # L'identita' agent di un Rancher precedente. Il nodo si ripresenta
+            # con il vecchio Cattle ID e prende 401 mentre scarica la
+            # connection info.
+            - /var/lib/rancher/agent
+
+        - name: Elenca quello che si e' trovato
+          set_fact:
+            rke2_residuo_trovato: >-
+              {{ rke2_residuo.results | default([])
+                 | selectattr('stat.exists', 'defined')
+                 | selectattr('stat.exists') | map(attribute='item') | list }}
+
+        # QUELLO STATO PUO' ESSERE LEGITTIMO, ed e' la differenza che questo
+        # controllo deve saper fare: su un cluster downstream GIA' IN PIEDI il
+        # datastore etcd esiste di diritto: e' il suo. Un controllo che guarda
+        # solo il disco bloccherebbe ogni ri-esecuzione del playbook su un
+        # cluster sano — cioe' romperebbe l'idempotenza per prevenire un
+        # guasto.
+        #
+        # A distinguere e' il SERVIZIO: se rke2-server o rke2-agent sono attivi,
+        # quello stato appartiene a un'installazione viva e non si tocca. Se non
+        # lo e' nessuno dei due, sul disco c'e' il residuo di un'installazione
+        # morta, ed e' la trappola.
+        #
+        # Con retry, perche' "activating" e' lo stato normale di un rke2-server
+        # riavviato un istante fa: senza attesa, un nodo sano ricontrollato nel
+        # momento sbagliato risulterebbe morto. Un minuto di margine — che e'
+        # comunque un quarantesimo di quello che costa scoprirlo dopo.
+        - name: Verifica se su questi nodi RKE2 e' vivo
+          shell: |
+            for u in rke2-server rke2-agent; do
+              if [ "$(systemctl is-active "$u" 2>/dev/null)" = "active" ]; then
+                echo "$u"; exit 0
+              fi
+            done
+            exit 1
+          args:
+            executable: /bin/bash
+          register: rke2_unit_viva
+          until: rke2_unit_viva.rc == 0
+          retries: 6
+          delay: 10
+          changed_when: false
+          failed_when: false
+          when: rke2_residuo_trovato | length > 0
+
+        - name: Il nodo fa gia' parte di un cluster RKE2 attivo
+          debug:
+            msg: >-
+              {{ inventory_hostname }}: {{ rke2_unit_viva.stdout | trim }} e'
+              attivo, quindi lo stato in
+              {{ rke2_residuo_trovato | join(' e ') }} e' suo e non si tocca.
+              Il playbook prosegue: sui pezzi gia' fatti e' idempotente.
+          when:
+            - rke2_residuo_trovato | length > 0
+            - rke2_unit_viva.rc | default(1) == 0
+
+        - name: Fermati se il nodo porta il residuo di un'installazione morta
+          fail:
+            msg: |
+              {{ inventory_hostname }} ({{ ansible_host }}) porta lo stato di
+              un'installazione RKE2 precedente, e nessun RKE2 e' in esecuzione
+              qui adesso:
+
+              {% for p in rke2_residuo_trovato %}
+                {{ p }}
+              {% endfor %}
+
+              Agganciandolo cosi', Rancher gli installa RKE2 e rke2-server muore
+              all'avvio — "bootstrap data already found and encrypted with
+              different token" per il datastore, 401 sulla connection info per
+              l'identita' agent. Il playbook non se ne accorgerebbe subito:
+              continuerebbe a contare zero nodi per mezz'ora prima di arrendersi,
+              e l'unica riga che lo spiega resterebbe nel journal di quel nodo.
+
+              CANCELLARE IL CLUSTER IN RANCHER NON BASTA: quello cancella
+              l'oggetto in Rancher, non i dischi di questa macchina.
+
+              Ripulisci i nodi downstream e poi rilancia:
+
+                ansible-playbook -i inventory.ini playbooks/20-rancher.yml \
+                  -e clean_nodes_before_join=true --limit new_managers,workers,ingress
+                ansible-playbook -i inventory.ini playbooks/20-rancher.yml
+
+              IL --limit NON E' FACOLTATIVO: clean_node_state gira su [masters]
+              piu' i gruppi downstream, quindi senza limite la pulizia
+              azzererebbe anche i tre master che ospitano Rancher.
+          when:
+            - rke2_residuo_trovato | length > 0
+            - rke2_unit_viva.rc | default(1) != 0
+
+
 - name: Cluster downstream
   hosts: masters[0]
   become: yes

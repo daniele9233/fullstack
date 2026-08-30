@@ -342,6 +342,49 @@ li': senza, gli hostAliases non vengono scritti e l'agent non risolve il dominio
 di Rancher. Il playbook adesso si ferma dicendolo invece di lasciare le macchine
 appese a "waiting for cluster agent to connect".
 
+
+  IL NODO DOWNSTREAM NON E' PULITO
+
+Il sintomo, e quanto costa leggerlo male:
+
+  "Verify nodes are registered in Rancher" gira trenta volte contando ZERO nodi
+  su due macchine agganciate. Poi kubectl_setup ne gira altre sessanta
+  aspettando un API server che non arrivera' mai. Un'ora, e nessuno dei due
+  messaggi dice qual e' il problema — perche' il problema e' su un'altra
+  macchina, nel journal di rke2-server:
+
+    level=fatal msg="Error: preparing server: failed to bootstrap cluster data:
+    failed to reconcile with local datastore: bootstrap data already found and
+    encrypted with different token"
+
+La causa e' semplice: in /var/lib/rancher/rke2/server/db c'e' ancora l'etcd di
+un'installazione precedente, cifrato con un token che non abbiamo piu'. Il token
+nuovo non lo apre e rke2-server si rifiuta di partire. La variante sull'identita'
+agent (/var/lib/rancher/agent, vecchio Cattle ID) da' invece 401 mentre scarica
+la connection info.
+
+CANCELLARE IL CLUSTER IN RANCHER NON RISOLVE: quello cancella l'oggetto in
+Rancher, non i dischi dei nodi. E' il motivo per cui il residuo sopravvive a
+tutto quello che si fa dalla console.
+
+Adesso il playbook lo guarda PRIMA di agganciare i nodi — costa uno stat a nodo
+— e si ferma con il comando da dare. Il controllo sa distinguere il residuo di
+un'installazione morta da un cluster downstream sano, dove quel datastore esiste
+di diritto: se rke2-server o rke2-agent sono attivi sul nodo, lo stato e' loro e
+non si tocca. Anche il rescue di kubectl_setup adesso porta il journal dentro al
+playbook invece di mandare a cercarlo sul nodo.
+
+La cura, in due passi:
+
+  ansible-playbook -i inventory.ini playbooks/20-rancher.yml \
+    -e clean_nodes_before_join=true --limit new_managers,workers,ingress
+  ansible-playbook -i inventory.ini playbooks/20-rancher.yml
+
+IL --limit NON E' FACOLTATIVO. Il play di clean_node_state gira su [masters]
+piu' i gruppi downstream: senza limite, la pulizia azzera anche i tre master che
+ospitano Rancher. E' l'unico comando di questo repository che, dato per intero,
+smonta un cluster in esercizio.
+
   ansible-playbook playbooks/20-rancher.yml -e clean_nodes_before_join=true
 
 azzera lo stato RKE2 di un'installazione precedente prima di ricominciare.

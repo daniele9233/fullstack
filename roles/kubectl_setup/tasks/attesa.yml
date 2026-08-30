@@ -96,14 +96,52 @@
       until: kubectl_test.rc == 0
 
   rescue:
+    # IL JOURNAL SI PORTA QUI, non si manda l'operatore a cercarlo. Prima questo
+    # rescue diceva "guarda journalctl sul nodo": dieci minuti di retry, poi un
+    # messaggio che rimanda su un'ALTRA macchina per leggere l'unica riga che
+    # conta. Quella riga entra nel playbook, come gia' fa master1_config sul
+    # cluster locale.
+    #
+    # Le righe di errore per prime e poche: la causa e' l'ULTIMA del journal,
+    # quindi mostrandolo in ordine finisce in fondo a un muro di INFO e in un
+    # incollaggio si perde.
+    - name: Raccogli gli ultimi log di rke2-server
+      shell: |
+        set -o pipefail
+        echo "### RIGHE DI ERRORE ###"
+        journalctl -u rke2-server --no-pager -n 300 -o cat 2>&1 \
+          | grep -iE 'level=(fatal|error)|bootstrap data|different token|flag provided but not defined|cannot unmarshal|yaml:|address already in use|panic:|Failed to' \
+          | tail -15 \
+          || echo "(nessuna riga di errore riconosciuta: guarda il contesto qui sotto)"
+        echo
+        echo "### ULTIME 20 RIGHE ###"
+        journalctl -u rke2-server --no-pager -n 20 -o cat 2>&1
+      args:
+        executable: /bin/bash
+      register: ks_journal
+      failed_when: false
+      changed_when: false
+
     - name: Spiega perche' il cluster non risponde
       fail:
-        msg: >-
-          kubectl c'e' ma l'API server di questo nodo non risponde dopo
-          {{ ks_api_retries | int * ks_api_delay | int }} secondi. Sul nodo:
-          "systemctl status rke2-server" e
-          "journalctl -u rke2-server -n 200". Ultimo errore visto:
-          {{ kubectl_test.stderr | default('nessuno') | trim }}
+        msg: |
+          kubectl c'e' ma l'API server di {{ inventory_hostname }} non risponde
+          dopo {{ ks_api_retries | int * ks_api_delay | int }} secondi.
+
+          {{ ks_journal.stdout | default('(journal non leggibile)') }}
+
+          Ultimo errore di kubectl: {{ kubectl_test.stderr | default('nessuno') | trim }}
+
+          SE SOPRA C'E' "bootstrap data already found and encrypted with
+          different token", il nodo ha ancora il datastore etcd di
+          un'installazione precedente e il token nuovo non lo apre. Non e' un
+          guasto di rete e non passa aspettando: la macchina va ripulita e
+          riagganciata.
+            ansible-playbook -i inventory.ini playbooks/20-rancher.yml \
+              -e clean_nodes_before_join=true --limit new_managers,workers
+            ansible-playbook -i inventory.ini playbooks/20-rancher.yml
+          Il --limit non e' facoltativo: senza, la pulizia azzera anche i master
+          che ospitano Rancher.
 
 - name: Nodi visti dal cluster downstream
   debug:
