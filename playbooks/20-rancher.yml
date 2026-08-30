@@ -184,31 +184,50 @@
 # restava cinque minuti ad aspettare macchine che non sarebbero mai arrivate.
 # STATO RKE2 RESIDUO SUI NODI DOWNSTREAM: SI GUARDA PRIMA DI AGGANCIARLI.
 #
-# Costa uno stat per nodo, e chiude un vicolo cieco da quaranta minuti.
+# Costa due stat per nodo, e chiude un vicolo cieco da un'ora.
 #
-# Che cosa succede senza. Il nodo si aggancia, Rancher gli installa RKE2, e
-# rke2-server muore all'avvio con
+# QUELLO CHE BLOCCA E' UNO SOLO: /var/lib/rancher/rke2/server/db, il datastore
+# etcd di un'installazione precedente. Rancher aggancia il nodo, gli installa
+# RKE2, e rke2-server muore all'avvio con
 #
 #   failed to bootstrap cluster data: failed to reconcile with local datastore:
 #   bootstrap data already found and encrypted with different token
 #
-# perche' in /var/lib/rancher/rke2/server/db c'e' ancora l'etcd di
-# un'installazione precedente, che il token nuovo non apre. Da qui in poi non
-# fallisce piu' niente in modo utile: "Verify nodes are registered" gira trenta
-# volte contando zero nodi, poi kubectl_setup ne gira altre sessanta aspettando
-# un API server che non arrivera' mai, e l'unica riga che spiega tutto sta nel
-# journal di un'ALTRA macchina.
+# perche' quel datastore e' cifrato con un token che non abbiamo piu'. E' un
+# fatal secco: non si recupera aspettando, e non c'e' nessun tentativo
+# successivo che lo aggiri. Da li' in poi non fallisce piu' niente in modo
+# utile — "Verify nodes are registered" gira trenta volte contando zero nodi,
+# kubectl_setup altre sessanta aspettando un API server che non arrivera' mai —
+# e l'unica riga che lo spiega resta nel journal di un'ALTRA macchina.
 #
-# Il residuo non e' un caso raro: e' la norma su una macchina riusata, e
-# sopravvive alla cancellazione del cluster in Rancher — quella tocca Rancher,
-# non i dischi dei nodi.
+# /var/lib/rancher/agent NON BLOCCA, e la distinzione e' costata un falso
+# allarme: le due cose erano finite sullo stesso piano e non ci stanno. Quella
+# directory e' l'identita' con cui il nodo si era registrato, e
+# system-agent-install.sh la riscrive quando il nodo si registra di nuovo. Vale
+# la pena dirlo — se il join fallisse con 401 mentre scarica la connection info,
+# e' il primo posto da guardare — ma fermare il playbook per una directory che
+# sta per essere sovrascritta vuol dire bloccare un nodo pulito.
 #
-# NON e' un controllo sui master: quelli il loro stato ce l'hanno di diritto,
-# e a questo punto del playbook sono un cluster in esercizio.
+# E' anche la ragione per cui la pulizia a mano non basta a farlo sparire:
+# rke2-killall.sh e rke2-uninstall.sh rimuovono /var/lib/rancher/rke2, non
+# /var/lib/rancher/agent — quella e' di rancher-system-agent-uninstall.sh. Un
+# nodo su cui sono stati lanciati i primi due E' pulito per quel che riguarda il
+# datastore, ed e' giusto che prosegua.
+#
+# CANCELLARE IL CLUSTER IN RANCHER non tocca niente di tutto questo: cancella un
+# oggetto in Rancher, non i dischi dei nodi.
+#
+# NON e' un controllo sui master: quelli il loro stato ce l'hanno di diritto, e
+# a questo punto del playbook sono un cluster in esercizio.
 - name: Stato RKE2 residuo sui nodi del cluster downstream
   hosts: new_managers,workers,ingress
   become: yes
   gather_facts: no
+  vars:
+    # Quanto insistere prima di dire che RKE2 non e' vivo. L'attesa serve solo
+    # nel caso stretto in cui il datastore c'e': vedi il commento sul task.
+    rke2_vivo_tentativi: 6
+    rke2_vivo_attesa: 10
   tasks:
     # Con la pulizia richiesta non c'e' niente da controllare: il play
     # clean_node_state e' gia' passato su questi stessi nodi poco fa.
@@ -216,88 +235,97 @@
       when: not (clean_nodes_before_join | default(false) | bool)
       block:
 
-        - name: Cerca lo stato di un'installazione RKE2 precedente
+        # Due stat separati e non un loop: sono due cose che portano a due
+        # conclusioni diverse, e tenerle distinte qui evita di doverle
+        # ridistinguere per indice piu' sotto — che e' esattamente il modo in
+        # cui erano state confuse.
+        - name: C'e' il datastore etcd di un'installazione precedente?
           stat:
-            path: "{{ item }}"
-          register: rke2_residuo
-          loop:
-            # L'etcd di un server. E' questo che produce l'errore sul token: il
-            # datastore c'e', ed e' cifrato con un segreto che non abbiamo piu'.
-            - /var/lib/rancher/rke2/server/db
-            # L'identita' agent di un Rancher precedente. Il nodo si ripresenta
-            # con il vecchio Cattle ID e prende 401 mentre scarica la
-            # connection info.
-            - /var/lib/rancher/agent
+            path: /var/lib/rancher/rke2/server/db
+          register: rke2_db
 
-        - name: Elenca quello che si e' trovato
-          set_fact:
-            rke2_residuo_trovato: >-
-              {{ rke2_residuo.results | default([])
-                 | selectattr('stat.exists', 'defined')
-                 | selectattr('stat.exists') | map(attribute='item') | list }}
+        - name: C'e' l'identita' agent di una registrazione precedente?
+          stat:
+            path: /var/lib/rancher/agent
+          register: rke2_agent_dir
 
-        # QUELLO STATO PUO' ESSERE LEGITTIMO, ed e' la differenza che questo
-        # controllo deve saper fare: su un cluster downstream GIA' IN PIEDI il
-        # datastore etcd esiste di diritto: e' il suo. Un controllo che guarda
-        # solo il disco bloccherebbe ogni ri-esecuzione del playbook su un
-        # cluster sano — cioe' romperebbe l'idempotenza per prevenire un
-        # guasto.
+        # AVVISO, NON BLOCCO. Il nodo prosegue.
+        - name: Avvisa dell'identita' agent rimasta da una registrazione precedente
+          debug:
+            msg: >-
+              {{ inventory_hostname }}: /var/lib/rancher/agent c'e' ancora, da
+              una registrazione precedente. Non e' un problema e il playbook
+              prosegue: system-agent-install.sh la riscrive registrando di
+              nuovo il nodo. Se pero' il join fallisse con 401 mentre scarica
+              la connection info, e' li' che va guardato — si toglie con
+              "rm -rf /var/lib/rancher/agent" oppure con
+              /usr/local/bin/rancher-system-agent-uninstall.sh, che
+              rke2-uninstall.sh non copre.
+          when:
+            - rke2_agent_dir.stat.exists
+            - not rke2_db.stat.exists
+
+        # IL DATASTORE PUO' ESSERE LEGITTIMO, ed e' la differenza che questo
+        # controllo deve saper fare: su un cluster downstream GIA' IN PIEDI
+        # quel datastore e' il suo. Un controllo che guarda solo il disco
+        # bloccherebbe ogni ri-esecuzione del playbook su un cluster sano,
+        # cioe' romperebbe l'idempotenza per prevenire un guasto.
         #
         # A distinguere e' il SERVIZIO: se rke2-server o rke2-agent sono attivi,
-        # quello stato appartiene a un'installazione viva e non si tocca. Se non
-        # lo e' nessuno dei due, sul disco c'e' il residuo di un'installazione
-        # morta, ed e' la trappola.
+        # quel datastore appartiene a un'installazione viva e non si tocca.
         #
-        # Con retry, perche' "activating" e' lo stato normale di un rke2-server
-        # riavviato un istante fa: senza attesa, un nodo sano ricontrollato nel
-        # momento sbagliato risulterebbe morto. Un minuto di margine — che e'
-        # comunque un quarantesimo di quello che costa scoprirlo dopo.
-        - name: Verifica se su questi nodi RKE2 e' vivo
+        # L'attesa sta DENTRO allo script e non nell'until di Ansible, per due
+        # ragioni. Serve perche' "activating" e' lo stato normale di un
+        # rke2-server riavviato un istante fa, e senza margine un nodo sano
+        # ricontrollato nel momento sbagliato risulterebbe morto. E sta li'
+        # dentro perche' l'until stampava sei "FAILED - RETRYING" e un [ERROR]
+        # rosso su un nodo dove non c'era niente che non andasse: rumore che
+        # somiglia a un guasto proprio mentre se ne sta cercando uno.
+        - name: Verifica se RKE2 e' vivo su questo nodo
           shell: |
-            for u in rke2-server rke2-agent; do
-              if [ "$(systemctl is-active "$u" 2>/dev/null)" = "active" ]; then
-                echo "$u"; exit 0
+            for i in $(seq 1 {{ rke2_vivo_tentativi }}); do
+              for u in rke2-server rke2-agent; do
+                if [ "$(systemctl is-active "$u" 2>/dev/null)" = "active" ]; then
+                  echo "$u"
+                  exit 0
+                fi
+              done
+              if [ "$i" -lt {{ rke2_vivo_tentativi }} ]; then
+                sleep {{ rke2_vivo_attesa }}
               fi
             done
-            exit 1
+            exit 0
           args:
             executable: /bin/bash
           register: rke2_unit_viva
-          until: rke2_unit_viva.rc == 0
-          retries: 6
-          delay: 10
           changed_when: false
-          failed_when: false
-          when: rke2_residuo_trovato | length > 0
+          when: rke2_db.stat.exists
 
         - name: Il nodo fa gia' parte di un cluster RKE2 attivo
           debug:
             msg: >-
               {{ inventory_hostname }}: {{ rke2_unit_viva.stdout | trim }} e'
-              attivo, quindi lo stato in
-              {{ rke2_residuo_trovato | join(' e ') }} e' suo e non si tocca.
-              Il playbook prosegue: sui pezzi gia' fatti e' idempotente.
+              attivo, quindi il datastore etcd in
+              /var/lib/rancher/rke2/server/db e' suo e non si tocca. Il playbook
+              prosegue: sui pezzi gia' fatti e' idempotente.
           when:
-            - rke2_residuo_trovato | length > 0
-            - rke2_unit_viva.rc | default(1) == 0
+            - rke2_db.stat.exists
+            - (rke2_unit_viva.stdout | default('') | trim) | length > 0
 
-        - name: Fermati se il nodo porta il residuo di un'installazione morta
+        - name: Fermati se il nodo porta un datastore etcd che non e' di nessuno
           fail:
             msg: |
-              {{ inventory_hostname }} ({{ ansible_host }}) porta lo stato di
-              un'installazione RKE2 precedente, e nessun RKE2 e' in esecuzione
-              qui adesso:
-
-              {% for p in rke2_residuo_trovato %}
-                {{ p }}
-              {% endfor %}
+              {{ inventory_hostname }} ({{ ansible_host }}) ha
+              /var/lib/rancher/rke2/server/db — il datastore etcd di
+              un'installazione RKE2 precedente — e nessun RKE2 in esecuzione a
+              cui possa appartenere.
 
               Agganciandolo cosi', Rancher gli installa RKE2 e rke2-server muore
-              all'avvio — "bootstrap data already found and encrypted with
-              different token" per il datastore, 401 sulla connection info per
-              l'identita' agent. Il playbook non se ne accorgerebbe subito:
+              all'avvio con "bootstrap data already found and encrypted with
+              different token": quel datastore e' cifrato con un token che non
+              abbiamo piu'. Il playbook non se ne accorgerebbe subito —
               continuerebbe a contare zero nodi per mezz'ora prima di arrendersi,
-              e l'unica riga che lo spiega resterebbe nel journal di quel nodo.
+              e l'unica riga che lo spiega resterebbe nel journal di questo nodo.
 
               CANCELLARE IL CLUSTER IN RANCHER NON BASTA: quello cancella
               l'oggetto in Rancher, non i dischi di questa macchina.
@@ -311,9 +339,13 @@
               IL --limit NON E' FACOLTATIVO: clean_node_state gira su [masters]
               piu' i gruppi downstream, quindi senza limite la pulizia
               azzererebbe anche i tre master che ospitano Rancher.
+
+              A mano, sul nodo, l'equivalente e':
+                /usr/local/bin/rke2-killall.sh
+                /usr/local/bin/rke2-uninstall.sh
           when:
-            - rke2_residuo_trovato | length > 0
-            - rke2_unit_viva.rc | default(1) != 0
+            - rke2_db.stat.exists
+            - (rke2_unit_viva.stdout | default('') | trim) | length == 0
 
 
 - name: Cluster downstream
