@@ -4,3 +4,12 @@
 # questo valore. NON scrivere qui helm_version: "{{ helm_version }}":
 # e' un riferimento circolare e Ansible lo risolve come recursive loop.
 helm_version: "v3.11.0"
+
+# Quanto aspettare che il deployment Rancher diventi disponibile dopo
+# helm upgrade --install. Se scade, il ruolo raccoglie diagnostica e si ferma:
+# proseguire verso le API Rancher produrrebbe solo un 503 meno utile.
+rancher_ready_timeout: "{{ helm_timeout | default('15m') }}"
+
+# Numero di righe di log da mostrare per ogni pod Rancher quando il rollout non
+# diventa pronto.
+rancher_diag_log_tail: 160

@@ -1,6 +1,6 @@
 ---
 - name: Add Rancher Helm repository
-  command: helm repo add rancher-stable https://releases.rancher.com/server-charts/stable
+  command: helm repo add rancher-stable https://releases.rancher.com/server-charts/stable --force-update
 
 # "kubectl create" su un namespace che c'e' gia' esce 1 con AlreadyExists, e
 # senza questo il secondo run del playbook si fermava qui. Non si usa
@@ -118,8 +118,82 @@
   no_log: "{{ rancher_hide_secrets | bool }}"
 
 - name: Wait for Rancher to be ready
-  command: kubectl -n cattle-system wait --for=condition=ready pod -l app=rancher --timeout=600s
-  ignore_errors: yes
+  block:
+    # Si aspetta il deployment, non i pod scelti una volta sola dal selector:
+    # durante un upgrade possono esistere pod vecchi in terminazione, mentre il
+    # deployment e' l'oggetto che dice se Rancher ha davvero completato il
+    # rollout. Se non diventa disponibile ci si ferma qui, perche' la fase
+    # successiva parlerebbe con l'API Rancher e cadrebbe con un 503 generico.
+    - name: Attendi il rollout del deployment Rancher
+      command: >-
+        kubectl -n cattle-system rollout status deployment/rancher
+        --timeout={{ rancher_ready_timeout }}
+      register: rancher_rollout
+      changed_when: false
+
+  rescue:
+    - name: Diagnostica deployment Rancher
+      shell: |
+        set -o pipefail
+        echo "### DEPLOYMENT ###"
+        kubectl -n cattle-system get deployment rancher -o wide 2>&1 || true
+        echo
+        echo "### REPLICASET ###"
+        kubectl -n cattle-system get rs -l app=rancher -o wide 2>&1 || true
+        echo
+        echo "### POD ###"
+        kubectl -n cattle-system get pods -l app=rancher -o wide 2>&1 || true
+        echo
+        echo "### SERVICE / ENDPOINT ###"
+        kubectl -n cattle-system get svc rancher -o wide 2>&1 || true
+        kubectl -n cattle-system get endpoints rancher -o wide 2>&1 || true
+        echo
+        echo "### INGRESS / INGRESSCLASS ###"
+        kubectl -n cattle-system get ingress rancher -o wide 2>&1 || true
+        kubectl get ingressclass 2>&1 || true
+        echo
+        echo "### EVENTI CATTLE-SYSTEM ###"
+        kubectl -n cattle-system get events --sort-by=.lastTimestamp 2>&1 | tail -80 || true
+        echo
+        echo "### DESCRIBE POD RANCHER ###"
+        kubectl -n cattle-system describe pods -l app=rancher 2>&1 || true
+      args:
+        executable: /bin/bash
+      register: rancher_diagnostics
+      changed_when: false
+      failed_when: false
+
+    - name: Log dei pod Rancher
+      shell: |
+        set -o pipefail
+        for pod in $(kubectl -n cattle-system get pods -l app=rancher -o name 2>/dev/null); do
+          echo "### ${pod}: log corrente ###"
+          kubectl -n cattle-system logs "$pod" --all-containers=true --tail={{ rancher_diag_log_tail }} 2>&1 || true
+          echo
+          echo "### ${pod}: log precedente ###"
+          kubectl -n cattle-system logs "$pod" --previous --all-containers=true --tail={{ rancher_diag_log_tail }} 2>&1 || true
+          echo
+        done
+      args:
+        executable: /bin/bash
+      register: rancher_logs
+      changed_when: false
+      failed_when: false
+
+    - name: Fermati spiegando perche' Rancher non e' pronto
+      fail:
+        msg: |
+          Rancher non e' diventato disponibile entro {{ rancher_ready_timeout }}.
+
+          Questo e' il punto in cui il playbook deve fermarsi: se prosegue, le
+          chiamate del ruolo master1_create_cluster arrivano a un Rancher non
+          pronto e falliscono con "HTTP Error 503: Service Unavailable".
+
+          Stato Kubernetes:
+          {{ rancher_diagnostics.stdout | default('(diagnostica non disponibile)') }}
+
+          Log Rancher:
+          {{ rancher_logs.stdout | default('(log non disponibili)') }}
 
 - name: Check Rancher pod status
   command: kubectl -n cattle-system get pods -l app=rancher
