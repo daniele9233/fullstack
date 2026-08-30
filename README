@@ -359,22 +359,35 @@ Il sintomo, e quanto costa leggerlo male:
 
 La causa e' semplice: in /var/lib/rancher/rke2/server/db c'e' ancora l'etcd di
 un'installazione precedente, cifrato con un token che non abbiamo piu'. Il token
-nuovo non lo apre e rke2-server si rifiuta di partire. La variante sull'identita'
-agent (/var/lib/rancher/agent, vecchio Cattle ID) da' invece 401 mentre scarica
-la connection info.
+nuovo non lo apre e rke2-server si rifiuta di partire. E' un fatal secco: non si
+recupera aspettando.
 
 CANCELLARE IL CLUSTER IN RANCHER NON RISOLVE: quello cancella l'oggetto in
 Rancher, non i dischi dei nodi. E' il motivo per cui il residuo sopravvive a
 tutto quello che si fa dalla console.
 
-Adesso il playbook lo guarda PRIMA di agganciare i nodi — costa uno stat a nodo
-— e si ferma con il comando da dare. Il controllo sa distinguere il residuo di
+Adesso il playbook lo guarda PRIMA di agganciare i nodi — due stat a nodo — e si
+ferma con il comando da dare. Il controllo sa distinguere il residuo di
 un'installazione morta da un cluster downstream sano, dove quel datastore esiste
-di diritto: se rke2-server o rke2-agent sono attivi sul nodo, lo stato e' loro e
-non si tocca. Anche il rescue di kubectl_setup adesso porta il journal dentro al
-playbook invece di mandare a cercarlo sul nodo.
+di diritto: se rke2-server o rke2-agent sono attivi sul nodo, il datastore e'
+loro e non si tocca. Anche il rescue di kubectl_setup porta adesso il journal
+dentro al playbook invece di mandare a cercarlo sul nodo.
 
-La cura, in due passi:
+/var/lib/rancher/agent E' UN'ALTRA COSA, E NON BLOCCA. Le due erano finite sullo
+stesso piano, ed e' costato un falso allarme su nodi puliti. Quella directory e'
+l'identita' con cui il nodo si era registrato, e system-agent-install.sh la
+riscrive quando il nodo si registra di nuovo: il playbook lo dice e prosegue. Va
+guardata solo se il join fallisce con 401 mentre scarica la connection info —
+tipicamente quando il Rancher davanti e' un ALTRO Rancher, che quel Cattle ID
+non lo riconosce. Si toglie con "rm -rf /var/lib/rancher/agent" o con
+/usr/local/bin/rancher-system-agent-uninstall.sh.
+
+E' anche il motivo per cui la pulizia a mano non la fa sparire: rke2-killall.sh
+e rke2-uninstall.sh rimuovono /var/lib/rancher/rke2, non /var/lib/rancher/agent.
+Un nodo su cui sono stati lanciati quei due E' pulito per quel che riguarda il
+datastore, e il playbook deve lasciarlo passare.
+
+La cura, quando a bloccare e' il datastore, in due passi:
 
   ansible-playbook -i inventory.ini playbooks/20-rancher.yml \
     -e clean_nodes_before_join=true --limit new_managers,workers,ingress
