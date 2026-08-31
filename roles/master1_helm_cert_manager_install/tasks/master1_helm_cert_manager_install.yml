@@ -105,26 +105,13 @@
     --set hostname={{ rancher_domain }}
     {% if rancher_release.rc != 0 %}--set bootstrapPassword={{ rancher_password }}{% endif %}
     --version {{ rancher_version }}
-    --set replicas={{ rancher_replicas }}
     --set ingress.tls.source=secret
     {% if rancher_ingress_class | default('') | trim | length > 0 %}--set ingress.ingressClassName={{ rancher_ingress_class | trim }}{% endif %}
     --set privateCA=true
-    --set startupProbe.timeoutSeconds={{ rancher_startup_probe_timeout_seconds }}
-    --set startupProbe.periodSeconds={{ rancher_startup_probe_period_seconds }}
-    --set startupProbe.failureThreshold={{ rancher_startup_probe_failure_threshold }}
-    --set livenessProbe.timeoutSeconds={{ rancher_liveness_probe_timeout_seconds }}
-    --set livenessProbe.periodSeconds={{ rancher_liveness_probe_period_seconds }}
-    --set livenessProbe.failureThreshold={{ rancher_liveness_probe_failure_threshold }}
-    --set readinessProbe.timeoutSeconds={{ rancher_readiness_probe_timeout_seconds }}
-    --set readinessProbe.periodSeconds={{ rancher_readiness_probe_period_seconds }}
-    --set readinessProbe.failureThreshold={{ rancher_readiness_probe_failure_threshold }}
-    {% for helm_set in rancher_extra_helm_set | default([]) %}
-    --set {{ helm_set }}
-    {% endfor %}
   register: rancher_helm
-  changed_when: >-
-    rancher_release.rc != 0
-    or ('has been upgraded' in (rancher_helm.stdout | default('')))
+  # changed solo alla prima installazione. Un upgrade che non cambia niente
+  # incrementa comunque la revision di Helm, ma non tocca i pod.
+  changed_when: rancher_release.rc != 0
   # bootstrapPassword finirebbe in chiaro in ansible.log, che ansible.cfg
   # scrive sempre. Per vedere l'output durante una diagnosi:
   #   -e rancher_hide_secrets=false
