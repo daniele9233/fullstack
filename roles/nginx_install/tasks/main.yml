@@ -36,6 +36,30 @@
     group: root
     mode: '0755'
 
+- name: Calcola i backend nginx dall'inventario
+  set_fact:
+    nginx_rancher_backend_hosts: "{{ groups.get('masters', []) }}"
+    nginx_ingress_backend_hosts: "{{ groups.get('ingress', []) }}"
+    nginx_multi_services_enabled: "{{ (groups.get('ingress', []) | length) > 0 }}"
+
+- name: Verifica che ci siano backend per la console Rancher
+  assert:
+    that:
+      - nginx_rancher_backend_hosts | length > 0
+    fail_msg: >-
+      Il gruppo [masters] dell'inventario e' vuoto: nginx non puo' generare
+      l'upstream rancher_servers_https per {{ nginx_server_name }}.
+    success_msg: >-
+      Backend Rancher configurati:
+      {{ nginx_rancher_backend_hosts | join(', ') }}.
+
+- name: Avvisa che i servizi downstream non verranno pubblicati
+  debug:
+    msg: >-
+      Il gruppo [ingress] dell'inventario e' vuoto: nginx configura solo la
+      console Rancher. Il server block multi-servizi non viene installato.
+  when: not (nginx_multi_services_enabled | bool)
+
 - name: Copy SSL certificate to remote server
   copy:
     src: "{{ local_ssl_cert_path }}"
@@ -93,6 +117,14 @@
   loop:
     - rancher-console.conf
     - rancher-ingress.conf
+  when: item != 'rancher-ingress.conf' or (nginx_multi_services_enabled | bool)
+  notify: restart nginx
+
+- name: Rimuovi il server block multi-servizi senza backend ingress
+  file:
+    path: "{{ nginx_conf_http_dir }}/rancher-ingress.conf"
+    state: absent
+  when: not (nginx_multi_services_enabled | bool)
   notify: restart nginx
 
 - name: Deploy Nginx configuration from template
@@ -126,6 +158,23 @@
   systemd:
     name: nginx
     enabled: false
+  when: nginx_managed_by_keepalived | bool
+
+- name: Leggi gli indirizzi del nodo per capire dove sta il VIP Rancher
+  command: ip -o addr show
+  register: nginx_addr_show
+  changed_when: false
+  when: nginx_managed_by_keepalived | bool
+
+- name: Allinea nginx allo stato del VIP Rancher
+  systemd:
+    name: nginx
+    enabled: false
+    state: >-
+      {{ 'started'
+         if ((vip_rancher_ip ~ '/' ~ (vip_rancher_prefix | string))
+             in (nginx_addr_show.stdout | default('')))
+         else 'stopped' }}
   when: nginx_managed_by_keepalived | bool
 
 - name: Enable and start Nginx service

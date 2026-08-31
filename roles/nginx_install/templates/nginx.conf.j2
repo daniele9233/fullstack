@@ -1,4 +1,6 @@
 {{ '#' }} {{ ansible_managed }} - roles/nginx_install
+{% set rancher_backend_hosts = nginx_rancher_backend_hosts | default(groups.get('masters', [])) %}
+{% set ingress_backend_hosts = nginx_ingress_backend_hosts | default(groups.get('ingress', [])) %}
 {% if nginx_load_stream_module %}
 load_module {{ nginx_stream_module_path }};
 {% endif %}
@@ -20,20 +22,21 @@ http {
     upstream rancher_servers_https {
         #least_conn;
 
-{% for host in groups['masters'] %}
+{% for host in rancher_backend_hosts %}
         server {{ hostvars[host].ansible_host }}:{{ rancher_https_port }} max_fails={{ nginx_upstream_max_fails }} fail_timeout={{ nginx_upstream_fail_timeout }};
 {% endfor %}
     }
 
-
+{% if ingress_backend_hosts | length > 0 %}
     {{ '#' }} Upstream generati dal gruppo [ingress] dell'inventario.
     upstream rancher_ingress_https {
         #least_conn;
 
-{% for host in groups['ingress'] %}
+{% for host in ingress_backend_hosts %}
         server {{ hostvars[host].ansible_host }}:{{ ingress_https_port }} max_fails={{ nginx_upstream_max_fails }} fail_timeout={{ nginx_upstream_fail_timeout }};
 {% endfor %}
     }
+{% endif %}
 
     server {
         listen 80 default_server;

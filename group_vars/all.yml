@@ -563,10 +563,11 @@ rancher_https_port: 443
 nginx_upstream_max_fails: 3
 nginx_upstream_fail_timeout: "5s"
 
-# Anche l'upstream verso gli ingress deriva dal gruppo [ingress]. Prima erano
-# tre variabili separate (rancher_ingress_https, _1, _2) con un solo server
-# ciascuna, e una sola veniva referenziata da proxy_pass: il secondo nodo
-# ingress non riceveva traffico.
+# Anche l'upstream verso gli ingress deriva dal gruppo [ingress]. Se il gruppo
+# e' vuoto, il ruolo nginx non genera quell'upstream e non installa il server
+# block multi-servizi: il bilanciatore resta valido per la sola console Rancher.
+# Quando si aggiungono nodi ingress dedicati, il secondo e i successivi entrano
+# automaticamente nel bilanciamento.
 ingress_https_port: 443
 
 # Configurazione Nginx

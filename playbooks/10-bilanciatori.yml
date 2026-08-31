@@ -5,9 +5,9 @@
 #   ansible-playbook playbooks/10-bilanciatori.yml
 #
 # L'INVENTARIO DEVE RESTARE COMPLETO anche lanciando solo questo playbook:
-# haproxy.cfg.j2 genera i backend da [db_servers] e nginx.conf.j2 gli upstream
-# da [masters] e [ingress]. Con quei gruppi commentati la configurazione nasce
-# monca senza che niente fallisca.
+# haproxy.cfg.j2 genera i backend da [db_servers] e nginx.conf.j2 l'upstream
+# della console da [masters]. Il gruppo [ingress] e' facoltativo: se e' vuoto,
+# nginx pubblica solo la console Rancher e salta il server block multi-servizi.
 
 - name: Prepara i bilanciatori
   hosts: nginx_servers
