@@ -1416,9 +1416,20 @@ es_cert_key_size: 4096
 # https://localhost:9200" fallisce la verifica del certificato anche quando
 # tutto e' a posto. Sono per-nodo: nel cluster ogni istanza di cert.yml li
 # prende dal proprio host.
+#
+# elk-svc E' OBBLIGATORIO, su OGNI nodo: e' il nome con cui i client
+# raggiungono Elasticsearch (il servizio, non il singolo nodo), e chi verifica
+# il certificato lo confronta con quel nome. Un nodo senza elk-svc nel SAN
+# risponde con un certificato "sbagliato" a chiunque lo chiami cosi' — e con
+# tre nodi dietro lo stesso nome, un client su tre fallirebbe a caso. Non e'
+# un nome per nodo, e' lo stesso su tutti e tre.
+#
+# Cambiare questa lista a certificati gia' generati non li tocca: servono
+# es_force_regenerate_certs=true e la nuova CA nei client.
 es_cert_dns_names:
   - "{{ es_node_name }}"
   - "{{ inventory_hostname }}"
+  - "elk-svc"
   - "localhost"
 es_cert_ip_addresses:
   - "{{ es_node_ip }}"

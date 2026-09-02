@@ -1460,6 +1460,12 @@ playbook ma viene segnalato con il comando per vedere quali shard; red ferma.
                         avvio: dopo si cambia solo fermando tutti i nodi
   es_ca_dn              "CN=SINTESI2 PUGLIA PROD", l'emittente di ogni
                         certificato del cluster
+  es_cert_dns_names     il SAN di ogni certificato: nome del nodo, elk-svc,
+                        localhost. elk-svc e' il nome con cui i client
+                        raggiungono il servizio e DEVE stare su tutti e tre i
+                        nodi: e' lo stesso nome davanti a tre macchine. Un
+                        FQDN dei nodi o del bilanciatore va aggiunto qui PRIMA
+                        del primo giro, dopo vuol dire rigenerare i certificati
   es_version            FISSATA. Con es_version vuota ogni nodo prende
                         "l'ultima" nel momento in cui gli tocca, e tre nodi
                         installati a giorni di distanza possono avere tre
