@@ -1,0 +1,28 @@
+{{ ansible_managed | comment }}
+# File "instances" letto da elasticsearch-certutil cert --in, sul primo nodo.
+#
+# E' il /root/cert.yml della procedura a mano — quello con le tre istanze —
+# qui generato dall'inventario. Contiene SOLO i nodi a cui il certificato va
+# generato adesso (esc_istanze_da_generare): tutti al primo giro, nessuno a
+# cluster fatto, uno solo quando si rifa' un nodo.
+#
+# Il nome dell'istanza decide sia la directory prodotta dentro allcert.zip
+# (<nodo>/<nodo>.crt e .key) sia i percorsi che quel nodo scrivera' nel proprio
+# elasticsearch.yml; nomi e indirizzi decidono il SAN, e vengono dall'host a
+# cui appartengono (hostvars), non da questo.
+#
+# Un SAN che non contiene l'indirizzo su cui il nodo ascolta si vede solo
+# quando un client con verifica del nome attiva rifiuta la connessione, e
+# l'errore parla di hostname, non di certificato sbagliato.
+instances:
+{% for h in esc_istanze_da_generare %}
+  - name: "{{ hostvars[h].es_node_name }}"
+    dns:
+{% for nome in hostvars[h].es_cert_dns_names | unique %}
+      - "{{ nome }}"
+{% endfor %}
+    ip:
+{% for indirizzo in hostvars[h].es_cert_ip_addresses | unique %}
+      - "{{ indirizzo }}"
+{% endfor %}
+{% endfor %}

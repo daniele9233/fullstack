@@ -48,6 +48,12 @@
 #    Nel file fornito e' commentato. Mettendolo a true qui, il ruolo aggiunge
 #    anche LimitMEMLOCK=infinity alla unit systemd: senza, il nodo NON parte e
 #    l'errore parla di memory locking, non del limite di systemd.
+#
+# NIENTE defaults/: tutte le variabili es_* stanno in group_vars/all.yml,
+# sezione ELASTICSEARCH, e sono le stesse che usa il ruolo elasticsearch_cluster.
+# Quel ruolo INCLUDE install.yml e credenziali.yml da qui (include_role con
+# tasks_from): sono i due pezzi in cui la procedura del cluster e' identica a
+# questa riga per riga. Una modifica a quei due file vale per tutti e due.
 
 - name: Controlli preliminari
   import_tasks: controlli.yml

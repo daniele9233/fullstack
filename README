@@ -1011,12 +1011,14 @@ Il pacchetto e' il deb ufficiale dal repo artifacts.elastic.co, serie 9.x, e si
 porta dietro la propria JVM: qui non si installa Java, che e' la differenza
 principale rispetto al ruolo di Kafka.
 
-Le variabili stanno tutte in group_vars/all.yml, nella sezione in fondo. I
-defaults del ruolo (roles/elasticsearch_node/defaults/main.yml) sono valori di
-ripiego: group_vars ha precedenza.
+Le variabili stanno TUTTE in group_vars/all.yml, sezione ELASTICSEARCH, e
+sono le stesse del ruolo cluster (vedi piu' sotto). Il ruolo NON ha una
+cartella defaults/: una variabile che manca in group_vars ferma il playbook
+con "undefined variable" invece di prendere un valore di ripiego che nessuno
+ha scelto.
 
 
-  PER ORA UN NODO SOLO, E NON E' UN DETTAGLIO DI INVENTARIO
+  UN NODO SOLO, E NON E' UN DETTAGLIO DI INVENTARIO
 
 discovery.type e' single-node: il nodo si elegge master da solo e non cerca
 nessuno. Mettendo due host in [elastic_servers] non si otterrebbe un cluster a
@@ -1024,8 +1026,10 @@ due nodi ma DUE CLUSTER separati, con lo stesso nome, ognuno con meta' dei
 dati — un guasto che si scopre settimane dopo. Il ruolo si ferma prima,
 dicendo quanti host ha trovato.
 
-Per un cluster vero servono discovery.seed_hosts, cluster.initial_master_nodes
-e un numero dispari di master: non c'e' ancora.
+Per un cluster vero c'e' il gruppo [elastic_cluster_servers] e il ruolo
+elasticsearch_cluster, nella sezione "ELASTICSEARCH 9 IN CLUSTER" qui sotto:
+stessa procedura, con discovery.seed_hosts, cluster.initial_master_nodes e un
+numero dispari di master.
 
 
   CHE COSA VA SISTEMATO PRIMA DI LANCIARE
@@ -1350,6 +1354,138 @@ completo e' in /var/log/elasticsearch/<nome del cluster>.log.
 5. path.repo NON viene montato, solo creato.
    Le directory degli snapshot nascono con il proprietario giusto, ma il mount
    resta a carico dell'operatore, come tutti i dischi di questo repository.
+
+
+ELASTICSEARCH 9 IN CLUSTER
+
+  ansible-playbook -i inventory.ini playbooks/61-elasticsearch-cluster.yml
+
+Tre nodi — o un numero DISPARI maggiore — nel gruppo [elastic_cluster_servers],
+tutti [master, data, ingest], sicurezza attiva e TLS su entrambe le porte,
+certificati firmati da una CA interna. E' la procedura del nodo singolo
+applicata a tre macchine: stesso pacchetto, stessi percorsi, stessi
+certificati, stesse password, e quindi le STESSE variabili es_* di
+group_vars/all.yml. Quello che e' solo del cluster ha il prefisso esc_, nello
+stesso file. Nessuno dei due ruoli ha una cartella defaults/.
+
+
+  STESSA PROCEDURA: NON E' UNA PROMESSA, E' UNA PROPRIETA' DEL CODICE
+
+I due pezzi in cui il cluster e' identico al nodo singolo riga per riga non
+sono copiati nel ruolo cluster: sono INCLUSI da elasticsearch_node con
+include_role e tasks_from.
+
+  install.yml       chiave e repository Elastic, pacchetto, hold di apt,
+                    directory, vm.max_map_count
+  credenziali.yml   kibana_system e il file elk_credentials.txt, che nel
+                    cluster gira SUL PRIMO NODO SOLTANTO
+
+Una correzione fatta la' vale anche qui, e non puo' essere dimenticata. Il
+resto — controlli, certificati, configurazione, avvio, verifica — e' del ruolo
+cluster, perche' li' i tre nodi cambiano davvero le cose. Per vedere ESATTAMENTE
+che cosa cambia:
+
+  diff -r roles/elasticsearch_node/tasks roles/elasticsearch_cluster/tasks
+  diff -r roles/elasticsearch_node/templates roles/elasticsearch_cluster/templates
+
+
+  CHE COSA CAMBIA, E PERCHE'
+
+IL PRIMO NODO DEL GRUPPO FA DA CA. E' la sezione 2.10.3 della procedura a
+mano: certutil ca su elasticinfra01, poi certutil cert con un cert.yml che
+elenca le tre istanze, poi allcert.zip copiato sugli altri e "eliminare i
+certificati non di pertinenza del nodo". Qui la consegna non passa da zip:
+ogni altro nodo legge dal primo SOLO i propri tre file (ca.crt, <nodo>.crt,
+<nodo>.key) e li scrive da se', e sul primo i certificati altrui vengono tolti
+subito dopo. Due differenze volute rispetto alla procedura:
+
+  - ca.key resta sul primo nodo. La procedura copia ca.zip — con dentro la
+    chiave privata della CA — su tutti e tre. Agli altri serve solo ca.crt:
+    con la chiave, chi entra in uno qualsiasi dei tre puo' firmarsi
+    certificati validi per tutto il cluster.
+  - niente da eliminare dopo, perche' niente di altrui e' mai arrivato.
+
+L'ORDINE DELLE RIGHE NELL'INVENTARIO CONTA per questo: riordinarle a cluster
+fatto non lo rompe, ma sposta il "primo nodo" su una macchina che la CA non ce
+l'ha, e il prossimo nodo da aggiungere non avrebbe chi gli firma il
+certificato. Si genera solo quello che manca: un nodo rifatto riceve un
+certificato nuovo firmato dalla stessa CA e gli altri due non se ne accorgono;
+se e' la CA a mancare (o es_force_regenerate_certs=true) si rigenera tutto, e
+ogni client che aveva importato la vecchia smette di collegarsi.
+
+DISCOVERY. Niente discovery.type: discovery.seed_hosts con i tre indirizzi
+sulla 9300, derivati dall'inventario, e cluster.initial_master_nodes con i
+node.name di chi ha "master" fra i ruoli.
+
+cluster.initial_master_nodes SI SCRIVE SOLO AL BOOTSTRAP. La documentazione
+Elastic e' esplicita: formato il cluster, quella riga va tolta e mai piu'
+rimessa — lasciandola, un nodo che un giorno perde i dati e riparte potrebbe
+formare un cluster NUOVO invece di rientrare nel vecchio. Il ruolo la scrive
+quando il nodo non ha ancora un cluster alle spalle, e la toglie da
+elasticsearch.yml appena la verifica finale ha visto tutti i nodi insieme con
+un solo cluster_uuid — senza riavviare, perche' viene letta solo all'avvio. Se
+ne ricorda con /etc/elasticsearch/.cluster_bootstrapped (esc_bootstrap_marker):
+marker presente E dati presenti = riga omessa; in ogni altro caso torna, e il
+nodo la usa solo se anche gli altri sono da bootstrappare.
+
+AVVIO. Il primo e' di TUTTI INSIEME: un cluster nuovo si forma solo quando i
+master si vedono, e un nodo avviato da solo aspetta gli altri senza rispondere
+a niente. I riavvii successivi sono UNO ALLA VOLTA, in ordine di inventario,
+aspettando che il nodo sia rientrato nel cluster con tutti gli altri prima di
+toccare il successivo — lo stesso schema del ruolo Kafka. Tre nodi riavviati
+insieme sono un cluster fermo.
+
+bootstrap.password va nel keystore di TUTTI i nodi, uguale: l'indice di
+sicurezza lo crea il primo master eletto, e non si sa in anticipo quale sara'.
+Il reset esplicito (es_force_reset_elastic_password) gira sul primo nodo e vale
+per tutti: le password stanno nell'indice, che e' del cluster.
+
+VERIFICA. Da ogni nodo: _cluster/health con TUTTI i nodi e uno stato
+accettabile, la versione giusta e uguale su tutti. Poi la prova che sono un
+cluster: lo STESSO cluster_uuid su tutti e tre. Tre nodi singoli con lo stesso
+cluster.name rispondono ciascuno "green, 1 nodo" e hanno tre uuid diversi: e'
+il guasto contro cui il ruolo del nodo singolo mette in guardia, e questo e'
+l'unico controllo che lo vede. green e' lo stato atteso; yellow non ferma il
+playbook ma viene segnalato con il comando per vedere quali shard; red ferma.
+
+
+  CHE COSA VA SISTEMATO PRIMA DI LANCIARE
+
+  inventory.ini         i tre host di [elastic_cluster_servers], commentati:
+                        sono gli IP della procedura fornita, e NEL DOCUMENTO
+                        elasticinfra02 ed elasticinfra03 HANNO LO STESSO
+                        INDIRIZZO (10.109.11.135). E' un refuso: il ruolo si
+                        ferma se due nodi hanno lo stesso IP. Nell'inventario
+                        il terzo e' .136 per ipotesi, da confermare
+  es_cluster_name       nome del cluster
+  es_ca_dn              il DN della CA: la procedura usa "CN=ASL BRINDISI PROD"
+  es_version            FISSATA. Con es_version vuota ogni nodo prende
+                        "l'ultima" nel momento in cui gli tocca, e tre nodi
+                        installati a giorni di distanza possono avere tre
+                        versioni diverse. La verifica finale se ne accorge e
+                        si ferma
+  es_repo_dirs          in cluster DEVE essere una share vista uguale da tutti
+                        i nodi: un repository di snapshot "fs" con tre
+                        directory locali non funziona
+  es_elastic_password   password dell'utente elastic. CAMBIALA
+  es_data_dir           il disco dati, montato a mano su ogni nodo
+
+Con il gruppo vuoto il playbook non fa niente. Un host che sta anche in
+[elastic_servers] ferma il playbook: un nodo e' o singolo o in cluster.
+
+
+  RIFARE IL CLUSTER DA ZERO
+
+Non e' una variante del playbook, e' distruttivo, quindi si fa a mano:
+
+  systemctl stop elasticsearch          # su tutti e tre
+  rm -rf /opt/esdata/*                  # su tutti e tre (es_data_dir)
+  rm -f /etc/elasticsearch/.cluster_bootstrapped   # su tutti e tre
+  ansible-playbook -i inventory.ini playbooks/61-elasticsearch-cluster.yml
+
+Svuotare i dati su UN nodo solo non rifa' il cluster: quel nodo riceve la riga
+initial_master_nodes, non trova altri nodi da bootstrappare, e si aggancia al
+cluster che c'e'. E' il comportamento giusto per un nodo sostituito.
 
 
 LOGGING ELASTIC: GLI INDICI DEI NAMESPACE

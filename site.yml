@@ -12,6 +12,7 @@
 #   ansible-playbook playbooks/40-storage.yml
 #   ansible-playbook playbooks/50-kafka.yml
 #   ansible-playbook playbooks/60-elasticsearch.yml
+#   ansible-playbook playbooks/61-elasticsearch-cluster.yml
 #
 # La preparazione dei nodi (host_prep) e il disco dati (create_disk) non sono
 # piu' due play su "all": ogni playbook prepara i propri host. Il risultato per
@@ -44,9 +45,12 @@
 # il gruppo [kafka_servers] vuoto il play viene saltato senza rumore.
 - import_playbook: playbooks/50-kafka.yml
 
-# Elasticsearch, come Kafka, e' indipendente da tutto il resto: nodo singolo,
-# gruppo [elastic_servers]. Vuoto il gruppo, il play viene saltato senza rumore.
+# Elasticsearch, come Kafka, e' indipendente da tutto il resto. Due playbook
+# per due gruppi distinti — [elastic_servers] per il nodo singolo,
+# [elastic_cluster_servers] per il cluster a tre — con la stessa procedura
+# sotto. Vuoto il gruppo, il play viene saltato senza rumore.
 - import_playbook: playbooks/60-elasticsearch.yml
+- import_playbook: playbooks/61-elasticsearch-cluster.yml
 
 # Gli indici di logging: legge i namespace dal cluster Kubernetes e prepara su
 # Elasticsearch template, indici e alias su cui il collector scrivera'. Sta in

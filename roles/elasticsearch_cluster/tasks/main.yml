@@ -1,0 +1,95 @@
+---
+# Elasticsearch 9 IN CLUSTER (tre nodi, o un numero dispari >= 3) su Ubuntu,
+# con sicurezza attiva e TLS su entrambe le porte (9200 HTTP, 9300 transport),
+# certificati firmati da una CA interna generata con elasticsearch-certutil.
+#
+# E' LA STESSA PROCEDURA DEL NODO SINGOLO (ruolo elasticsearch_node), e i due
+# pezzi in cui e' identica riga per riga non sono copiati: sono INCLUSI da
+# quel ruolo. Cosi' una correzione fatta la' vale anche qui, e "stessa
+# procedura" e' una proprieta' del codice e non una promessa nei commenti:
+#
+#   install.yml       chiave e repository Elastic, pacchetto, hold di apt,
+#                     directory, vm.max_map_count. Identico: un nodo del
+#                     cluster si installa esattamente come un nodo solo.
+#   credenziali.yml   kibana_system e il file elk_credentials.txt. Identico,
+#                     ma gira SUL PRIMO NODO SOLTANTO: le password stanno
+#                     nell'indice di sicurezza, che e' del cluster.
+#
+# Quello che il cluster fa DIVERSAMENTE sta nei file di questo ruolo:
+#
+#   controlli.yml      tre nodi (dispari), nessuno in comune con [elastic_servers]
+#   certificati.yml    CA e certificati di TUTTI i nodi generati sul primo, da
+#                      un solo cert.yml; ogni nodo riceve solo i propri
+#   configurazione.yml /etc/hosts con tutti i nodi; elasticsearch.yml con
+#                      discovery.seed_hosts e — solo al bootstrap —
+#                      cluster.initial_master_nodes. Heap, unit e keystore
+#                      come sul nodo singolo
+#   servizio.yml       primo avvio di tutti insieme; riavvii UNO ALLA VOLTA
+#   verifica.yml       tre nodi in _cluster/health, e lo stesso cluster_uuid
+#                      su tutti e tre
+#
+# La procedura a mano che questo ruolo automatizza (sezioni 2.10.2-2.10.5):
+#
+#   elasticsearch-certutil ca --days 3650 --ca-dn "CN=..." --keysize 4096 --pem \
+#     --out /etc/elasticsearch/cert/ca.zip                        (sul primo nodo)
+#   elasticsearch-certutil cert --in /root/cert.yml --out .../allcert.zip \
+#     --ca-cert .../ca/ca.crt --ca-key .../ca/ca.key --pem --days 3650 --keysize 4096
+#   -> allcert.zip copiato sugli altri nodi, scompattato, e "eliminare i
+#      certificati non di pertinenza del nodo"
+#   systemctl enable elasticsearch && systemctl start elasticsearch  (su tutti)
+#   elasticsearch-reset-password ... >> elk_credentials.txt         (sul primo)
+#
+# DIFFERENZE VOLUTE RISPETTO ALLA PROCEDURA A MANO, oltre a quelle gia'
+# elencate in elasticsearch_node/tasks/main.yml (che valgono anche qui):
+#
+# 1. ca.key resta sul primo nodo. La procedura copia ca.zip — che contiene
+#    anche la chiave privata della CA — su tutti e tre. Agli altri nodi serve
+#    solo ca.crt: con la chiave, chiunque entri in uno qualsiasi dei tre puo'
+#    firmarsi certificati validi per tutto il cluster.
+#
+# 2. Nessun certificato "non di pertinenza" da eliminare: ogni nodo riceve
+#    dal primo soltanto i propri file, quindi non c'e' niente da ripulire dopo.
+#
+# 3. cluster.initial_master_nodes viene TOLTO dopo il bootstrap, come chiede la
+#    documentazione Elastic. Lasciarlo e' il modo in cui un nodo che perde i
+#    dati puo' formare un cluster nuovo invece di rientrare nel vecchio.
+#
+# NIENTE defaults/: tutte le variabili stanno in group_vars/all.yml, sezione
+# ELASTICSEARCH, es_* per quello che e' comune al nodo singolo e esc_* per
+# quello che e' solo del cluster.
+
+- name: Controlli preliminari
+  import_tasks: controlli.yml
+
+# Identico al nodo singolo, ed e' per questo che non e' una copia.
+- name: Installazione del pacchetto Elasticsearch (come sul nodo singolo)
+  include_role:
+    name: elasticsearch_node
+    tasks_from: install
+
+- name: Certificati TLS
+  import_tasks: certificati.yml
+
+- name: Configurazione (elasticsearch.yml, heap, keystore, unit)
+  import_tasks: configurazione.yml
+
+- name: Avvio del cluster
+  import_tasks: servizio.yml
+
+- name: Verifica
+  import_tasks: verifica.yml
+
+# Dopo la verifica, non prima: li' si accerta che es_elastic_password sia
+# davvero la password del cluster, e senza quella conferma il file delle
+# credenziali direbbe una cosa non vera.
+#
+# SUL PRIMO NODO SOLTANTO. kibana_system e' un utente dell'indice di sicurezza,
+# che e' del cluster: impostarlo tre volte sarebbe lo stesso lavoro fatto tre
+# volte. E il file elk_credentials.txt la procedura lo scrive li'.
+- name: Utenti integrati e file delle credenziali (come sul nodo singolo, sul primo nodo)
+  include_role:
+    name: elasticsearch_node
+    tasks_from: credenziali
+  when:
+    - es_security_enabled | bool
+    - inventory_hostname == esc_first_node

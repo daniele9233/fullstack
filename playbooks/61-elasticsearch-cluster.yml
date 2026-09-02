@@ -1,0 +1,94 @@
+---
+# ELASTICSEARCH 9 IN CLUSTER: tre nodi (o un numero dispari >= 3) con sicurezza
+# attiva e TLS, sul gruppo [elastic_cluster_servers].
+#
+# Eseguibile da solo:
+#   ansible-playbook playbooks/61-elasticsearch-cluster.yml
+#
+# E' LA STESSA PROCEDURA DEL NODO SINGOLO (playbooks/60-elasticsearch.yml,
+# ruolo elasticsearch_node), con quello che cambia perche' i nodi sono tre.
+# I pezzi identici — installazione del pacchetto, utenti integrati e file
+# delle credenziali — il ruolo elasticsearch_cluster li INCLUDE da
+# elasticsearch_node invece di copiarli: una correzione la' vale anche qui.
+# Quello che e' diverso, e perche', sta in roles/elasticsearch_cluster/tasks/main.yml.
+#
+# Le variabili sono le stesse es_* del nodo singolo (versione, percorsi,
+# certificati, password, heap) piu' le esc_* del cluster, tutte in
+# group_vars/all.yml, sezione ELASTICSEARCH. NESSUNO DEI DUE RUOLI ha una
+# cartella defaults/.
+#
+# I DUE GRUPPI SONO DISTINTI: [elastic_servers] e' il nodo singolo,
+# [elastic_cluster_servers] il cluster, e un host non puo' stare in entrambi.
+# Con il gruppo vuoto questo playbook non fa niente.
+#
+# L'ORDINE DELLE RIGHE nell'inventario conta: il PRIMO host del gruppo genera
+# la CA e conserva ca.key, firma i certificati di tutti, ed e' dove girano il
+# reset delle password e la scrittura di elk_credentials.txt.
+#
+# Niente create_disk: il disco dati si monta a mano su es_data_dir (/opt/esdata)
+# su ciascun nodo, come per il nodo singolo. path.repo (es_repo_dirs) in
+# cluster DEVE essere una share vista uguale da tutti i nodi.
+#
+# Niente update_hosts_file: il ruolo si scrive da solo in /etc/hosts le voci
+# dei tre nodi, e il dominio Rancher qui non serve a nessuno.
+#
+# VARIANTI UTILI
+#
+#   # pretende il disco dedicato su ogni nodo
+#   ansible-playbook playbooks/61-elasticsearch-cluster.yml -e es_require_dedicated_disk=true
+#
+#   # riallinea la password dell'utente elastic su un cluster GIA' avviato:
+#   # gira sul primo nodo e vale per tutti (l'indice di sicurezza e' del cluster)
+#   ansible-playbook playbooks/61-elasticsearch-cluster.yml -e es_force_reset_elastic_password=true
+#
+#   # rigenera CA e certificati di TUTTI i nodi. DISTRUTTIVO: i client che
+#   # hanno importato la vecchia CA smettono di collegarsi finche' non ricevono
+#   # la nuova. I nodi vengono riavviati uno alla volta
+#   ansible-playbook playbooks/61-elasticsearch-cluster.yml -e es_force_regenerate_certs=true
+#
+#   # mostra i diff dei file di configurazione, password comprese: solo per
+#   # capire perche' un task fallisce, e non su un terminale registrato
+#   ansible-playbook playbooks/61-elasticsearch-cluster.yml -e es_hide_secrets=false
+#
+# PER RIFARE IL CLUSTER DA ZERO (non e' una variante, e' distruttivo): fermare
+# elasticsearch sui tre nodi, svuotare es_data_dir e cancellare
+# /etc/elasticsearch/.cluster_bootstrapped su TUTTI, rilanciare.
+
+- name: Prepara i nodi del cluster Elasticsearch
+  hosts: elastic_cluster_servers
+  become: yes
+  gather_facts: no
+  roles:
+    - role: host_prep
+
+
+# gather_facts: yes serve per la memoria (controllo sull'heap della JVM) e per
+# la distribuzione rilevata.
+#
+# Il ruolo e' idempotente: rilanciarlo non rigenera certificati che ci sono,
+# non tocca il keystore a cluster avviato, e riavvia i nodi solo se pacchetto,
+# configurazione, heap o certificati sono cambiati davvero — UNO ALLA VOLTA,
+# aspettando che ciascuno rientri nel cluster.
+- name: Elasticsearch {{ es_major | default('9') }} in cluster
+  hosts: elastic_cluster_servers
+  become: yes
+  gather_facts: yes
+  roles:
+    - elasticsearch_cluster
+  post_tasks:
+    - name: Riepilogo cluster Elasticsearch
+      debug:
+        msg:
+          - "Cluster {{ es_cluster_name }}: {{ groups[esc_group] | length }} nodi — {{ groups[esc_group] | join(', ') }}"
+          - "Versione: {{ es_versione_installata.stdout | default('?') | trim }} — ruoli {{ es_node_roles | join(', ') }}"
+          - "cluster_uuid: {{ (es_root.json | default({})).cluster_uuid | default('?') }} (lo stesso su tutti i nodi: verificato)"
+          - "Discovery: seed_hosts {{ esc_seed_hosts | join(', ') }} — initial_master_nodes {{ 'scritto (bootstrap di questo run)' if esc_marker_scritto is changed else 'gia tolto, cluster formato' }}"
+          - "API: {{ es_url }} su ogni nodo — utente elastic, password in es_elastic_password"
+          - "Credenziali: {{ es_credentials_file }} sul primo nodo ({{ esc_first_node }}), 0600 root:root — copia di quelle in group_vars"
+          - "kibana_system: {{ 'password allineata a es_kibana_system_password (serve a kibana.yml, non alla console web)' if es_manage_kibana_system | bool else 'non gestito' }}"
+          - "Dati in {{ es_data_dir }} su ogni nodo (disco montato a mano), log in {{ es_log_dir }}"
+          - "Snapshot consentiti in: {{ es_repo_dirs | join(', ') | default('nessuna directory dichiarata', true) }} — in cluster dev'essere una share condivisa"
+          - "CA interna: {{ es_ca_crt }} (uguale su tutti; ca.key SOLO su {{ esc_first_node }}) — e' il file che i client devono importare"
+          - "Prova: curl --cacert {{ es_ca_crt }} -u elastic:<password> {{ es_url }}/_cluster/health?pretty"
+          - "Chi c'e': curl --cacert {{ es_ca_crt }} -u elastic:<password> '{{ es_url }}/_cat/nodes?v&h=name,ip,node.role,master'"
+      run_once: true

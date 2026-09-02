@@ -1,0 +1,166 @@
+---
+# Avvio del cluster. E' la sezione 2.10.4 della procedura ("systemctl enable
+# elasticsearch; systemctl start elasticsearch" su tutti e tre), con la
+# distinzione che a mano nessuno scrive ma tutti applicano:
+#
+#   PRIMO AVVIO: tutti insieme. Un cluster nuovo si forma solo quando i master
+#   elencati in cluster.initial_master_nodes si vedono: un nodo avviato da
+#   solo aspetta gli altri e non risponde a niente. Avviarli uno alla volta
+#   aspettando che ognuno "sia pronto" sarebbe un'attesa che non finisce.
+#
+#   RIAVVII: UNO ALLA VOLTA, aspettando che il nodo sia rientrato nel cluster
+#   prima di toccare il successivo. Tre nodi riavviati insieme sono un cluster
+#   fermo, e per il tempo del riavvio anche un cluster che perde il quorum.
+#
+# Niente handler: gli handler girano a fine play, mentre la verifica che viene
+# dopo deve interrogare i nodi GIA' riavviati, altrimenti collauda la
+# configurazione vecchia e dice che va tutto bene.
+
+- name: Verifica se Elasticsearch e' gia' in esecuzione
+  command: "systemctl is-active {{ es_service_name }}"
+  register: es_is_active
+  changed_when: false
+  failed_when: false
+
+- name: Determina che cosa fare
+  set_fact:
+    es_gia_attivo: "{{ (es_is_active.stdout | trim) == 'active' }}"
+    # Che cosa rende superato il processo gia' in esecuzione: il pacchetto
+    # aggiornato, elasticsearch.yml diverso, l'heap cambiata, i certificati
+    # sostituiti (la JVM li legge una volta sola, all'avvio), il drop-in della
+    # unit aggiunto o tolto.
+    es_da_riavviare: >-
+      {{ (es_pacchetto_cambiato | default(false) | bool)
+         or (es_config_scritta.changed | default(false))
+         or (es_heap_scritta.changed | default(false))
+         or (es_heap_rimossa.changed | default(false))
+         or (es_certificati_cambiati | default(false) | bool)
+         or (es_permessi_certificati.changed | default(false))
+         or (es_unit_scritta.changed | default(false))
+         or (es_unit_rimossa.changed | default(false)) }}
+
+- name: Abilita l'avvio automatico di Elasticsearch
+  systemd:
+    name: "{{ es_service_name }}"
+    enabled: yes
+
+- name: Mostra che cosa sta per succedere
+  debug:
+    msg: >-
+      {{ inventory_hostname }}:
+      {{ 'primo avvio del nodo (tutti i nodi nuovi partono insieme)' if not es_gia_attivo | bool
+         else ('riavvio a rotazione: qualcosa e cambiato davvero' if es_da_riavviare | bool
+               else 'nessun riavvio necessario, configurazione e certificati sono gia quelli attesi') }}
+
+# --- Primo avvio: tutti insieme ---------------------------------------------
+
+- name: Avvia i nodi non ancora attivi
+  systemd:
+    name: "{{ es_service_name }}"
+    state: started
+  when: not es_gia_attivo | bool
+
+# La porta HTTP si apre quando il nodo e' partito, ANCHE se il cluster non si
+# e' ancora formato: da qui in poi risponde, ma con 503 "master not
+# discovered" finche' non vede gli altri. La porta dice che la JVM e' su e la
+# configurazione e' stata accettata; il cluster lo dice il task dopo.
+- name: Attesa della porta HTTP
+  block:
+    - name: "Attendi che la porta {{ es_http_port }} risponda"
+      wait_for:
+        host: "{{ es_node_ip }}"
+        port: "{{ es_http_port }}"
+        timeout: "{{ es_port_wait_timeout }}"
+  rescue:
+    - name: Raccogli lo stato del servizio
+      command: "journalctl -u {{ es_service_name }} -n 40 --no-pager"
+      register: es_journal
+      changed_when: false
+      failed_when: false
+
+    - name: Spiega perche' il nodo non risponde
+      fail:
+        msg: >-
+          {{ inventory_hostname }}: la porta {{ es_http_port }} non si e' aperta
+          entro {{ es_port_wait_timeout }} secondi. In ordine di probabilita':
+          (1) un controllo di avvio non superato — legandosi a
+          {{ es_node_ip }} il nodo e' in modalita' produzione e i bootstrap
+          check diventano bloccanti: cerca "bootstrap check failure" nel log;
+          (2) i certificati — se compare "failed to load SSL configuration" o
+          "Permission denied", il servizio non riesce a leggere
+          {{ es_node_key }} (deve essere root:{{ es_group_unix }} 0640);
+          (3) la memoria — un heap piu' grande della RAM disponibile fa fallire
+          l'avvio della JVM prima ancora di Elasticsearch, e con
+          bootstrap.memory_lock a true serve LimitMEMLOCK=infinity nella unit,
+          che il ruolo scrive solo se es_memory_lock e' true.
+          Log completo: {{ es_log_dir }}/{{ es_cluster_name }}.log
+          Ultime righe del journal:
+          {{ es_journal.stdout | default('journal non leggibile') }}
+
+# Solo sui nodi appena avviati: su un cluster gia' in piedi questa attesa non
+# ha niente da aspettare, e la verifica finale fa comunque il controllo pieno.
+#
+# 401 interrompe l'attesa: il nodo sta benissimo, e' la password a non
+# tornare, e verifica.yml lo spiega. Tutto il resto — 503 finche' non c'e' un
+# master, meno nodi del previsto finche' gli altri non arrivano — si riprova.
+- name: Attendi che il cluster si formi con tutti i nodi
+  uri:
+    url: "{{ es_url }}/_cluster/health"
+    method: GET
+    user: "{{ 'elastic' if es_security_enabled | bool else omit }}"
+    password: "{{ es_elastic_password if es_security_enabled | bool else omit }}"
+    force_basic_auth: "{{ es_security_enabled | bool }}"
+    ca_path: "{{ es_ca_crt if (es_security_enabled | bool and es_http_ssl_enabled | bool) else omit }}"
+    return_content: yes
+    status_code: [200]
+  register: esc_formazione
+  until: >-
+    ((esc_formazione.status | default(0)) == 200
+     and ((esc_formazione.json | default({})).number_of_nodes | default(0) | int) == (groups[esc_group] | length))
+    or (esc_formazione.status | default(0)) == 401
+  retries: "{{ esc_form_retries }}"
+  delay: "{{ esc_form_delay }}"
+  failed_when: false
+  changed_when: false
+  when: not es_gia_attivo | bool
+
+- name: Fermati se il cluster non si e' formato
+  fail:
+    msg: >-
+      {{ inventory_hostname }}: dopo
+      {{ esc_form_retries | int * esc_form_delay | int }} secondi il cluster
+      non si e' formato con {{ groups[esc_group] | length }} nodi
+      (risposta: {{ esc_formazione.status | default('nessuna') }},
+      nodi visti: {{ (esc_formazione.json | default({})).number_of_nodes | default('?') }}).
+      Il nodo e' su, ma non vede gli altri o loro non vedono lui. In ordine di
+      probabilita': (1) la 9300 fra i nodi non passa — da qui:
+      "nc -vz <ip altro nodo> {{ es_transport_port }}"; (2) i certificati di
+      trasporto non sono firmati dalla stessa CA — cerca "SSLHandshakeException"
+      o "certificate_unknown" in {{ es_log_dir }}/{{ es_cluster_name }}.log;
+      (3) cluster.initial_master_nodes non corrisponde ai node.name degli altri
+      nodi — cerca "master not discovered yet" nel log: elenca chi ha trovato e
+      chi cerca. (4) un nodo ha un cluster VECCHIO alle spalle (es_data_dir non
+      vuota da un'installazione precedente) e rifiuta di unirsi a uno nuovo:
+      cerca "join validation" e "cluster uuid" nel log.
+  when:
+    - not es_gia_attivo | bool
+    - (esc_formazione.status | default(0)) != 401
+    - not ((esc_formazione.status | default(0)) == 200
+           and ((esc_formazione.json | default({})).number_of_nodes | default(0) | int) == (groups[esc_group] | length))
+
+# --- Riavvii: uno alla volta ------------------------------------------------
+# Un giro per nodo, in ordine di inventario, e SOLO per i nodi che erano gia'
+# attivi e hanno qualcosa di cambiato. Il ciclo passa al successivo solo
+# quando il nodo precedente e' tornato nel cluster con tutti gli altri: e'
+# l'unica cosa che distingue un riavvio a rotazione da tre riavvii
+# contemporanei. E' lo stesso schema del ruolo kafka_cluster.
+
+- name: Riavvio a rotazione dei nodi che ne hanno bisogno
+  include_tasks: riavvio_a_rotazione.yml
+  loop: "{{ groups[esc_group] }}"
+  loop_control:
+    loop_var: es_nodo
+  run_once: true
+  when:
+    - hostvars[es_nodo].es_gia_attivo | default(false) | bool
+    - hostvars[es_nodo].es_da_riavviare | default(false) | bool

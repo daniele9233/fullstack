@@ -1,0 +1,216 @@
+---
+# elasticsearch.yml, heap della JVM, keystore e drop-in della unit.
+#
+# Rispetto al nodo singolo cambiano DUE cose: /etc/hosts elenca tutti i nodi
+# del cluster, e elasticsearch.yml ha la discovery del cluster (vedi il
+# template). Heap, drop-in della unit e keystore sono identici.
+
+# Tutti i nodi del cluster in /etc/hosts di ciascuno: i nodi si trovano per
+# indirizzo (discovery.seed_hosts), ma avere i nomi risolvibili rende leggibili
+# i log — che parlano di node.name — e le prove con i certificati, che nel SAN
+# hanno anche il nome.
+- name: Scrivi in /etc/hosts i nodi del cluster
+  lineinfile:
+    path: /etc/hosts
+    regexp: '^\S+\s+{{ item }}\s*$'
+    line: "{{ hostvars[item].es_node_ip | default(hostvars[item].ansible_host) }} {{ item }}"
+    state: present
+    backup: yes
+  loop: "{{ groups[esc_group] | default([]) }}"
+
+# --- Primo avvio o cluster gia' formato? ------------------------------------
+# Due domande, e servono ENTRAMBE prima di scrivere elasticsearch.yml, perche'
+# da loro dipende se ci va cluster.initial_master_nodes:
+#
+#   la directory dati e' vuota?     -> il nodo non e' mai partito (o e' stato
+#                                      rifatto): bootstrap.password nel keystore
+#   il marker del bootstrap c'e'?   -> la verifica finale ha gia' visto questo
+#                                      cluster formato con tutti i nodi
+#
+# cluster.initial_master_nodes va scritto solo finche' il nodo non ha un
+# cluster alle spalle. Il marker da solo non basta: un nodo rifatto ha il marker
+# vecchio e i dati vuoti, e in quel caso la riga torna — il nodo la usa solo se
+# anche gli altri sono da bootstrappare, altrimenti si aggancia al cluster che
+# c'e' e la ignora. Il perche' per esteso sta su esc_bootstrap_marker in
+# group_vars/all.yml.
+
+- name: Verifica se il nodo ha gia' dei dati
+  find:
+    paths: "{{ es_data_dir }}"
+    file_type: any
+    hidden: yes
+  register: es_dati_presenti
+
+- name: Verifica se questo nodo ha gia' visto il cluster formato
+  stat:
+    path: "{{ esc_bootstrap_marker }}"
+  register: esc_marker
+
+- name: Determina se e' il primo avvio e se va scritto initial_master_nodes
+  set_fact:
+    es_primo_avvio: "{{ (es_dati_presenti.files | default([]) | length) == 0 }}"
+    esc_scrivi_initial_masters: >-
+      {{ not (esc_marker.stat.exists
+              and (es_dati_presenti.files | default([]) | length) > 0) }}
+
+- name: Mostra lo stato rilevato
+  debug:
+    msg: >-
+      {{ inventory_hostname }}:
+      {{ 'primo avvio, la password di elastic viene presa da es_elastic_password'
+         if es_primo_avvio | bool
+         else 'il nodo ha gia dati in ' ~ es_data_dir
+              ~ ', le password stanno nell indice di sicurezza e il keystore non viene toccato' }}
+      — cluster.initial_master_nodes
+      {{ 'SCRITTO (bootstrap): ' ~ (esc_initial_master_nodes | join(', '))
+         if esc_scrivi_initial_masters | bool
+         else 'omesso: il cluster e gia formato' }}
+
+# root:elasticsearch 0660 come tutti i file di /etc/elasticsearch: il servizio
+# legge, nessun altro utente della macchina.
+#
+# backup: yes serve una volta sola e serve davvero — il primo run sostituisce
+# il file scritto dall'auto-configurazione del pacchetto, che contiene i
+# riferimenti ai keystore PKCS#12 generati durante l'installazione. Se un
+# giorno si volesse tornare a quelli, sono li'.
+- name: Scrivi elasticsearch.yml
+  template:
+    src: elasticsearch.yml.j2
+    dest: "{{ es_conf_dir }}/elasticsearch.yml"
+    owner: root
+    group: "{{ es_group_unix }}"
+    mode: "0660"
+    backup: yes
+  register: es_config_scritta
+
+# --- Heap -------------------------------------------------------------------
+# jvm.options.d/ e non jvm.options: il file del pacchetto viene riscritto a
+# ogni aggiornamento, questa directory no. E' la sezione 2.10.2 della
+# procedura ("modificare -Xms e -Xmx in jvm.options"), fatta nel posto che
+# sopravvive agli aggiornamenti.
+
+- name: "Imposta l'heap della JVM a {{ es_heap_size }}"
+  template:
+    src: heap.options.j2
+    dest: "{{ es_conf_dir }}/jvm.options.d/heap.options"
+    owner: root
+    group: "{{ es_group_unix }}"
+    mode: "0660"
+  when: es_heap_size | length > 0
+  register: es_heap_scritta
+
+# Svuotando es_heap_size si torna al dimensionamento automatico: senza questo
+# task il file resterebbe li' e la variabile vuota non avrebbe alcun effetto.
+- name: Togli l'heap fissa e torna al dimensionamento automatico
+  file:
+    path: "{{ es_conf_dir }}/jvm.options.d/heap.options"
+    state: absent
+  when: es_heap_size | length == 0
+  register: es_heap_rimossa
+
+# --- Drop-in della unit -----------------------------------------------------
+
+- name: Crea la directory del drop-in di systemd
+  file:
+    path: "/etc/systemd/system/{{ es_service_name }}.service.d"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: es_memory_lock | bool
+
+- name: Scrivi il drop-in per il blocco della memoria
+  template:
+    src: memlock-override.conf.j2
+    dest: "/etc/systemd/system/{{ es_service_name }}.service.d/memlock.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  when: es_memory_lock | bool
+  register: es_unit_scritta
+
+- name: Togli il drop-in del blocco della memoria
+  file:
+    path: "/etc/systemd/system/{{ es_service_name }}.service.d/memlock.conf"
+    state: absent
+  when: not es_memory_lock | bool
+  register: es_unit_rimossa
+
+- name: Ricarica systemd
+  systemd:
+    daemon_reload: yes
+  when: (es_unit_scritta is changed) or (es_unit_rimossa is changed)
+
+# --- Keystore e password dell'utente elastic --------------------------------
+#
+# bootstrap.password e' la password con cui l'utente elastic viene creato
+# quando nasce l'indice di sicurezza, cioe' AL PRIMO AVVIO DI UN CLUSTER NUOVO.
+# In cluster va scritta SU TUTTI I NODI, uguale: l'indice lo crea il primo
+# master eletto, e non si sa in anticipo quale dei tre sara'. Dopo, le password
+# stanno nell'indice — che e' del cluster — e questa voce non viene piu' letta:
+# cambiarla non cambia niente. Per questo il ruolo la scrive solo quando la
+# directory dati e' ancora vuota, e per cambiarla dopo c'e'
+# es_force_reset_elastic_password (vedi verifica.yml, sul primo nodo).
+#
+# Senza tutto questo, la password dell'utente elastic sarebbe quella casuale
+# che il pacchetto stampa UNA VOLTA SOLA durante l'apt install: in un playbook
+# quella riga non la legge nessuno, e il cluster resterebbe inaccessibile.
+
+- name: Verifica se il keystore esiste
+  stat:
+    path: "{{ es_conf_dir }}/elasticsearch.keystore"
+  register: es_keystore_file
+
+- name: Crea il keystore
+  command: "{{ es_bin_dir }}/elasticsearch-keystore create"
+  environment:
+    ES_PATH_CONF: "{{ es_conf_dir }}"
+  when: not es_keystore_file.stat.exists
+
+- name: Elenca le voci del keystore
+  command: "{{ es_bin_dir }}/elasticsearch-keystore list"
+  environment:
+    ES_PATH_CONF: "{{ es_conf_dir }}"
+  register: es_keystore_voci
+  changed_when: false
+  failed_when: false
+
+- name: Scrivi la password di elastic nel keystore
+  command:
+    argv:
+      - "{{ es_bin_dir }}/elasticsearch-keystore"
+      - add
+      - -x
+      - -f
+      - bootstrap.password
+    stdin: "{{ es_elastic_password }}"
+  environment:
+    ES_PATH_CONF: "{{ es_conf_dir }}"
+  when: es_primo_avvio | bool
+  no_log: "{{ es_hide_secrets | bool }}"
+  register: es_bootstrap_password
+
+# L'auto-configurazione del pacchetto lascia nel keystore l'hash della password
+# casuale che ha stampato durante l'installazione. Fra le due, al primo avvio,
+# vince bootstrap.password; togliere quella che non serve piu' evita di dover
+# ricordare quale delle due sia stata usata.
+- name: Togli dal keystore la password autogenerata dall'installazione
+  command:
+    argv:
+      - "{{ es_bin_dir }}/elasticsearch-keystore"
+      - remove
+      - autoconfiguration.password_hash
+  environment:
+    ES_PATH_CONF: "{{ es_conf_dir }}"
+  when:
+    - es_primo_avvio | bool
+    - "'autoconfiguration.password_hash' in (es_keystore_voci.stdout_lines | default([]))"
+
+# I comandi qui sopra girano come root e lasciano il keystore a root:root: cosi'
+# il servizio non riuscirebbe a leggerlo e il nodo non partirebbe.
+- name: Riporta il keystore ai permessi del pacchetto
+  file:
+    path: "{{ es_conf_dir }}/elasticsearch.keystore"
+    owner: root
+    group: "{{ es_group_unix }}"
+    mode: "0660"
