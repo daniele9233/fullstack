@@ -182,6 +182,83 @@
       Cluster raggiungibile:
       {{ logging_kubectl_prova.stdout_lines | length }} namespace totali.
 
+# --- QUALE CLUSTER --------------------------------------------------------
+#
+# In un'installazione Rancher i cluster sono sempre almeno due: il "local", che
+# ospita Rancher, e i downstream. Il projectId di uno non vale per l'altro, e
+# lanciare questo ruolo contro il cluster sbagliato non da' nessun sintomo utile
+# — o non trova il projectId e si ferma (caso fortunato), o lo trova e crea
+# indici perfetti per i namespace di un altro cluster.
+#
+# Il cluster non si dichiara in una variabile: lo decide il kubeconfig di questo
+# host. Quindi qui si legge e si STAMPA a quale endpoint punta, con l'UID del
+# namespace kube-system, che e' l'identificatore univoco di un cluster
+# Kubernetes. Restano nel log, e sono la prova di quale cluster e' stato
+# indicizzato.
+
+- name: Leggi l'identita' del cluster a cui punta il kubeconfig
+  shell: |
+    echo "server=$({{ logging_kubectl }} config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null)"
+    echo "uid=$({{ logging_kubectl }} get ns kube-system -o jsonpath='{.metadata.uid}' 2>/dev/null)"
+    echo "rancher=$({{ logging_kubectl }} -n cattle-system get deploy rancher --ignore-not-found -o name 2>/dev/null)"
+    echo "agent=$({{ logging_kubectl }} -n cattle-system get deploy cattle-cluster-agent --ignore-not-found -o name 2>/dev/null)"
+  args:
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: "{{ logging_kubeconfig }}"
+  register: logging_identita
+  changed_when: false
+  failed_when: false
+
+- name: Interpreta l'identita' del cluster
+  set_fact:
+    logging_cluster: >-
+      {{ dict(logging_identita.stdout_lines | default([])
+              | map('regex_replace', '^([a-z]+)=(.*)$', '\1|\2')
+              | map('split', '|') | list) }}
+
+- name: Mostra a quale cluster si sta parlando
+  debug:
+    msg: >-
+      {{ inventory_hostname }} parla con
+      {{ logging_cluster.server | default('(endpoint non letto)') }} —
+      kube-system uid {{ logging_cluster.uid | default('?') }}.
+      In cattle-system:
+      {{ 'c e il deployment "rancher" (SEMBRA IL CLUSTER LOCAL DI RANCHER)'
+         if (logging_cluster.rancher | default('') | length > 0)
+         else 'nessun deployment "rancher"' }},
+      {{ 'c e cattle-cluster-agent (cluster downstream)'
+         if (logging_cluster.agent | default('') | length > 0)
+         else 'nessun cattle-cluster-agent' }}.
+      I namespace indicizzati saranno quelli di QUESTO cluster.
+
+# Rancher server gira sul cluster local, non sui downstream: e' il segnale piu'
+# netto che si possa leggere da dentro. Non e' una prova assoluta — Rancher lo
+# si puo' installare dove si vuole — quindi la guardia si disattiva, ma parte da
+# accesa perche' l'errore che previene e' silenzioso.
+- name: Fermati se questo e' il cluster local di Rancher
+  fail:
+    msg: |
+      {{ inventory_hostname }} sta parlando con un cluster che ha il deployment
+      "rancher" in cattle-system ({{ logging_cluster.server | default('?') }}):
+      e' il cluster LOCAL, quello che OSPITA Rancher, non un cluster gestito.
+
+      Indicizzare i suoi namespace non fallisce in modo visibile: i template e
+      gli indici nascono, e sono quelli sbagliati. Ci si accorge dopo, quando i
+      log del cluster vero non hanno un posto dove andare.
+
+      Se e' un errore, il gruppo da correggere e' logging_group
+      (adesso "{{ logging_group }}", primo host {{ inventory_hostname }}): deve
+      contenere il manager del cluster da indicizzare, e
+      logging_system_project_id deve venire da QUELLO stesso cluster.
+
+      Se invece Rancher gira davvero sul cluster da indicizzare, e' un falso
+      allarme: logging_rifiuta_cluster_local=false.
+  when:
+    - logging_rifiuta_cluster_local | bool
+    - logging_cluster.rancher | default('') | length > 0
+
+
 # --- Elasticsearch ----------------------------------------------------------
 
 - name: Segnala che i certificati non vengono verificati
