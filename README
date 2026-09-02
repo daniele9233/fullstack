@@ -1451,14 +1451,15 @@ playbook ma viene segnalato con il comando per vedere quali shard; red ferma.
 
   CHE COSA VA SISTEMATO PRIMA DI LANCIARE
 
-  inventory.ini         i tre host di [elastic_cluster_servers], commentati:
-                        sono gli IP della procedura fornita, e NEL DOCUMENTO
-                        elasticinfra02 ed elasticinfra03 HANNO LO STESSO
-                        INDIRIZZO (10.109.11.135). E' un refuso: il ruolo si
-                        ferma se due nodi hanno lo stesso IP. Nell'inventario
-                        il terzo e' .136 per ipotesi, da confermare
-  es_cluster_name       nome del cluster
-  es_ca_dn              il DN della CA: la procedura usa "CN=ASL BRINDISI PROD"
+  inventory.ini         i tre host di [elastic_cluster_servers]:
+                        elasticinfrap01/02/03 su 10.109.15.134/135/136. Il
+                        nome di inventario e' l'hostname della macchina, ed e'
+                        node.name. Il ruolo si ferma se due nodi hanno lo
+                        stesso IP (nel documento di riferimento succedeva)
+  es_cluster_name       sintesi2-puglia-prod. Va deciso PRIMA del primo
+                        avvio: dopo si cambia solo fermando tutti i nodi
+  es_ca_dn              "CN=SINTESI2 PUGLIA PROD", l'emittente di ogni
+                        certificato del cluster
   es_version            FISSATA. Con es_version vuota ogni nodo prende
                         "l'ultima" nel momento in cui gli tocca, e tre nodi
                         installati a giorni di distanza possono avere tre
@@ -1467,7 +1468,7 @@ playbook ma viene segnalato con il comando per vedere quali shard; red ferma.
   es_repo_dirs          in cluster DEVE essere una share vista uguale da tutti
                         i nodi: un repository di snapshot "fs" con tre
                         directory locali non funziona
-  es_elastic_password   password dell'utente elastic. CAMBIALA
+  es_elastic_password   password dell'utente elastic, in chiaro in group_vars
   es_data_dir           il disco dati, montato a mano su ogni nodo
 
 Con il gruppo vuoto il playbook non fa niente. Un host che sta anche in

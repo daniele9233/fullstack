@@ -1222,7 +1222,12 @@ es_group: "elastic_servers"
 # Nome del cluster e nome del nodo. Il nome del NODO decide anche il percorso
 # dei certificati (/etc/elasticsearch/cert/<nodo>/<nodo>.crt): cambiarlo dopo
 # l'installazione vuol dire rigenerarli.
-es_cluster_name: "Pascale-PSN-coll"
+# cluster.name. Va deciso PRIMA del primo avvio: dopo, cambiarlo vuol dire
+# fermare tutti i nodi insieme (un nodo con un cluster.name diverso non si
+# unisce agli altri). Derivato dal DN della CA qui sotto, in minuscolo con i
+# trattini come vuole Elasticsearch: se preferisci un altro nome, questo e' il
+# momento.
+es_cluster_name: "sintesi2-puglia-prod"
 es_node_name: "{{ inventory_hostname }}"
 
 # master serve comunque (senza, il nodo non elegge se stesso e non parte);
@@ -1402,7 +1407,7 @@ es_cert_instances_file: "/root/cert.yml"
 
 # Distinguished name della CA interna. CAMBIALO: e' quello che comparira' come
 # emittente su ogni certificato di questa infrastruttura.
-es_ca_dn: "CN=PASCALE PSN COLL"
+es_ca_dn: "CN=SINTESI2 PUGLIA PROD"
 es_cert_validity_days: 3650
 es_cert_key_size: 4096
 
@@ -1445,7 +1450,7 @@ es_force_regenerate_certs: false
 #   ansible-playbook playbooks/60-elasticsearch.yml -e es_force_reset_elastic_password=true
 # (o il playbook del cluster: la' il reset gira sul primo nodo e vale per tutti,
 # le password stanno nell'indice di sicurezza che e' del cluster).
-es_elastic_password: "CambiaMiSubito-elastic"
+es_elastic_password: "El4S7iCsin7s12026"
 es_force_reset_elastic_password: false
 
 # Password dell'utente integrato kibana_system. CAMBIALA.
@@ -1457,7 +1462,7 @@ es_force_reset_elastic_password: false
 #
 # Viene impostata a cluster acceso, e solo se non e' gia' quella dichiarata:
 # per gli utenti integrati bootstrap.password non vale, vale solo per elastic.
-es_kibana_system_password: "CambiaMiSubito-kibana"
+es_kibana_system_password: "kIB4naSinTs12026"
 es_manage_kibana_system: true
 
 # Copia delle credenziali sul nodo, nello stesso percorso e nello stesso
