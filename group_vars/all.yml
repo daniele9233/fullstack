@@ -1185,24 +1185,37 @@ kafka_hide_secrets: true
 
 
 # ===========================================================================
-# ELASTICSEARCH 9, NODO SINGOLO  ->  gruppo [elastic_servers]
+# ELASTICSEARCH 9  ->  ruoli elasticsearch_node e elasticsearch_cluster
 # ===========================================================================
 # Automatizza l'installazione descritta nella procedura a mano: pacchetto deb
 # dal repo Elastic, CA interna e certificati generati con
 # elasticsearch-certutil, sicurezza e TLS accesi su entrambe le porte.
 #
-#   ansible-playbook -i inventory.ini playbooks/60-elasticsearch.yml
+#   ansible-playbook -i inventory.ini playbooks/60-elasticsearch.yml          # nodo singolo
+#   ansible-playbook -i inventory.ini playbooks/61-elasticsearch-cluster.yml  # cluster a 3
 #
-# PER ORA UN SOLO NODO: discovery.type e' single-node e il ruolo si ferma se il
-# gruppo ne contiene piu' di uno. Non e' una limitazione dell'inventario ma
-# della configurazione: con single-node ogni nodo si elegge master da solo,
-# quindi tre righe nel gruppo farebbero tre cluster separati con lo stesso
-# nome, non un cluster a tre nodi.
+# DUE RUOLI, UNA SOLA SEZIONE DI VARIABILI. Le variabili es_* qui sotto valgono
+# per tutti e due: versione, percorsi, certificati, password, heap sono gli
+# stessi su un nodo solo e su tre. Quello che cambia per il cluster sta in
+# fondo, con il prefisso esc_. NESSUNO DEI DUE RUOLI HA UNA CARTELLA defaults/:
+# tutto quello che leggono e' scritto qui, una volta sola, e una variabile che
+# manca qui fa fermare il ruolo con "undefined variable" invece di prendere un
+# valore di ripiego che nessuno ha scelto.
+#
+# I due gruppi di inventario sono DISTINTI e un host non puo' stare in
+# entrambi:
+#   [elastic_servers]           un nodo solo, discovery.type=single-node
+#   [elastic_cluster_servers]   tre nodi (o un numero dispari >= 3)
 #
 # Il disco dati NON viene toccato: si monta a mano su es_data_dir. Il ruolo
 # crea la directory, la assegna all'utente elasticsearch e dice se sotto c'e'
 # un disco dedicato o la partizione di sistema.
 
+# Gruppo del NODO SINGOLO. Il ruolo elasticsearch_node configura
+# discovery.type=single-node e si ferma se qui trova piu' di un host: con
+# single-node ogni nodo si elegge master da solo, quindi tre righe in questo
+# gruppo farebbero tre cluster separati con lo stesso nome, non un cluster a
+# tre nodi. Per quello c'e' esc_group, in fondo.
 es_group: "elastic_servers"
 
 # --- Identita' --------------------------------------------------------------
@@ -1212,6 +1225,11 @@ es_group: "elastic_servers"
 es_cluster_name: "Pascale-PSN-coll"
 es_node_name: "{{ inventory_hostname }}"
 
+# master serve comunque (senza, il nodo non elegge se stesso e non parte);
+# data e ingest sono i ruoli del file di configurazione fornito. Nel cluster
+# sono i ruoli di TUTTI i nodi: per farne uno diverso, si dichiara
+# es_node_roles su quell'host nell'inventario, e cluster.initial_master_nodes
+# ne tiene conto da solo (elenca solo chi ha "master").
 es_node_roles:
   - master
   - data
@@ -1220,11 +1238,20 @@ es_node_roles:
 # Indirizzo su cui il nodo ascolta (network.host) e che finisce nel SAN del
 # certificato. Deriva dall'inventario: network.host vuole un IP, non un nome.
 es_node_ip: "{{ ansible_host | default(ansible_default_ipv4.address | default(inventory_hostname)) }}"
+
+# Stringa (un indirizzo) oppure lista. Per ascoltare anche su 127.0.0.1:
+#   es_network_host: ["_site_", "_local_"]
 es_network_host: "{{ es_node_ip }}"
 es_http_port: 9200
 es_transport_port: 9300
 
-# --- Versione ---------------------------------------------------------------
+# single-node = il nodo si elegge master da solo e non cerca nessuno. E' la
+# ragione per cui il nodo singolo NON scrive cluster.initial_master_nodes: con
+# discovery.type=single-node Elasticsearch rifiuta di partire se lo trova.
+# Vale SOLO per elasticsearch_node: il cluster non usa discovery.type.
+es_discovery_type: "single-node"
+
+# --- Versione e provenienza del pacchetto -----------------------------------
 # Serie 9.x dal repo artifacts.elastic.co.
 #
 # es_version VUOTA = ultima 9.x disponibile. Valorizzala (es. "9.1.3") per
@@ -1232,8 +1259,32 @@ es_transport_port: 9300
 # davvero prima di installare e, se non c'e', elenca quelle disponibili. Le
 # versioni reali si leggono sul nodo con "apt-cache madison elasticsearch" a
 # repo abilitato.
+#
+# IN CLUSTER VA FISSATA. Con es_version vuota ogni nodo prende "l'ultima" nel
+# momento in cui gli tocca: tre nodi installati a qualche giorno di distanza
+# potrebbero avere tre versioni diverse, e un cluster a versioni miste e'
+# supportato solo durante un aggiornamento, non come stato normale.
 es_major: "9"
 es_version: ""
+
+es_package: "elasticsearch"
+es_apt_repo_url: "https://artifacts.elastic.co/packages/{{ es_major }}.x/apt"
+es_apt_repo_file: "elastic-{{ es_major }}.x"
+es_apt_key_url: "https://artifacts.elastic.co/GPG-KEY-elasticsearch"
+
+# Portachiavi con cui apt verifica le firme del repo Elastic, nelle due forme
+# che apt accetta:
+#
+#   .gpg  binario, prodotto da "gpg --dearmor". E' la forma preferita, ed e'
+#         quella che il ruolo installa quando gpg c'e' sul nodo.
+#   .asc  la chiave come la pubblica Elastic, in armatura ASCII. Non richiede
+#         gpg, e serve come ripiego: su un nodo con apt rotto gnupg non si puo'
+#         installare, e senza alternativa il ruolo resterebbe in un giro chiuso.
+#
+# La scelta e' appiccicosa: se ne esiste gia' uno valido, si usa quello e il
+# file del repository non cambia a ogni esecuzione.
+es_apt_keyring: "/usr/share/keyrings/elasticsearch-keyring.gpg"
+es_apt_keyring_asc: "/usr/share/keyrings/elasticsearch-keyring.asc"
 
 # Rete chiusa: percorsi SUL CONTROLLER. Valorizzando es_deb_local_path il repo
 # apt non viene nemmeno aggiunto e non si contatta artifacts.elastic.co.
@@ -1247,7 +1298,28 @@ es_apt_key_local_path: ""
 # playbook, che toglie il blocco, aggiorna e lo rimette.
 es_apt_hold: true
 
+# Aggiornamento della cache di apt prima di installare i pacchetti di appoggio.
+#
+# A false su un nodo dove "apt-get update" non puo' funzionare — rete chiusa
+# senza mirror interno, macchina con i pacchetti gia' dentro all'immagine — e
+# dove Elasticsearch arriva da es_deb_local_path. Il ruolo si ferma comunque
+# con un messaggio leggibile se gli strumenti che gli servono non ci sono.
+es_apt_update_cache: true
+
+es_utility_packages:
+  - apt-transport-https
+  - ca-certificates
+  - curl
+  - gnupg
+  # elasticsearch-certutil scrive un file .zip e basta: senza unzip i
+  # certificati resterebbero dentro l'archivio.
+  - unzip
+
 # --- Percorsi ---------------------------------------------------------------
+es_home: "/usr/share/elasticsearch"
+es_bin_dir: "{{ es_home }}/bin"
+es_conf_dir: "/etc/elasticsearch"
+
 # path.data. QUI VA MONTATO IL DISCO DEDICATO, a mano.
 es_data_dir: "/opt/esdata"
 es_log_dir: "/var/log/elasticsearch"
@@ -1261,32 +1333,72 @@ es_require_dedicated_disk: false
 # snapshot. Se sono share NFS vanno montate PRIMA di lanciare: il ruolo crea la
 # directory e la assegna a elasticsearch, ma non monta niente, e su una
 # directory locale gli snapshot finirebbero sul disco della macchina.
+#
+# IN CLUSTER DEVE ESSERE UNA SHARE CONDIVISA fra i tre nodi: un repository di
+# snapshot di tipo "fs" pretende che tutti i nodi vedano lo STESSO filesystem
+# sotto lo stesso percorso. Con una directory locale per nodo la registrazione
+# fallisce con "[repository] location doesn't match" o produce snapshot
+# spezzati in tre.
 es_repo_dirs:
   - /backups
   - /backups_8
 es_create_repo_dirs: true
 
+es_user: "elasticsearch"
+es_group_unix: "elasticsearch"
+es_service_name: "elasticsearch"
+
 # --- Memoria ----------------------------------------------------------------
-# Heap della JVM. VUOTA = dimensionamento automatico di Elasticsearch (meta'
-# della RAM fino a circa 31 GB), che va bene quasi sempre. Valorizzandola
-# (es. "8g") si scrivono -Xms e -Xmx uguali a quel valore: mai piu' di meta'
-# della RAM, mai piu' di 31 GB (oltre, la JVM perde i puntatori compressi e un
-# heap piu' grande rende di meno).
+# Heap della JVM, scritta in jvm.options.d/heap.options (e non in jvm.options,
+# che il pacchetto riscrive a ogni aggiornamento). VUOTA = dimensionamento
+# automatico di Elasticsearch (meta' della RAM fino a circa 31 GB), che va bene
+# quasi sempre. Valorizzandola (es. "8g") si scrivono -Xms e -Xmx uguali a quel
+# valore: mai piu' di meta' della RAM, mai piu' di 31 GB (oltre, la JVM perde i
+# puntatori compressi e un heap piu' grande rende di meno).
 es_heap_size: ""
 
 # Blocca l'heap in RAM impedendo lo swap. Con true il ruolo aggiunge anche
 # LimitMEMLOCK=infinity alla unit: senza, il nodo NON parte.
 es_memory_lock: false
 
+# Elasticsearch mappa in memoria gli indici e ne apre molti: 262144 e' il
+# minimo che il controllo di avvio pretende in produzione. Il pacchetto deb lo
+# imposta gia', questo lo rende esplicito e lo applica subito.
+es_max_map_count: 262144
+
 # --- Sicurezza e certificati ------------------------------------------------
-# I certificati nascono sul nodo con elasticsearch-certutil, come nella
-# procedura a mano, e restano nel layout che elasticsearch.yml si aspetta:
-#   /etc/elasticsearch/cert/ca/ca.crt        CA interna
+# I certificati nascono con elasticsearch-certutil, come nella procedura a
+# mano, e restano nel layout che elasticsearch.yml si aspetta:
+#   /etc/elasticsearch/cert/ca/ca.crt           CA interna (e ca.key accanto)
 #   /etc/elasticsearch/cert/<nodo>/<nodo>.crt   certificato del nodo
-#   /etc/elasticsearch/cert/<nodo>/<nodo>.key   chiave privata
+#   /etc/elasticsearch/cert/<nodo>/<nodo>.key   chiave privata del nodo
+#
+# Sul nodo singolo nascono sul nodo. Nel cluster nascono TUTTI sul primo nodo
+# del gruppo, che tiene la CA, e ogni altro nodo riceve solo i propri: e' la
+# procedura a mano (ca.zip e allcert.zip generati su elasticinfra01 e copiati
+# sugli altri), con la differenza che ca.key resta sul primo nodo invece di
+# viaggiare dentro ca.zip su tutti.
 es_security_enabled: true
 es_transport_ssl_enabled: true
 es_http_ssl_enabled: true
+
+es_cert_dir: "{{ es_conf_dir }}/cert"
+es_ca_dir: "{{ es_cert_dir }}/ca"
+es_ca_crt: "{{ es_ca_dir }}/ca.crt"
+es_ca_key: "{{ es_ca_dir }}/ca.key"
+es_node_cert_dir: "{{ es_cert_dir }}/{{ es_node_name }}"
+es_node_crt: "{{ es_node_cert_dir }}/{{ es_node_name }}.crt"
+es_node_key: "{{ es_node_cert_dir }}/{{ es_node_name }}.key"
+
+# elasticsearch-certutil produce archivi .zip: questi sono i due file di
+# transito, cancellati appena scompattati (ca.zip contiene anche ca.key).
+es_ca_zip: "{{ es_cert_dir }}/ca.zip"
+es_certs_zip: "{{ es_cert_dir }}/allcert.zip"
+
+# Il file "instances" che elasticsearch-certutil legge per sapere quali nomi e
+# quali indirizzi mettere nel SAN. E' lo stesso /root/cert.yml della procedura
+# a mano, qui generato dall'inventario.
+es_cert_instances_file: "/root/cert.yml"
 
 # Distinguished name della CA interna. CAMBIALO: e' quello che comparira' come
 # emittente su ogni certificato di questa infrastruttura.
@@ -1294,10 +1406,35 @@ es_ca_dn: "CN=PASCALE PSN COLL"
 es_cert_validity_days: 3650
 es_cert_key_size: 4096
 
+# Nomi e indirizzi che finiscono nel SAN del certificato del nodo. localhost e
+# 127.0.0.1 servono a chi collauda dalla macchina stessa: senza, "curl
+# https://localhost:9200" fallisce la verifica del certificato anche quando
+# tutto e' a posto. Sono per-nodo: nel cluster ogni istanza di cert.yml li
+# prende dal proprio host.
+es_cert_dns_names:
+  - "{{ es_node_name }}"
+  - "{{ inventory_hostname }}"
+  - "localhost"
+es_cert_ip_addresses:
+  - "{{ es_node_ip }}"
+  - "127.0.0.1"
+
 # CA aziendale invece di quella generata qui: directory SUL CONTROLLER con
 # dentro ca.crt, <nodo>.crt e <nodo>.key gia' pronti (i nomi contano). Vuota =
-# il ruolo genera tutto da solo.
+# il ruolo genera tutto da solo. Nel cluster serve un <nodo>.crt/.key per
+# ciascun nodo del gruppo.
 es_tls_local_dir: ""
+
+# certificate = si verifica che il certificato sia firmato dalla CA, non che
+# il nome corrisponda. E' quello che serve fra nodi identificati per IP. Con
+# "full" si verifica anche il nome: i certificati generati qui hanno IP e nome
+# nel SAN, quindi si puo' alzare senza rigenerarli.
+es_transport_ssl_verification_mode: "certificate"
+
+# Rigenera CA e certificati anche se ci sono gia'. DISTRUTTIVO: i client che
+# hanno importato la vecchia CA smettono di collegarsi finche' non ricevono la
+# nuova. Nel cluster rigenera tutto su tutti i nodi.
+es_force_regenerate_certs: false
 
 # --- Utente elastic ---------------------------------------------------------
 # CAMBIA QUESTA PASSWORD, e valuta ansible-vault: e' quella del superuser.
@@ -1306,7 +1443,10 @@ es_tls_local_dir: ""
 # e' l'unico momento in cui Elasticsearch la legge. Su un nodo gia' avviato non
 # ha piu' effetto: per riallinearla si rilancia con
 #   ansible-playbook playbooks/60-elasticsearch.yml -e es_force_reset_elastic_password=true
+# (o il playbook del cluster: la' il reset gira sul primo nodo e vale per tutti,
+# le password stanno nell'indice di sicurezza che e' del cluster).
 es_elastic_password: "CambiaMiSubito-elastic"
+es_force_reset_elastic_password: false
 
 # Password dell'utente integrato kibana_system. CAMBIALA.
 #
@@ -1333,7 +1473,9 @@ es_manage_kibana_system: true
 # procedura: le password non sono generate a caso e conoscibili solo da li',
 # ma vengono da qui sopra. Il file e' una COPIA — si riscrive a ogni
 # esecuzione, cancellarlo non fa perdere l'accesso, modificarlo a mano non
-# cambia niente sul cluster.
+# cambia niente sul cluster. Nel cluster viene scritto sul primo nodo, dove la
+# procedura lancia i due reset-password.
+es_credentials_file: "{{ es_cert_dir }}/elk_credentials.txt"
 es_write_credentials_file: true
 
 # --- Impostazioni varie -----------------------------------------------------
@@ -1350,11 +1492,134 @@ es_geoip_downloader_enabled: false
 # propria:  es_extra_settings: { "indices.query.bool.max_clause_count": 4096 }
 es_extra_settings: {}
 
+# --- Avvio, attese, verifica ------------------------------------------------
+# Indirizzo con cui il ruolo (e chi collauda a mano) interroga il nodo. https
+# solo se la sicurezza e il TLS sull'HTTP sono accesi davvero: cosi' spegnendo
+# es_http_ssl_enabled la verifica continua a funzionare invece di fallire
+# l'handshake. E' per-nodo: ogni nodo viene interrogato sul proprio indirizzo.
+es_url: >-
+  {{ 'https' if (es_security_enabled | bool and es_http_ssl_enabled | bool) else 'http' }}://{{ es_node_ip }}:{{ es_http_port }}
+
+es_port_wait_timeout: 300
+es_health_retries: 30
+es_health_delay: 10
+
+# Stati accettati dalla verifica finale del NODO SINGOLO. Su un nodo solo gli
+# indici con repliche restano yellow per costruzione (la replica non ha un
+# altro nodo su cui stare), quindi pretendere green significherebbe fallire a
+# ogni run. Per il cluster vedi esc_health_accepted.
+es_health_accepted:
+  - green
+  - yellow
+
 # --- Diagnosi ---------------------------------------------------------------
 # ansible.cfg ha [diff] always = True: senza questo il diff dei file che
 # contengono password finirebbe in chiaro dentro ansible.log. Mettilo a false
 # solo per capire perche' un task fallisce.
 es_hide_secrets: true
+
+
+# ---------------------------------------------------------------------------
+# CLUSTER A TRE NODI  ->  ruolo elasticsearch_cluster, gruppo [elastic_cluster_servers]
+# ---------------------------------------------------------------------------
+# Stessa procedura del nodo singolo — stesso pacchetto, stessi percorsi, stessi
+# certificati, stesse password, quindi le stesse variabili es_* qui sopra —
+# con quello che cambia perche' i nodi sono tre:
+#
+#   discovery      niente discovery.type: discovery.seed_hosts con i tre
+#                  indirizzi, e cluster.initial_master_nodes SOLO al bootstrap
+#                  (vedi esc_bootstrap_marker)
+#   certificati    CA e certificati di tutti i nodi generati sul PRIMO nodo del
+#                  gruppo, con un solo cert.yml che elenca le tre istanze;
+#                  ogni nodo riceve poi solo i propri file piu' ca.crt
+#   avvio          il primo avvio e' di tutti insieme, perche' il cluster si
+#                  forma solo quando i master si vedono; i riavvii successivi
+#                  sono UNO ALLA VOLTA, aspettando che il nodo rientri
+#   credenziali    reset e file elk_credentials.txt sul primo nodo, una volta:
+#                  le password stanno nell'indice di sicurezza, che e' del
+#                  cluster, non del nodo
+#   verifica       tre nodi visti da _cluster/health, e lo STESSO cluster_uuid
+#                  su tutti e tre — e' la prova che sono un cluster e non tre
+#                  nodi singoli con lo stesso nome
+#
+# L'ORDINE DELLE RIGHE NELL'INVENTARIO CONTA: il primo host del gruppo e'
+# quello che genera e conserva la CA (ca.key sta solo li'). Riordinarle dopo
+# l'installazione non rompe il cluster, ma sposta il "primo nodo" su una
+# macchina che la CA non ce l'ha: il prossimo nodo da aggiungere non avrebbe
+# chi gli firma il certificato.
+
+# Gruppo del cluster. Distinto da es_group, e un host non puo' stare in
+# entrambi: il ruolo si ferma se ne trova uno.
+esc_group: "elastic_cluster_servers"
+
+# Numero minimo di nodi, e dev'essere DISPARI: l'elezione del master e' a
+# maggioranza, e con un numero pari la perdita di meta' dei nodi ferma il
+# cluster invece di lasciarlo in piedi. Tre e' il minimo che sopravvive alla
+# perdita di un nodo.
+esc_min_nodes: 3
+
+# Il primo host del gruppo: genera la CA, firma i certificati di tutti, e' dove
+# girano il reset delle password e il file delle credenziali.
+#
+# if/else e non default(): default() di Jinja NON e' pigro, valuta sempre il
+# ripiego, e con il gruppo vuoto quel [0] farebbe fallire chiunque legga questa
+# variabile — anche un playbook che del cluster non sa niente.
+esc_first_node: >-
+  {{ groups[esc_group][0] if (groups[esc_group] | default([]) | length > 0) else '' }}
+
+# discovery.seed_hosts: gli indirizzi con cui ogni nodo trova gli altri, sulla
+# porta di trasporto. Derivati dall'inventario, cosi' non possono divergere da
+# quelli su cui i nodi ascoltano davvero.
+esc_seed_hosts: >-
+  {{ groups[esc_group] | default([])
+     | map('extract', hostvars, 'es_node_ip')
+     | map('regex_replace', '$', ':' ~ (es_transport_port | string))
+     | list }}
+
+# cluster.initial_master_nodes: i node.name dei nodi che hanno "master" fra i
+# ruoli. Elencare un nodo che master non e' fa aspettare il bootstrap per
+# sempre, quindi il filtro non e' facoltativo.
+esc_initial_master_nodes: >-
+  {{ groups[esc_group] | default([])
+     | map('extract', hostvars)
+     | selectattr('es_node_roles', 'contains', 'master')
+     | map(attribute='es_node_name')
+     | list }}
+
+# cluster.initial_master_nodes SI SCRIVE SOLO AL BOOTSTRAP, e questo file e' il
+# modo in cui il ruolo se lo ricorda.
+#
+# La documentazione Elastic e' esplicita: una volta che il cluster si e'
+# formato, quella riga va TOLTA e mai piu' rimessa. Lasciandola, un nodo che un
+# giorno perde i dati e riparte potrebbe — se ne trova altri nello stesso
+# stato — formare un cluster NUOVO invece di rientrare in quello vecchio.
+#
+# Il ruolo la scrive quando il nodo non ha ancora un cluster alle spalle, e la
+# toglie da elasticsearch.yml appena la verifica finale ha visto tutti i nodi
+# insieme (senza riavviare: la riga viene letta solo all'avvio). Questo marker
+# dice che quella verifica e' passata. Non e' sufficiente da solo: se la
+# directory dati e' vuota — nodo rifatto, disco cambiato — la riga torna, e il
+# nodo la usa solo se anche gli altri sono da bootstrappare; altrimenti si
+# aggancia al cluster esistente e la ignora.
+#
+# Per rifare il cluster DA ZERO: fermare i nodi, svuotare es_data_dir su tutti,
+# cancellare questo file su tutti, rilanciare.
+esc_bootstrap_marker: "{{ es_conf_dir }}/.cluster_bootstrapped"
+
+# Attesa che il cluster si formi dopo il primo avvio: i tre nodi devono
+# vedersi e eleggere un master, e ci vuole qualche decina di secondi. 30 x 10s
+# e' largo; se scade, il messaggio dice cosa guardare.
+esc_form_retries: 30
+esc_form_delay: 10
+
+# Stati accettati dalla verifica del CLUSTER. green e' quello atteso: con tre
+# nodi ogni replica ha un posto dove stare. yellow e' tollerato perche' un
+# indice con piu' repliche di quanti sono i nodi meno uno resta yellow per
+# costruzione, e non e' un guasto del cluster; il ruolo lo segnala e dice come
+# guardare quali shard. red ferma il playbook.
+esc_health_accepted:
+  - green
+  - yellow
 
 
 # ===========================================================================

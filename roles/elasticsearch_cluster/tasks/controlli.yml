@@ -1,28 +1,79 @@
 ---
 # Quello che, se manca, fa fallire l'installazione a meta' con un messaggio che
 # parla d'altro. Meglio fermarsi qui.
+#
+# I controlli sul CLUSTER stanno in testa. Quelli sulla SINGOLA MACCHINA
+# (distribuzione, heap, NTP, disco dati) sono gli stessi del nodo singolo, e
+# sono copiati da elasticsearch_node/tasks/controlli.yml: non si possono
+# includere da la' perche' quel file comincia con l'assert "un solo host", che
+# qui fallirebbe per costruzione.
 
-# PER ORA UN SOLO NODO. Con due o piu' host in [elastic_servers] questo ruolo
-# installerebbe altrettanti nodi con discovery.type=single-node, cioe' N cluster
-# separati che si chiamano tutti allo stesso modo e non si vedono fra loro: un
-# guasto che si scopre settimane dopo, quando meta' dei dati e' su un nodo e
-# meta' sull'altro.
-- name: Verifica di avere un solo nodo nel gruppo
+# --- Il cluster --------------------------------------------------------------
+
+# Dispari e almeno tre. L'elezione del master e' a maggioranza: con due nodi la
+# perdita di uno ferma il cluster invece di lasciarlo in piedi — sono PEGGIO di
+# uno solo. Con quattro, la perdita di due lo ferma esattamente come con tre:
+# il quarto nodo non compra niente.
+- name: Verifica il numero di nodi del cluster
   assert:
     that:
-      - groups[es_group] | default([]) | length == 1
+      - groups[esc_group] | default([]) | length >= (esc_min_nodes | int)
+      - (groups[esc_group] | default([]) | length) is odd
     fail_msg: >-
-      Il gruppo [{{ es_group }}] ha
-      {{ groups[es_group] | default([]) | length }} host.
-      Questo ruolo installa Elasticsearch SINGLE NODE
-      (discovery.type={{ es_discovery_type }}): su piu' host produrrebbe
-      altrettanti cluster separati con lo stesso nome, non un cluster a piu'
-      nodi. Per un cluster vero c'e' il gruppo [elastic_cluster_servers] con
-      playbooks/61-elasticsearch-cluster.yml: stessa procedura, con
-      discovery.seed_hosts, cluster.initial_master_nodes e un numero dispari
-      di master.
+      Il gruppo [{{ esc_group }}] ha
+      {{ groups[esc_group] | default([]) | length }} host
+      ({{ groups[esc_group] | default([]) | join(', ') }}). Un cluster
+      Elasticsearch vuole un numero DISPARI di nodi master, almeno
+      {{ esc_min_nodes }}: l'elezione e' a maggioranza, e con un numero pari
+      la perdita di meta' dei nodi ferma il cluster. Per un nodo solo c'e'
+      [{{ es_group }}] e playbooks/60-elasticsearch.yml.
     success_msg: >-
-      Nodo singolo: {{ groups[es_group] | first }}
+      Cluster di {{ groups[esc_group] | length }} nodi:
+      {{ groups[esc_group] | join(', ') }} — il primo,
+      {{ esc_first_node }}, genera la CA
+  run_once: true
+
+# Un host nei due gruppi verrebbe configurato due volte in due modi che si
+# contraddicono: discovery.type=single-node da un ruolo, discovery.seed_hosts
+# dall'altro, e l'ultimo che scrive vince senza che nessuno se ne accorga.
+- name: Verifica che nessun host stia anche in [{{ es_group }}]
+  assert:
+    that:
+      - (groups[esc_group] | default([])) | intersect(groups[es_group] | default([])) | length == 0
+    fail_msg: >-
+      {{ (groups[esc_group] | default([])) | intersect(groups[es_group] | default([])) | join(', ') }}
+      sta sia in [{{ esc_group }}] sia in [{{ es_group }}]. Un nodo e' o
+      singolo o in cluster: i due ruoli scrivono due discovery diverse nello
+      stesso elasticsearch.yml.
+    quiet: yes
+  run_once: true
+
+# I nomi dei nodi devono essere unici: node.name e' anche il nome della
+# directory dei certificati e dell'istanza in cert.yml. Con es_node_name al
+# default (il nome di inventario) sono unici per costruzione; se qualcuno lo
+# sovrascrive per host, meglio accorgersene qui che in un cluster dove due
+# nodi si chiamano allo stesso modo.
+- name: Verifica che i node.name siano tutti diversi
+  assert:
+    that:
+      - esc_initial_master_nodes | length == (esc_initial_master_nodes | unique | length)
+    fail_msg: >-
+      Due o piu' nodi del cluster hanno lo stesso node.name
+      ({{ esc_initial_master_nodes | join(', ') }}). es_node_name deve essere
+      diverso su ogni host.
+    quiet: yes
+  run_once: true
+
+- name: Verifica che almeno un nodo sia master-eligible
+  assert:
+    that:
+      - esc_initial_master_nodes | length > 0
+      - (esc_initial_master_nodes | length) is odd
+    fail_msg: >-
+      I nodi con "master" fra i ruoli sono {{ esc_initial_master_nodes | length }}
+      ({{ esc_initial_master_nodes | join(', ') }}): servono, e in numero
+      dispari. Controlla es_node_roles negli host dell'inventario.
+    quiet: yes
   run_once: true
 
 - name: Verifica che il nodo abbia un indirizzo IP dichiarato
@@ -32,9 +83,27 @@
       - es_node_ip is match('^[0-9]{1,3}(\.[0-9]{1,3}){3}$')
     fail_msg: >-
       {{ inventory_hostname }}: es_node_ip vale "{{ es_node_ip }}", che non e'
-      un indirizzo IPv4. network.host vuole un indirizzo, non un nome, e lo
-      stesso indirizzo finisce nel SAN del certificato: dichiara ansible_host
+      un indirizzo IPv4. network.host vuole un indirizzo, non un nome, lo
+      stesso indirizzo finisce nel SAN del certificato e in
+      discovery.seed_hosts degli altri nodi: dichiara ansible_host
       nell'inventario.
+
+# Tre nodi con lo stesso indirizzo si vedono come uno solo. E' il refuso piu'
+# facile da fare copiando le righe dell'inventario, ed e' anche quello che
+# c'era nella procedura a mano di riferimento (elasticinfra02 e 03 con lo
+# stesso IP).
+- name: Verifica che gli indirizzi dei nodi siano tutti diversi
+  assert:
+    that:
+      - esc_seed_hosts | length == (esc_seed_hosts | unique | length)
+    fail_msg: >-
+      Due o piu' nodi del cluster hanno lo stesso indirizzo
+      ({{ esc_seed_hosts | join(', ') }}). Controlla ansible_host
+      nell'inventario: e' il refuso classico da copia-incolla delle righe.
+    quiet: yes
+  run_once: true
+
+# --- La singola macchina (come sul nodo singolo) ----------------------------
 
 # Il pacchetto e' lo stesso per tutte le distribuzioni deb, quindi su una
 # Ubuntu diversa da quella prevista funziona lo stesso. Vale pero' saperlo:
@@ -86,7 +155,9 @@
     - (es_heap_size | regex_replace('[^0-9]', '') | int) > 31
 
 # L'orologio sfasato sballa i timestamp dei documenti e le finestre delle
-# query: non blocca l'installazione, ma va saputo prima di indicizzare.
+# query. In cluster fa anche di peggio: i nodi si scambiano stati con
+# timestamp, e uno sfasamento grosso rende i log dei tre nodi incomparabili
+# fra loro proprio quando servono per capire chi ha fatto cosa.
 - name: Leggi lo stato della sincronizzazione oraria
   command: timedatectl show -p NTPSynchronized --value
   register: es_ntp
@@ -98,7 +169,8 @@
     msg: >-
       ATTENZIONE {{ inventory_hostname }}: NTP non sincronizzato. Attivalo
       (systemd-timesyncd o chrony) prima di indicizzare: i campi @timestamp e le
-      query per intervallo dipendono dall'orologio della macchina.
+      query per intervallo dipendono dall'orologio della macchina, e in cluster
+      i log dei tre nodi devono potersi leggere sulla stessa linea del tempo.
   when: es_ntp.stdout | trim | lower != 'yes'
 
 # --- Disco dati -------------------------------------------------------------
@@ -107,12 +179,7 @@
 #
 # La DIRECTORY invece la crea il ruolo se non c'e' — qui e poi in install.yml,
 # dove le viene dato il proprietario giusto (l'utente elasticsearch a questo
-# punto non esiste ancora, lo crea il pacchetto). Serve in entrambi i casi:
-# senza disco dedicato e' l'unica cosa che la crea, e con il disco dedicato il
-# mount ha bisogno lo stesso che il punto di innesto esista.
-#
-# Se sopra c'e' gia' un mount, il modulo file non lo tocca: vede una directory
-# presente e non cambia niente.
+# punto non esiste ancora, lo crea il pacchetto).
 
 - name: "Crea {{ es_data_dir }} se non c'e'"
   file:

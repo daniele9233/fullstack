@@ -1,0 +1,10 @@
+{{ ansible_managed | comment }}
+# Drop-in per elasticsearch.service, scritto solo quando es_memory_lock e' true.
+#
+# bootstrap.memory_lock chiede al processo di bloccare in RAM tutto l'heap.
+# systemd, di suo, concede una manciata di kilobyte: senza questo limite il
+# nodo NON parte, e il messaggio parla di memory locking
+#   ("memory locking requested for elasticsearch process but memory is not locked")
+# senza dire che a negarlo e' stata la unit.
+[Service]
+LimitMEMLOCK=infinity

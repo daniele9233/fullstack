@@ -1,0 +1,68 @@
+---
+# Un giro per nodo, incluso in ciclo da servizio.yml con run_once: le
+# operazioni qui sotto girano tutte su {{ es_nodo }} e devono restare
+# nell'ordine in cui sono. Il ciclo passa al nodo successivo solo quando questo
+# e' tornato nel cluster CON TUTTI GLI ALTRI: finche' non ci e' rientrato, il
+# cluster gira con due nodi su tre, e riavviarne un altro lo lascerebbe senza
+# maggioranza.
+
+- name: "Riavvia Elasticsearch su {{ es_nodo }}"
+  systemd:
+    name: "{{ es_service_name }}"
+    state: restarted
+  delegate_to: "{{ es_nodo }}"
+
+- name: "Attendi che la porta {{ es_http_port }} risponda su {{ es_nodo }}"
+  wait_for:
+    host: "{{ hostvars[es_nodo].es_node_ip }}"
+    port: "{{ es_http_port }}"
+    timeout: "{{ es_port_wait_timeout }}"
+  delegate_to: "{{ es_nodo }}"
+
+# La porta aperta dice solo che la JVM e' partita. Che il nodo sia tornato
+# davvero nel cluster lo dice _cluster/health interrogato SU QUEL NODO: deve
+# vedere tutti i nodi e uno stato accettabile. Uno stato red dopo un riavvio
+# vuol dire shard primari non ancora riassegnati: si aspetta, non si prosegue.
+- name: "Attendi che {{ es_nodo }} sia rientrato nel cluster"
+  uri:
+    url: "{{ hostvars[es_nodo].es_url }}/_cluster/health"
+    method: GET
+    user: "{{ 'elastic' if es_security_enabled | bool else omit }}"
+    password: "{{ es_elastic_password if es_security_enabled | bool else omit }}"
+    force_basic_auth: "{{ es_security_enabled | bool }}"
+    ca_path: "{{ es_ca_crt if (es_security_enabled | bool and es_http_ssl_enabled | bool) else omit }}"
+    return_content: yes
+    status_code: [200]
+  delegate_to: "{{ es_nodo }}"
+  register: esc_rientro
+  until: >-
+    (esc_rientro.status | default(0)) == 200
+    and ((esc_rientro.json | default({})).number_of_nodes | default(0) | int) == (groups[esc_group] | length)
+    and ((esc_rientro.json | default({})).status | default('')) in esc_health_accepted
+  retries: "{{ es_health_retries }}"
+  delay: "{{ es_health_delay }}"
+  failed_when: false
+  changed_when: false
+
+- name: "Verifica che {{ es_nodo }} sia tornato nel cluster"
+  assert:
+    that:
+      - (esc_rientro.status | default(0)) == 200
+      - ((esc_rientro.json | default({})).number_of_nodes | default(0) | int) == (groups[esc_group] | length)
+      - ((esc_rientro.json | default({})).status | default('')) in esc_health_accepted
+    fail_msg: >-
+      {{ es_nodo }} e' stato riavviato ma dopo
+      {{ es_health_retries | int * es_health_delay | int }} secondi il cluster
+      visto da li' non e' a posto (risposta
+      {{ esc_rientro.status | default('nessuna') }}, nodi
+      {{ (esc_rientro.json | default({})).number_of_nodes | default('?') }} su
+      {{ groups[esc_group] | length }}, stato
+      {{ (esc_rientro.json | default({})).status | default('?') }}).
+      Il giro si ferma qui, senza toccare gli altri nodi: fermarsi con due
+      nodi buoni su tre e' meglio che proseguire e restare senza maggioranza.
+      Sul nodo: journalctl -u {{ es_service_name }} -n 100 --no-pager e
+      tail -n 100 {{ es_log_dir }}/{{ es_cluster_name }}.log
+    success_msg: >-
+      {{ es_nodo }}: rientrato, cluster
+      {{ (esc_rientro.json | default({})).status }} con
+      {{ (esc_rientro.json | default({})).number_of_nodes }} nodi

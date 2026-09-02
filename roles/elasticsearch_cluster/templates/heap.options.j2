@@ -1,0 +1,11 @@
+{{ ansible_managed | comment }}
+# Heap della JVM. Sostituisce il dimensionamento automatico di Elasticsearch,
+# che senza questo file prende meta' della RAM fino a circa 31 GB.
+#
+# -Xms e -Xmx devono restare UGUALI: un heap che cresce a caldo costa pause di
+# garbage collector proprio quando il nodo e' sotto carico.
+#
+# I file di questa directory si sommano a jvm.options del pacchetto e vincono
+# su di esso, che non va modificato: un aggiornamento lo riscrive.
+-Xms{{ es_heap_size }}
+-Xmx{{ es_heap_size }}

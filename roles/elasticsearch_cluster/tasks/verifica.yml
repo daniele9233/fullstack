@@ -1,0 +1,279 @@
+---
+# Verifica in sola lettura, piu' una scrittura che ne dipende.
+#
+# Ogni nodo viene interrogato sul proprio indirizzo: il cluster risponde da
+# tutti e tre, la password di elastic e' quella dichiarata, lo stato e'
+# accettabile, i nodi visti sono tutti. Poi LA PROVA CHE SONO UN CLUSTER: lo
+# stesso cluster_uuid su tutti e tre. Tre nodi singoli con lo stesso
+# cluster.name rispondono ciascuno "green, 1 nodo" e hanno tre uuid diversi:
+# e' il guasto contro cui il ruolo del nodo singolo mette in guardia, e qui e'
+# l'unico controllo che lo vede.
+#
+# La scrittura in fondo e' il marker del bootstrap: solo dopo che tutto questo
+# e' passato, e solo allora, cluster.initial_master_nodes viene tolto da
+# elasticsearch.yml.
+
+# --- Cambio password su richiesta esplicita ---------------------------------
+# bootstrap.password vale solo alla creazione dell'indice di sicurezza: a
+# cluster avviato la password si cambia cosi'. SUL PRIMO NODO SOLTANTO: l'indice
+# di sicurezza e' del cluster, la password cambiata da un nodo vale su tutti.
+
+- name: Reimposta la password dell'utente elastic (richiesto esplicitamente)
+  command:
+    argv:
+      - "{{ es_bin_dir }}/elasticsearch-reset-password"
+      - --username
+      - elastic
+      - --interactive
+      - --batch
+      - --url
+      - "{{ es_url }}"
+    # Due volte: lo strumento chiede la password e poi la conferma.
+    stdin: "{{ es_elastic_password }}\n{{ es_elastic_password }}"
+  environment:
+    ES_PATH_CONF: "{{ es_conf_dir }}"
+  register: es_reset_password
+  until: es_reset_password.rc == 0
+  retries: 10
+  delay: 6
+  when:
+    - es_force_reset_elastic_password | bool
+    - inventory_hostname == esc_first_node
+  no_log: "{{ es_hide_secrets | bool }}"
+
+# --- Stato del cluster, visto da ogni nodo ----------------------------------
+
+- name: Interroga lo stato del cluster
+  uri:
+    url: "{{ es_url }}/_cluster/health"
+    method: GET
+    user: "{{ 'elastic' if es_security_enabled | bool else omit }}"
+    password: "{{ es_elastic_password if es_security_enabled | bool else omit }}"
+    force_basic_auth: "{{ es_security_enabled | bool }}"
+    # La CA interna, non quella di sistema: senza, la verifica del certificato
+    # fallisce e l'errore ("certificate verify failed") sembra un problema del
+    # certificato invece che del truststore usato per controllarlo.
+    ca_path: "{{ es_ca_crt if (es_security_enabled | bool and es_http_ssl_enabled | bool) else omit }}"
+    return_content: yes
+    status_code: [200]
+  register: es_health
+  # Il 401 interrompe subito: il nodo sta benissimo, e' la password a non
+  # tornare, e riprovare per cinque minuti la stessa password sbagliata non
+  # cambia niente. Tutto il resto si riprova.
+  until: >-
+    ((es_health.status | default(0)) == 200
+     and ((es_health.json | default({})).status | default('')) in esc_health_accepted
+     and ((es_health.json | default({})).number_of_nodes | default(0) | int) == (groups[esc_group] | length))
+    or (es_health.status | default(0)) == 401
+  retries: "{{ es_health_retries }}"
+  delay: "{{ es_health_delay }}"
+  failed_when: false
+  changed_when: false
+
+# 401 e' un caso a se': il nodo sta benissimo, e' la password a non tornare.
+- name: Verifica che la password di elastic sia quella dichiarata
+  assert:
+    that:
+      - (es_health.status | default(0)) != 401
+    fail_msg: >-
+      {{ inventory_hostname }}: il nodo risponde ma rifiuta l'utente elastic
+      con la password di es_elastic_password. Succede quando il cluster era
+      gia' stato avviato prima di questo playbook: bootstrap.password vale SOLO
+      alla creazione dell'indice di sicurezza, e dopo le password stanno
+      nell'indice. Per riallinearla (gira sul primo nodo, vale per tutti):
+      ansible-playbook playbooks/61-elasticsearch-cluster.yml -e es_force_reset_elastic_password=true
+
+- name: Verifica che il nodo risponda
+  assert:
+    that:
+      - (es_health.status | default(0)) == 200
+    fail_msg: >-
+      {{ inventory_hostname }}: {{ es_url }}/_cluster/health ha risposto
+      "{{ es_health.status | default('nessuna risposta') }}" dopo
+      {{ es_health_retries | int * es_health_delay | int }} secondi.
+      Il nodo ascolta su {{ es_node_ip }}:{{ es_http_port }} e non su
+      localhost, perche' network.host e' un indirizzo esplicito. Se il
+      messaggio parla di certificato, la CA con cui si verifica e'
+      {{ es_ca_crt }} e deve essere quella che ha firmato {{ es_node_crt }};
+      se parla di 503, il nodo e' su ma non ha un master: non vede gli altri.
+      journalctl -u {{ es_service_name }} -n 50 e
+      {{ es_log_dir }}/{{ es_cluster_name }}.log.
+      Risposta: {{ es_health.msg | default(es_health.content | default('')) }}
+
+- name: Verifica che il cluster veda tutti i nodi
+  assert:
+    that:
+      - ((es_health.json | default({})).number_of_nodes | default(0) | int) == (groups[esc_group] | length)
+    fail_msg: >-
+      Visto da {{ inventory_hostname }}, il cluster {{ es_cluster_name }} ha
+      {{ (es_health.json | default({})).number_of_nodes | default('?') }} nodi
+      invece di {{ groups[esc_group] | length }}
+      ({{ groups[esc_group] | join(', ') }}). Chi manca e perche':
+      curl --cacert {{ es_ca_crt }} -u elastic:<password>
+      "{{ es_url }}/_cat/nodes?v&h=name,ip,node.role,master" elenca chi c'e';
+      sul nodo assente, {{ es_log_dir }}/{{ es_cluster_name }}.log dice perche'
+      non entra (di solito "master not discovered" o un handshake TLS).
+
+- name: Verifica che lo stato del cluster sia accettabile
+  assert:
+    that:
+      - ((es_health.json | default({})).status | default('')) in esc_health_accepted
+    fail_msg: >-
+      Il cluster {{ es_cluster_name }} e' in stato
+      "{{ (es_health.json | default({})).status | default('sconosciuto') }}".
+      red significa che almeno uno shard PRIMARIO non e' assegnato: i dati di
+      quell'indice non sono leggibili. Guarda quali con
+      curl --cacert {{ es_ca_crt }} -u elastic:<password>
+      "{{ es_url }}/_cat/shards?v&h=index,shard,prirep,state,unassigned.reason"
+      e i log in {{ es_log_dir }}/{{ es_cluster_name }}.log.
+    success_msg: >-
+      Cluster {{ es_cluster_name }} visto da {{ inventory_hostname }}: stato
+      {{ (es_health.json | default({})).status }},
+      {{ (es_health.json | default({})).number_of_nodes | default('?') }} nodi,
+      {{ (es_health.json | default({})).active_shards | default(0) }} shard attivi
+
+# Con tre nodi green e' lo stato atteso. yellow non ferma il playbook ma va
+# detto: qualche replica non ha un posto dove stare, tipicamente un indice con
+# number_of_replicas >= 3.
+- name: Segnala se il cluster e' yellow
+  debug:
+    msg: >-
+      ATTENZIONE: il cluster e' yellow con {{ groups[esc_group] | length }} nodi.
+      Con tre nodi ogni replica dovrebbe avere un posto: se non ce l'ha, e'
+      perche' un indice chiede piu' repliche di quanti sono i nodi meno uno.
+      Quali: curl --cacert {{ es_ca_crt }} -u elastic:<password>
+      "{{ es_url }}/_cat/shards?v&h=index,shard,prirep,state,unassigned.reason" | grep -v STARTED
+  when: ((es_health.json | default({})).status | default('')) == 'yellow'
+  run_once: true
+
+# --- Versione e identita' del cluster ---------------------------------------
+
+- name: Interroga versione e identita' del nodo
+  uri:
+    url: "{{ es_url }}/"
+    method: GET
+    user: "{{ 'elastic' if es_security_enabled | bool else omit }}"
+    password: "{{ es_elastic_password if es_security_enabled | bool else omit }}"
+    force_basic_auth: "{{ es_security_enabled | bool }}"
+    ca_path: "{{ es_ca_crt if (es_security_enabled | bool and es_http_ssl_enabled | bool) else omit }}"
+    return_content: yes
+  register: es_root
+  changed_when: false
+  failed_when: false
+
+- name: Verifica che sia davvero la versione richiesta
+  assert:
+    that:
+      - ((es_root.json | default({})).version | default({})).number | default('') is match('^' ~ es_major ~ '\.')
+    fail_msg: >-
+      {{ inventory_hostname }} risponde con la versione
+      {{ ((es_root.json | default({})).version | default({})).number | default('sconosciuta') }},
+      mentre il ruolo e' scritto per la serie {{ es_major }}.x. Se hai
+      installato di proposito un'altra serie, allinea es_major (e verifica il
+      file di configurazione: fra major diverse cambiano impostazioni).
+    success_msg: >-
+      Elasticsearch
+      {{ ((es_root.json | default({})).version | default({})).number }} su
+      {{ inventory_hostname }}, cluster {{ es_cluster_name }}
+      (uuid {{ (es_root.json | default({})).cluster_uuid | default('?') }}),
+      sicurezza {{ 'attiva' if es_security_enabled | bool else 'DISATTIVATA' }},
+      HTTP {{ 'in TLS' if es_http_ssl_enabled | bool else 'in chiaro' }}
+
+# Tre versioni diverse sono un cluster in aggiornamento, non uno stabile.
+- name: Verifica che tutti i nodi abbiano la stessa versione
+  assert:
+    that:
+      - esc_versioni | unique | length == 1
+    fail_msg: >-
+      I nodi hanno versioni diverse:
+      {{ dict(groups[esc_group] | zip(esc_versioni)) }}. Un cluster a versioni
+      miste e' supportato solo durante un aggiornamento. Fissa es_version in
+      group_vars/all.yml e rilancia: il ruolo allinea i nodi uno alla volta.
+    quiet: yes
+  vars:
+    esc_versioni: >-
+      {{ groups[esc_group]
+         | map('extract', hostvars, ['es_root', 'json', 'version', 'number'])
+         | list }}
+  run_once: true
+
+# LA PROVA CHE E' UN CLUSTER. Ogni cluster ha un uuid, assegnato al bootstrap:
+# se i tre nodi ne riportano tre diversi, sono tre cluster da un nodo con lo
+# stesso nome, e ogni indice creato da qui in poi finirebbe su uno solo dei
+# tre. _cluster/health non lo vede — risponde "green, 1 nodo" su ognuno — e
+# nemmeno il controllo sul numero di nodi, se e' passato: questo e' l'unico
+# posto in cui la cosa si vede.
+- name: Verifica che i nodi facciano parte dello STESSO cluster
+  assert:
+    that:
+      - esc_uuid | unique | length == 1
+      - esc_uuid | first | default('') != '_na_'
+    fail_msg: >-
+      I nodi NON formano un cluster solo. cluster_uuid per nodo:
+      {{ dict(groups[esc_group] | zip(esc_uuid)) }}.
+      "_na_" = quel nodo non ha ancora un cluster (non ha trovato un master);
+      uuid diversi = ogni nodo ha bootstrappato un cluster per conto suo, e da
+      quel momento non si uniranno mai piu' da soli. La causa e' quasi sempre
+      un nodo partito con es_data_dir gia' popolata da un'installazione
+      precedente, o cluster.initial_master_nodes diverso fra i nodi. Per
+      rimediare: fermare i nodi, svuotare es_data_dir e cancellare
+      {{ esc_bootstrap_marker }} su TUTTI, rilanciare.
+    success_msg: >-
+      Un solo cluster: uuid {{ esc_uuid | first }} su tutti i
+      {{ groups[esc_group] | length }} nodi
+  vars:
+    esc_uuid: >-
+      {{ groups[esc_group]
+         | map('extract', hostvars, ['es_root', 'json', 'cluster_uuid'])
+         | list }}
+  run_once: true
+
+# --- Il bootstrap e' finito: se ne prende nota ------------------------------
+# Solo adesso, che il cluster e' stato visto formato con tutti i nodi e con
+# UN SOLO uuid. Da qui in poi cluster.initial_master_nodes non serve piu', e la
+# documentazione Elastic dice di toglierlo: il marker fa si' che il prossimo
+# run non lo scriva, e elasticsearch.yml viene riscritto subito senza quella
+# riga — SENZA riavviare, perche' viene letta solo all'avvio e il nodo e' gia'
+# nel cluster. Al prossimo riavvio, per qualunque motivo, il file e' gia'
+# quello giusto.
+
+- name: Segna che questo nodo ha visto il cluster formato
+  copy:
+    content: |
+      Scritto dal ruolo elasticsearch_cluster dopo aver verificato il cluster
+      {{ es_cluster_name }} formato con {{ groups[esc_group] | length }} nodi
+      (uuid {{ (es_root.json | default({})).cluster_uuid | default('?') }}).
+      Finche' questo file esiste e {{ es_data_dir }} ha dei dati, il ruolo NON
+      scrive cluster.initial_master_nodes in elasticsearch.yml.
+      Per rifare il cluster da zero: fermare i nodi, svuotare {{ es_data_dir }}
+      e cancellare questo file su TUTTI i nodi, rilanciare il playbook.
+    dest: "{{ esc_bootstrap_marker }}"
+    owner: root
+    group: root
+    mode: "0644"
+  register: esc_marker_scritto
+
+- name: Togli cluster.initial_master_nodes da elasticsearch.yml, a bootstrap finito
+  when: esc_scrivi_initial_masters | bool
+  block:
+    - name: Da adesso initial_master_nodes non si scrive piu'
+      set_fact:
+        esc_scrivi_initial_masters: false
+
+    # Stesso template, stessa destinazione: cambia solo che la riga non c'e'
+    # piu'. Niente riavvio, di proposito.
+    - name: Riscrivi elasticsearch.yml senza cluster.initial_master_nodes
+      template:
+        src: elasticsearch.yml.j2
+        dest: "{{ es_conf_dir }}/elasticsearch.yml"
+        owner: root
+        group: "{{ es_group_unix }}"
+        mode: "0660"
+
+    - name: Spiega cosa e' appena successo
+      debug:
+        msg: >-
+          {{ inventory_hostname }}: cluster.initial_master_nodes tolto da
+          elasticsearch.yml, come chiede la documentazione dopo il bootstrap.
+          Il nodo NON e' stato riavviato — quella riga viene letta solo
+          all'avvio — e al prossimo run il file risultera' gia' allineato.
