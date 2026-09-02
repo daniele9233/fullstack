@@ -1674,10 +1674,19 @@ esc_health_accepted:
 # una variabile che manca fa fermare il playbook con "undefined variable"
 # invece di prendere un valore di ripiego che nessuno ha scelto.
 
-# Gruppo di inventario da cui si parla con Kubernetes e con Elasticsearch. E'
-# il nodo manager, lo stesso da cui oggi si lanciano gli script a mano.
-# Il playbook prende SOLO il primo host del gruppo.
-logging_group: "new_managers"
+# Gruppo di inventario da cui si parla con Kubernetes e con Elasticsearch. Il
+# playbook prende SOLO il primo host del gruppo.
+#
+# E' QUESTA RIGA A DECIDERE QUALE CLUSTER VIENE INDICIZZATO, non una variabile
+# che nomina il cluster: il ruolo usa il kubeconfig di quell'host, quindi legge
+# i namespace del cluster di cui quell'host fa parte. Cambiare gruppo qui vuol
+# dire cambiare cluster, e logging_system_project_id qui sotto deve venire
+# dallo stesso.
+#
+# NON e' [new_managers], che in questo inventario e' il manager del cluster
+# downstream del laboratorio (192.168.1.x). [logging_managers] e' il manager del
+# cluster di produzione (10.109.15.69), quello i cui namespace vanno indicizzati.
+logging_group: "logging_managers"
 
 
 # --- 1. Elenco dei namespace (quello che faceva namespace-listing.sh) --------
@@ -1700,7 +1709,21 @@ logging_group: "new_managers"
 # dentro una RIGA VUOTA e TUTTI i namespace fra gli applicativi. Quella riga
 # vuota diventa poi un template jolly "<prefisso>-*" a priorita' 500, che si
 # mette davanti a tutti gli altri. Il ruolo si ferma prima.
-logging_system_project_id: ""
+#
+# IL projectId E' PER CLUSTER. In un'installazione Rancher ce n'e' sempre piu'
+# di uno — il cluster "local" che ospita Rancher, e i downstream — e un
+# p-xxxxx letto sul local non corrisponde a niente su un downstream. Questo
+# viene da k8smanager-p01 (10.109.15.69), cioe' dallo stesso host che
+# logging_group seleziona: le due cose devono restare d'accordo.
+logging_system_project_id: "p-9cpv4"
+
+# Con true il ruolo si ferma se il cluster a cui sta parlando ha il deployment
+# "rancher" in cattle-system, cioe' se e' il cluster LOCAL di Rancher invece di
+# un downstream. E' la protezione contro l'errore che questa configurazione
+# rende possibile: indicizzare i namespace del cluster sbagliato, che a valle
+# non si vede — gli indici nascono, sono solo quelli di un altro cluster.
+# A false solo se Rancher gira davvero sul cluster da indicizzare.
+logging_rifiuta_cluster_local: true
 
 # Label con cui Rancher marca i namespace di un progetto. Si cambia solo se
 # cambia Rancher.
@@ -1749,11 +1772,19 @@ logging_write_ns_files: true
 # ATTENZIONE: sono l'indirizzo del cluster ELASTICSEARCH, non del manager. Se
 # usi 61-elasticsearch-cluster.yml, logging_es_host e' uno dei nodi di
 # [elastic_cluster_servers] e logging_es_password e' es_elastic_password.
+# elasticinfrap01, il primo nodo del cluster installato da
+# 61-elasticsearch-cluster.yml. Un nodo qualsiasi dei tre va bene: rispondono
+# tutti e le scritture finiscono comunque sul cluster.
+#
+# QUANDO "elk-svc" RISOLVERA', mettilo qui al posto dell'IP: e' il nome del
+# servizio, sta nel SAN dei certificati, e a quel punto si puo' anche accendere
+# la verifica (logging_es_ca_file piu' sotto) senza che il nome faccia storie.
 logging_es_scheme: "https"
-logging_es_host: ""                      # OBBLIGATORIO, es. "10.109.15.134"
+logging_es_host: "10.109.15.134"
 logging_es_port: 9200
 logging_es_user: "elastic"
-logging_es_password: ""                  # OBBLIGATORIA. Valuta ansible-vault
+# La stessa di es_elastic_password: e' l'utente elastic di quel cluster.
+logging_es_password: "El4S7iCsin7s12026"
 
 # Derivata: e' l'indirizzo a cui vanno tutte le chiamate del ruolo.
 logging_es_url: "{{ logging_es_scheme }}://{{ logging_es_host }}:{{ logging_es_port }}"

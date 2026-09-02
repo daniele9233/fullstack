@@ -1508,9 +1508,33 @@ ciascuno il posto in cui il collector scrivera' i log:
   alias           <prefisso>-<namespace>          di scrittura, per il rollover
   policy ILM      <prefisso>-<lifecycle>          rotazione e cancellazione
 
-Gira sul NODO MANAGER — il primo host di [new_managers], o del gruppo indicato
-da logging_group — perche' e' li' che c'e' kubectl con un kubeconfig valido, ed
-e' da li' che la stessa cosa si faceva a mano con due script.
+Gira sul primo host di [logging_managers] — k8smanager-p01, 10.109.15.69 —
+perche' e' li' che c'e' kubectl con un kubeconfig valido, ed e' da li' che la
+stessa cosa si faceva a mano con due script.
+
+
+  QUALE CLUSTER, E PERCHE' E' LA COSA PIU' FACILE DA SBAGLIARE
+
+In un'installazione Rancher i cluster sono sempre almeno due: il "local", che
+ospita Rancher, e i downstream. Il projectId del progetto "system" e' PER
+CLUSTER: un p-xxxxx letto sul local non corrisponde a niente su un downstream.
+
+Il cluster non si dichiara in una variabile: lo decide il KUBECONFIG DELL'HOST
+su cui il playbook gira, cioe' logging_group. Per questo [logging_managers] e'
+un gruppo a se' e non [new_managers]: quest'ultimo, in questo inventario, e' il
+manager del cluster downstream del laboratorio (192.168.1.x), un cluster
+diverso. E metterci dentro una macchina di produzione non sarebbe solo
+impreciso — [new_managers] lo legge anche playbooks/20-rancher.yml, che ci
+aggancia sopra system-agent-install.sh.
+
+Lanciarlo contro il cluster sbagliato non da' un sintomo utile: o il projectId
+non corrisponde a niente e il ruolo si ferma (caso fortunato), o corrisponde e
+nascono template e indici perfetti per i namespace di un altro cluster. Per
+questo il ruolo, prima di scrivere, legge e STAMPA a quale endpoint punta il
+kubeconfig e l'UID del namespace kube-system — l'identificatore univoco di un
+cluster Kubernetes — cosi' resta scritto nel log quale cluster e' stato
+indicizzato. E si ferma se in cattle-system trova il deployment "rancher",
+cioe' se sta parlando con il cluster local (logging_rifiuta_cluster_local).
 
 NON installa Elasticsearch: quello e' playbooks/60-elasticsearch.yml (nodo
 singolo) o 61-elasticsearch-cluster.yml (tre nodi), e non e' un prerequisito —
@@ -1532,11 +1556,18 @@ indici restano vuoti.
 
   CHE COSA VA SISTEMATO PRIMA DI LANCIARE
 
-  logging_system_project_id   projectId del progetto "system" di Rancher.
-                              OBBLIGATORIO, e nasce vuoto: finche' lo e',
-                              site.yml salta questo playbook
-  logging_es_host             indirizzo del nodo Elasticsearch
-  logging_es_password         password dell'utente elastic
+  logging_group               [logging_managers] -> k8smanager-p01. E' questa
+                              riga a decidere QUALE CLUSTER viene indicizzato:
+                              vedi il riquadro qui sopra
+  logging_system_project_id   p-9cpv4, letto su k8smanager-p01. Deve venire
+                              dallo stesso cluster che logging_group seleziona
+  logging_es_host             10.109.15.134 (elasticinfrap01). Quando "elk-svc"
+                              risolvera', mettici quello
+  logging_es_password         la stessa di es_elastic_password
+  logging_es_ca_file          vuota: i certificati NON vengono verificati, come
+                              "curl -k". Copiando /etc/elasticsearch/cert/ca/ca.crt
+                              da un nodo Elasticsearch a k8smanager-p01 e
+                              dichiarandola qui, la verifica si accende da sola
   logging_sets                prefissi degli indici. Quello applicativo
                               (k8s-coll-app) viene dalla guida; quello
                               infrastrutturale (k8s-coll-infra) e' un'IPOTESI
