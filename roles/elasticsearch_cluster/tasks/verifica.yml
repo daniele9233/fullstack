@@ -253,8 +253,22 @@
     mode: "0644"
   register: esc_marker_scritto
 
+# LA CONDIZIONE DEL BLOCCO NON PUO' ESSERE LA VARIABILE CHE IL BLOCCO CAMBIA,
+# ed e' un errore che e' costato un passo saltato in silenzio al primo giro
+# vero: "when" su un block NON si valuta una volta all'ingresso, viene copiato
+# su OGNI task del blocco e rivalutato quando quel task tocca. Il set_fact qui
+# sotto metteva esc_scrivi_initial_masters a false, e i due task dopo — quelli
+# che fanno il lavoro — trovavano la condizione ormai falsa e si saltavano.
+# Risultato: il fatto cambiava, il file no, e il playbook diceva "ok".
+#
+# Quindi la decisione si congela PRIMA, in una variabile che il blocco non
+# tocca.
+- name: Stabilisci se c'e' initial_master_nodes da togliere
+  set_fact:
+    esc_config_da_ripulire: "{{ esc_scrivi_initial_masters | bool }}"
+
 - name: Togli cluster.initial_master_nodes da elasticsearch.yml, a bootstrap finito
-  when: esc_scrivi_initial_masters | bool
+  when: esc_config_da_ripulire | bool
   block:
     - name: Da adesso initial_master_nodes non si scrive piu'
       set_fact:
@@ -262,6 +276,11 @@
 
     # Stesso template, stessa destinazione: cambia solo che la riga non c'e'
     # piu'. Niente riavvio, di proposito.
+    #
+    # NON registra su es_config_scritta: quella variabile decide il riavvio in
+    # servizio.yml, che a questo punto del ruolo e' gia' passato. Il file sul
+    # disco e' allineato per il prossimo avvio, e nessuno riavvia adesso per
+    # una riga che viene letta solo all'avvio.
     - name: Riscrivi elasticsearch.yml senza cluster.initial_master_nodes
       template:
         src: elasticsearch.yml.j2
