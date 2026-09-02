@@ -51,6 +51,11 @@
 #    fallimento (401, host irraggiungibile, JSON rifiutato) non viene notato e
 #    l'indice viene creato lo stesso, senza template e quindi senza ILM. Qui
 #    ogni chiamata e' controllata sul codice di stato.
+#
+# NIENTE defaults/: tutte le variabili logging_* stanno in group_vars/all.yml,
+# sezione LOGGING ELASTIC, come per elasticsearch_node e elasticsearch_cluster.
+# Una variabile che manca la' fa fermare il playbook invece di far prendere al
+# ruolo un valore di ripiego che nessuno ha scelto.
 
 - name: Controlli preliminari
   import_tasks: controlli.yml

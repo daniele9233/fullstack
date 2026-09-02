@@ -1512,9 +1512,16 @@ Gira sul NODO MANAGER — il primo host di [new_managers], o del gruppo indicato
 da logging_group — perche' e' li' che c'e' kubectl con un kubeconfig valido, ed
 e' da li' che la stessa cosa si faceva a mano con due script.
 
-NON installa Elasticsearch: quello e' playbooks/60-elasticsearch.yml, e non e'
-un prerequisito — questo playbook funziona anche contro un Elasticsearch
-installato altrove, purche' il manager lo raggiunga.
+NON installa Elasticsearch: quello e' playbooks/60-elasticsearch.yml (nodo
+singolo) o 61-elasticsearch-cluster.yml (tre nodi), e non e' un prerequisito —
+questo playbook funziona anche contro un Elasticsearch installato altrove,
+purche' il manager lo raggiunga. logging_es_host e' l'indirizzo del cluster
+ELASTICSEARCH, non del manager.
+
+Le variabili stanno TUTTE in group_vars/all.yml, sezione LOGGING ELASTIC. Il
+ruolo NON ha una cartella defaults/, come elasticsearch_node e
+elasticsearch_cluster: una variabile che manca ferma il playbook con "undefined
+variable" invece di prendere un ripiego che nessuno ha scelto.
 
 NON installa e non configura il collector (Fluent Bit, Logstash, Filebeat).
 Prepara il posto: perche' i log ci arrivino davvero, il nome dell'indice che il
