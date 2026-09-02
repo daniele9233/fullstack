@@ -243,11 +243,39 @@
         - "{{ es_certs_zip }}"
 
 # --- Consegna agli altri nodi -----------------------------------------------
-# Ogni nodo (tranne il primo) che sta nell'elenco legge dal primo i PROPRI tre
-# file e li scrive da se'. slurp + copy con content, e non fetch + copy: cosi'
-# le chiavi private non passano dal disco del controller. no_log perche'
-# ansible.cfg ha diff sempre acceso, e il diff di una chiave privata e' la
-# chiave privata.
+#
+# COME FUNZIONA, perche' non e' ovvio a leggerlo.
+#
+# Il task sotto appartiene a QUESTO nodo (elasticinfrap02, poniamo) ma
+# "delegate_to: il primo nodo" fa girare slurp LA'. delegate_to cambia DOVE il
+# modulo viene eseguito, non DI CHI sono le variabili: es_node_crt continua a
+# valere /etc/elasticsearch/cert/elasticinfrap02/elasticinfrap02.crt, e quel
+# file viene letto dal disco del PRIMO nodo, che ce l'ha perche' l'ha appena
+# generato. E' tutto qui il trucco della consegna.
+#
+# Il percorso completo di un file:
+#
+#   disco del primo nodo --(ssh, slurp, base64)--> controller --(ssh, copy)--> disco di questo nodo
+#
+# Sul controller il contenuto sta in memoria, nella variabile registrata, E in
+# un file temporaneo: il modulo copy con "content:" scrive quel contenuto in un
+# mkstemp (0600) sotto ~/.ansible/tmp, lo trasferisce e lo cancella subito
+# dopo. NON e' impronta zero, ed e' bene saperlo: la differenza con fetch +
+# copy — che sarebbe il modo naturale di fare la stessa cosa — e' che fetch
+# scrive le chiavi in un percorso PERSISTENTE e prevedibile e ce le LASCIA a
+# fine esecuzione. Qui non sopravvive niente al playbook.
+#
+# NIENTE ORDINAMENTO DA GESTIRE: la strategia linear di Ansible esegue i task
+# in lockstep su tutti gli host, quindi quando questo task parte la generazione
+# sul primo nodo e' finita. Per la stessa ragione hostvars[primo_nodo] ha gia'
+# esc_istanze_da_generare, che e' come questo nodo sa se e' fra quelli da
+# servire.
+#
+# no_log perche' ansible.cfg ha diff sempre acceso, e il diff di una chiave
+# privata e' la chiave privata.
+#
+# Quello che NON viaggia e' ca.key: resta sul primo nodo. Agli altri arrivano
+# ca.crt (pubblico), il proprio .crt e la propria .key.
 
 - name: Ricevi dal primo nodo i certificati di questo nodo
   when:
