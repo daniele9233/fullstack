@@ -1259,18 +1259,26 @@ es_discovery_type: "single-node"
 # --- Versione e provenienza del pacchetto -----------------------------------
 # Serie 9.x dal repo artifacts.elastic.co.
 #
-# es_version VUOTA = ultima 9.x disponibile. Valorizzala (es. "9.1.3") per
-# fissarla e rendere le installazioni ripetibili: il ruolo verifica che esista
-# davvero prima di installare e, se non c'e', elenca quelle disponibili. Le
-# versioni reali si leggono sul nodo con "apt-cache madison elasticsearch" a
-# repo abilitato.
+# FISSATA a 9.5.2: e' la versione con cui il cluster sintesi2-puglia-prod e'
+# stato installato e con cui gira. Prima era vuota, cioe' "l'ultima 9.x del
+# momento", e quello e' un problema solo apparentemente teorico: con tre nodi
+# ogni macchina prende l'ultima NEL MOMENTO IN CUI GLI TOCCA, quindi un nodo
+# rifatto o aggiunto fra un mese entrerebbe con una versione diversa dalle
+# altre due. Un cluster a versioni miste e' supportato solo durante un
+# aggiornamento, non come stato normale — e la verifica del ruolo se ne
+# accorge e si ferma.
 #
-# IN CLUSTER VA FISSATA. Con es_version vuota ogni nodo prende "l'ultima" nel
-# momento in cui gli tocca: tre nodi installati a qualche giorno di distanza
-# potrebbero avere tre versioni diverse, e un cluster a versioni miste e'
-# supportato solo durante un aggiornamento, non come stato normale.
+# PER AGGIORNARE, di proposito: si alza questo numero e si rilancia il
+# playbook, che toglie il blocco di apt, aggiorna e riavvia i nodi UNO ALLA
+# VOLTA aspettando che ognuno rientri nel cluster. Le versioni che esistono
+# davvero si leggono sui nodi con "apt-cache madison elasticsearch" a repo
+# abilitato; il ruolo verifica comunque che quella richiesta ci sia prima di
+# installare, e se non c'e' elenca le disponibili.
+#
+# Vuota = ultima 9.x disponibile. Ha senso solo per una prima installazione su
+# macchine nuove, dove nessuno ha ancora una versione da rispettare.
 es_major: "9"
-es_version: ""
+es_version: "9.5.2"
 
 es_package: "elasticsearch"
 es_apt_repo_url: "https://artifacts.elastic.co/packages/{{ es_major }}.x/apt"
