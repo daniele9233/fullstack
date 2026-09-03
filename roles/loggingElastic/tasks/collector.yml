@@ -127,6 +127,96 @@
 
 
 # ===========================================================================
+# IL SERVICE elk-svc
+# ===========================================================================
+#
+# Elasticsearch sta FUORI dal cluster, ma l'Output lo chiama "elk-svc" perche'
+# e' quello il nome nel SAN dei certificati. Il nome deve risolvere da dentro, e
+# ci si arriva con la coppia che usa l'esercizio:
+#
+#   Service   headless (clusterIP: None) e SENZA selector
+#   Endpoints scritti a mano, con gli IP dei nodi Elasticsearch
+#
+# Senza selector nessun controller riscrive gli Endpoints, e il DNS del cluster
+# risponde direttamente con quei tre indirizzi.
+#
+# Uno per namespace, come in esercizio: "elk-svc" in forma corta risolve solo
+# dentro al proprio namespace.
+#
+# Se logging_collector_es_host non e' il nome di questo Service — per esempio
+# perche' ci hai messo un IP — questa parte non serve e si salta da se'.
+
+- name: Componi il Service e gli Endpoints di elk-svc
+  set_fact:
+    logging_manifest_elk: >-
+      {%- set out = [] -%}
+      {%- set indirizzi = [] -%}
+      {%- for ip in logging_elk_service_endpoints -%}
+      {%-   set _ = indirizzi.append({'ip': ip}) -%}
+      {%- endfor -%}
+      {%- for ns in logging_coppie | map(attribute='namespace') | unique | sort -%}
+      {%-   set _ = out.append({
+              'apiVersion': 'v1',
+              'kind': 'Service',
+              'metadata': {'name': logging_elk_service_name, 'namespace': ns},
+              'spec': {
+                'clusterIP': 'None',
+                'ports': [{'port': logging_elk_service_port | int,
+                           'protocol': 'TCP',
+                           'targetPort': logging_elk_service_port | int}] } }) -%}
+      {%-   set _ = out.append({
+              'apiVersion': 'v1',
+              'kind': 'Endpoints',
+              'metadata': {'name': logging_elk_service_name, 'namespace': ns},
+              'subsets': [{
+                'addresses': indirizzi,
+                'ports': [{'port': logging_elk_service_port | int, 'protocol': 'TCP'}] }] }) -%}
+      {%- endfor -%}
+      {{ out | to_json }}
+  when:
+    - logging_manage_elk_service | bool
+    - logging_collector_es_host == logging_elk_service_name
+
+- name: "Applica il Service {{ logging_elk_service_name }} nei namespace"
+  command: "{{ logging_kubectl }} apply -f -"
+  args:
+    stdin: "{{ logging_manifest_elk | from_json | map('to_nice_yaml', indent=2) | join('---\n') }}"
+  environment:
+    KUBECONFIG: "{{ logging_kubeconfig }}"
+  register: logging_elk_applicato
+  changed_when: >-
+    logging_elk_applicato.stdout_lines
+    | reject('search', 'unchanged$') | list | length > 0
+  when:
+    - logging_manage_elk_service | bool
+    - logging_collector_es_host == logging_elk_service_name
+
+- name: "Riepilogo di {{ logging_elk_service_name }}"
+  debug:
+    msg: >-
+      {{ logging_elk_service_name }}:
+      {{ logging_coppie | map(attribute='namespace') | unique | list | length }}
+      namespace, Endpoints su
+      {{ logging_elk_service_endpoints | join(', ') }}:{{ logging_elk_service_port }}.
+      E' questo a far risolvere "{{ logging_collector_es_host }}" dai pod.
+  when:
+    - logging_manage_elk_service | bool
+    - logging_collector_es_host == logging_elk_service_name
+
+- name: "Perche' {{ logging_elk_service_name }} non viene creato"
+  debug:
+    msg: >-
+      {{ 'logging_manage_elk_service e a false: il Service lo gestisce qualcun altro.'
+         if not (logging_manage_elk_service | bool)
+         else 'logging_collector_es_host vale "' ~ logging_collector_es_host ~ '", che non e il
+      nome del Service (' ~ logging_elk_service_name ~ '): gli Output ci arrivano
+      per altra strada, quindi non serve crearlo.' }}
+  when: >-
+    not (logging_manage_elk_service | bool)
+    or logging_collector_es_host != logging_elk_service_name
+
+
+# ===========================================================================
 # IL SECRET
 # ===========================================================================
 #

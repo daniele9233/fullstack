@@ -2079,6 +2079,36 @@ logging_manage_collector_secret: true
 # Si cambia solo se cambia la versione dell'operatore.
 logging_collector_api_version: "logging.banzaicloud.io/v1beta1"
 
+# --- Il Service che fa risolvere elk-svc DENTRO il cluster ------------------
+#
+# Elasticsearch sta FUORI dal cluster Kubernetes, ma l'Output lo chiama per
+# nome, "elk-svc", perche' e' quello il nome nel SAN dei certificati. Il nome
+# deve quindi risolvere da dentro, e ci si arriva con la coppia classica:
+#
+#   Service   headless (clusterIP: None) e SENZA selector
+#   Endpoints scritti a mano, con gli IP dei nodi Elasticsearch
+#
+# Senza selector nessun controller tocca gli Endpoints, e il DNS del cluster
+# restituisce direttamente quei tre indirizzi.
+#
+# NELL'ESERCIZIO STA IN OGNI NAMESPACE, tutti e 17. Il nome corto "elk-svc"
+# risolve solo dentro al proprio namespace, e replicarlo ovunque e' la scelta
+# che e' stata fatta la': la rifacciamo uguale.
+logging_manage_elk_service: true
+logging_elk_service_name: "elk-svc"
+logging_elk_service_port: 9200
+
+# Gli IP dei nodi Elasticsearch DI QUESTO ambiente: sono i tre di
+# [elastic_cluster_servers] nell'inventario. Nell'esercizio ci sono i suoi
+# (10.109.13.134/135/136), qui vanno i nostri.
+#
+# Vanno bene gli IP e non i nomi: e' proprio questo oggetto a fare la
+# risoluzione, quindi non puo' dipendere da un'altra risoluzione.
+logging_elk_service_endpoints:
+  - "10.109.15.134"
+  - "10.109.15.135"
+  - "10.109.15.136"
+
 
 # ===========================================================================
 # LOGGING, PARTE 8: L'UTENTE "rancher" SU ELASTICSEARCH
@@ -2103,29 +2133,36 @@ logging_es_user_force_password: false
 # da _security/user/rancher: "roles": ["k8s-logger"].
 logging_es_writer_role: "k8s-logger"
 
-# Gli indici su cui puo' scrivere. I due prefissi di logging_sets, con la coda:
-# deve coprire sia gli alias (k8s-prod-app-superset) sia gli indici
-# (k8s-prod-app-superset-000132), perche' la bulk arriva sull'alias ma ILM
-# lavora sugli indici.
+# Gli indici su cui puo' lavorare, e cosa ci puo' fare. Copiati dall'esercizio:
+#
+#   "indices": [{"names": ["k8s-*"], "privileges": ["all"]}]
+#
+# "k8s-*" copre entrambi i prefissi e anche quelli che verranno; "all" sugli
+# indici e' largo ma CIRCOSCRITTO, e serve davvero: la bulk arriva sull'alias,
+# ILM crea e cancella gli indici sotto, e il plugin aggiorna le mapping.
 logging_es_writer_index_patterns:
-  - "k8s-prod-app-*"
-  - "k8s-prod-infra-*"
-
-# >>> ANCORA DA VERIFICARE, prima di mettere logging_manage_es_user a true <<<
-#
-# Il NOME del ruolo l'ho letto (k8s-logger, qui sopra); il suo CONTENUTO no.
-# Questi sono i privilegi che servono a un collector che scrive su un alias di
-# rollover, ma sono la mia ricostruzione, non una copia. Per leggere quelli veri:
-#
-#   curl -sk -u elastic:'<password>' \
-#     'https://10.109.13.134:9200/_security/role/k8s-logger?pretty'
-#
-# Se la lista che esce e' diversa, vince quella: l'obiettivo e' un ambiente
-# uguale all'altro, non uno che funziona in un modo suo.
+  - "k8s-*"
 logging_es_writer_privileges:
-  - "create_index"
-  - "create_doc"
-  - "index"
-  - "write"
-  - "view_index_metadata"
-  - "auto_configure"
+  - "all"
+
+# --- L'UNICA DEVIAZIONE VOLUTA DALL'AMBIENTE DI RIFERIMENTO -----------------
+#
+# La' il ruolo k8s-logger ha  "cluster": ["monitor", "manage", "all"].
+#
+# "all" al livello CLUSTER non e' "gestisci i tuoi indici": e' il permesso su
+# tutto Elasticsearch. Quell'utente puo' cancellare qualunque indice — .kibana
+# e .security compresi — cambiare le password degli altri, spegnere la
+# sicurezza, fermare i nodi. E la sua password non sta in cassaforte: sta in un
+# Secret replicato in ogni namespace del cluster, leggibile da chiunque abbia i
+# permessi su uno qualsiasi di quelli. ("monitor" e "manage" li' dentro sono
+# anche inutili: "all" li comprende.)
+#
+# Fluentd, al livello cluster, ha bisogno di "monitor" e basta: la usa
+# all'avvio per chiedere la versione e decidere come comporre la bulk. Tutto il
+# resto del suo lavoro sta negli indici, qui sopra.
+#
+# Il collector si comporta in modo identico; cambia solo cosa succede il giorno
+# in cui quella password esce da un namespace. Per riprodurre l'esercizio alla
+# lettera, rimetti l'elenco intero.
+logging_es_writer_cluster_privileges:
+  - "monitor"

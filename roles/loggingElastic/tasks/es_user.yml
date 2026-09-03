@@ -52,10 +52,7 @@
     timeout: "{{ logging_es_timeout }}"
     body_format: json
     body:
-      cluster:
-        # Fluentd chiede la versione all'avvio per decidere come comporre la
-        # bulk. Senza, parte con un 403 che sembra un problema di indici.
-        - "monitor"
+      cluster: "{{ logging_es_writer_cluster_privileges }}"
       indices:
         - names: "{{ logging_es_writer_index_patterns }}"
           privileges: "{{ logging_es_writer_privileges }}"
@@ -68,7 +65,26 @@
     msg: >-
       Ruolo {{ logging_es_writer_role }}:
       {{ logging_es_writer_privileges | join(', ') }}
-      su {{ logging_es_writer_index_patterns | join(', ') }}, piu' cluster:monitor.
+      su {{ logging_es_writer_index_patterns | join(', ') }};
+      cluster {{ logging_es_writer_cluster_privileges | join(', ') }}.
+
+# Non e' una verifica che puo' fallire — e' una scelta di chi configura — ma
+# merita di restare nel log del lancio, perche' e' il tipo di cosa che si decide
+# una volta e poi non la guarda piu' nessuno.
+- name: Segnala se il collector ha privilegi di cluster larghi
+  debug:
+    msg: >-
+      ATTENZIONE: il ruolo {{ logging_es_writer_role }} ha
+      "{{ logging_es_writer_cluster_privileges | join(', ') }}" al livello
+      CLUSTER. Con "all" o "manage" quell'utente non gestisce solo i suoi
+      indici: puo' cancellare .kibana e .security, cambiare le password degli
+      altri, fermare i nodi. E la sua password sta in un Secret replicato in
+      ogni namespace, quindi chi legge quel Secret diventa amministratore di
+      Elasticsearch. A fluentd basta "monitor":
+      logging_es_writer_cluster_privileges: ['monitor'].
+  when: >-
+    'all' in logging_es_writer_cluster_privileges
+    or 'manage' in logging_es_writer_cluster_privileges
 
 # --- L'utente ---------------------------------------------------------------
 
