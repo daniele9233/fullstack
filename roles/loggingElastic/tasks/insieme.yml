@@ -196,23 +196,50 @@
 # fatto fallire. Nello script il ramo "priorita' maggiore" e' un ramo normale:
 # il namespace viene messo da parte e il lancio finisce con esito 0, quindi da
 # fuori — da un cron, da un altro playbook — sembra riuscito.
+# I rifiuti si raccolgono PRIMA e si valutano in un colpo solo, invece di
+# ciclare l'assert sui risultati. Due ragioni:
+#
+#   - un assert dentro a un loop stampa l'intero risultato della uri per OGNI
+#     giro, corpo della richiesta compreso: su quattordici template sono
+#     centinaia di righe di rumore in cui l'unica cosa che conta — "e' andato
+#     tutto bene" — si perde;
+#   - ciclando, il primo rifiuto fa fallire e degli altri non si sa niente. Se
+#     tre template sono in conflitto, e' meglio vederli tutti e tre subito che
+#     scoprirli uno per lancio.
+- name: "{{ insieme.prefisso }}: raccogli i template rifiutati"
+  set_fact:
+    logging_tpl_rifiutati_json: >-
+      {%- set out = [] -%}
+      {%- for r in logging_tpl_scritti.results | default([]) -%}
+      {%-   if not (r.skipped | default(false)) and (r.status | default(200)) == 400 -%}
+      {%-     set _ = out.append({
+                'indice': r.item.indice | default('?'),
+                'risposta': (r.json | default(r.content | default(''))) | string }) -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ out | to_json }}
+
+- name: "{{ insieme.prefisso }}: converti in lista"
+  set_fact:
+    logging_tpl_rifiutati: "{{ logging_tpl_rifiutati_json | from_json }}"
+
 - name: "{{ insieme.prefisso }}: fermati sui pattern ancora in conflitto"
   assert:
     that:
-      - (item.status | default(200)) != 400
+      - logging_tpl_rifiutati | length == 0
     fail_msg: >-
-      Template {{ item.item.indice | default('?') }} rifiutato da
-      Elasticsearch. Se il messaggio parla di "same priority", due pattern si
-      contendono gli stessi indici e il calcolo delle priorita' non ha coperto
-      il caso: guarda quali template esistono gia' con
+      {{ logging_tpl_rifiutati | length }} template rifiutati da Elasticsearch:
+      {{ logging_tpl_rifiutati | map(attribute='indice') | join(', ') }}.
+      Se il messaggio parla di "same priority", due pattern si contendono gli
+      stessi indici e il calcolo delle priorita' non ha coperto il caso: guarda
+      quali template esistono gia' con
       curl -k -u {{ logging_es_user }}:'<password>'
       "{{ logging_es_url }}/_index_template/{{ insieme.prefisso }}-*?filter_path=index_templates.name,index_templates.index_template.priority,index_templates.index_template.index_patterns"
       — il piu' probabile e' un template rimasto da un giro precedente a una
-      priorita' che adesso non torna. Risposta: {{ item.json | default(item.content | default('')) }}
-  loop: "{{ logging_tpl_scritti.results | default([]) }}"
-  loop_control:
-    label: "{{ item.item.indice | default('saltato') }}"
-  when: not (item.skipped | default(false))
+      priorita' che adesso non torna.
+      Risposte: {{ logging_tpl_rifiutati | map(attribute='risposta') | join(' ; ') }}
+    success_msg: >-
+      {{ insieme.prefisso }}: nessun template rifiutato.
 
 
 # ===========================================================================
