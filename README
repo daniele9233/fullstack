@@ -1520,12 +1520,33 @@ ospita Rancher, e i downstream. Il projectId del progetto "system" e' PER
 CLUSTER: un p-xxxxx letto sul local non corrisponde a niente su un downstream.
 
 Il cluster non si dichiara in una variabile: lo decide il KUBECONFIG DELL'HOST
-su cui il playbook gira, cioe' logging_group. Per questo [logging_managers] e'
-un gruppo a se' e non [new_managers]: quest'ultimo, in questo inventario, e' il
-manager del cluster downstream del laboratorio (192.168.1.x), un cluster
+su cui il playbook gira, cioe' il primo host di [logging_managers]. Per questo
+e' un gruppo a se' e non [new_managers]: quest'ultimo, in questo inventario, e'
+il manager del cluster downstream del laboratorio (192.168.1.x), un cluster
 diverso. E metterci dentro una macchina di produzione non sarebbe solo
 impreciso — [new_managers] lo legge anche playbooks/20-rancher.yml, che ci
 aggancia sopra system-agent-install.sh.
+
+E ATTENZIONE A COME SI CAMBIA QUEL GRUPPO. La riga "hosts:" di
+playbooks/70-logging.yml non puo' leggere group_vars/: Ansible la valuta prima
+di caricarli. Il gruppo e' quindi cablato li' come default del filtro, e
+scrivere logging_group in group_vars/all.yml NON HA NESSUN EFFETTO — il valore
+viene ignorato in silenzio. E' un errore gia' costato: con
+"logging_group: logging_managers" scritto in group_vars e il default del play
+ancora a 'new_managers',
+
+  ansible-playbook -i inventory.ini playbooks/70-logging.yml --list-hosts
+
+rispondeva "play #1 (new_managers[0]) ... hosts (1): manager01", cioe' il
+laboratorio. Le due strade che funzionano sono cambiare l'host dentro
+[logging_managers] in inventory.ini, oppure passare
+-e logging_group=<gruppo> sulla riga di comando (le extra-var sono l'unica
+sorgente gia' disponibile quando "hosts:" viene valutato).
+
+PRIMA DI OGNI LANCIO, si guarda il NOME DELL'HOST e non il gruppo:
+
+  ansible-playbook -i inventory.ini playbooks/70-logging.yml --list-hosts
+  -> deve dire k8smanager-p01. Se dice manager01, non lanciare.
 
 Lanciarlo contro il cluster sbagliato non da' un sintomo utile: o il projectId
 non corrisponde a niente e il ruolo si ferma (caso fortunato), o corrisponde e
@@ -1556,11 +1577,14 @@ indici restano vuoti.
 
   CHE COSA VA SISTEMATO PRIMA DI LANCIARE
 
-  logging_group               [logging_managers] -> k8smanager-p01. E' questa
-                              riga a decidere QUALE CLUSTER viene indicizzato:
+  [logging_managers]          in inventory.ini: k8smanager-p01 (10.109.15.69),
+                              il manager della PRODUZIONE. E' l'host li' dentro
+                              a decidere QUALE CLUSTER viene indicizzato, e si
+                              cambia solo li' o con -e logging_group=<gruppo>:
                               vedi il riquadro qui sopra
   logging_system_project_id   p-9cpv4, letto su k8smanager-p01. Deve venire
-                              dallo stesso cluster che logging_group seleziona
+                              dallo stesso cluster dell'host che --list-hosts
+                              nomina
   logging_es_host             10.109.15.134 (elasticinfrap01). Quando "elk-svc"
                               risolvera', mettici quello
   logging_es_password         la stessa di es_elastic_password

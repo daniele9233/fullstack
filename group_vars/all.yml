@@ -1658,11 +1658,11 @@ esc_health_accepted:
 #
 #   ansible-playbook -i inventory.ini playbooks/70-logging.yml
 #
-# DOVE GIRA: sul PRIMO host di logging_group ([new_managers]), perche' e' li'
-# che c'e' kubectl con un kubeconfig valido. Solo il primo: creare template e
-# indici e' un'operazione sul cluster Elasticsearch, non sul nodo, e ripeterla
-# da tre manager vorrebbe dire farla tre volte in parallelo sugli stessi
-# oggetti.
+# DOVE GIRA: sul PRIMO host di [logging_managers], cioe' k8smanager-p01
+# (10.109.15.69), il manager della PRODUZIONE — perche' e' li' che c'e' kubectl
+# con un kubeconfig valido. Solo il primo: creare template e indici e'
+# un'operazione sul cluster Elasticsearch, non sul nodo, e ripeterla da tre
+# manager vorrebbe dire farla tre volte in parallelo sugli stessi oggetti.
 #
 # NON installa Elasticsearch (quello e' 60- o 61-elasticsearch), NON configura
 # il collector: prepara il posto dove il collector scrivera'. Perche' i log ci
@@ -1674,19 +1674,40 @@ esc_health_accepted:
 # una variabile che manca fa fermare il playbook con "undefined variable"
 # invece di prendere un valore di ripiego che nessuno ha scelto.
 
-# Gruppo di inventario da cui si parla con Kubernetes e con Elasticsearch. Il
-# playbook prende SOLO il primo host del gruppo.
+# logging_group NON STA QUI, ED E' VOLUTO.
 #
-# E' QUESTA RIGA A DECIDERE QUALE CLUSTER VIENE INDICIZZATO, non una variabile
-# che nomina il cluster: il ruolo usa il kubeconfig di quell'host, quindi legge
-# i namespace del cluster di cui quell'host fa parte. Cambiare gruppo qui vuol
-# dire cambiare cluster, e logging_system_project_id qui sotto deve venire
-# dallo stesso.
+# Il gruppo da cui si parla con Kubernetes lo sceglie la riga "hosts:" di
+# playbooks/70-logging.yml, e quella riga NON PUO' LEGGERE QUESTO FILE: Ansible
+# la valuta prima di caricare group_vars/, quando logging_group non esiste
+# ancora. Il valore scritto qui verrebbe ignorato in silenzio.
 #
-# NON e' [new_managers], che in questo inventario e' il manager del cluster
-# downstream del laboratorio (192.168.1.x). [logging_managers] e' il manager del
-# cluster di produzione (10.109.15.69), quello i cui namespace vanno indicizzati.
-logging_group: "logging_managers"
+# Non e' un'ipotesi, e' successo. Con "logging_group: logging_managers" scritto
+# proprio in questo punto, e il default del play a 'new_managers',
+#
+#   ansible-playbook -i inventory.ini playbooks/70-logging.yml --list-hosts
+#
+# rispondeva "play #1 (new_managers[0]) ... hosts (1): manager01": il manager
+# del cluster downstream di LABORATORIO (192.168.1.67) invece di quello di
+# produzione. Tutti i lanci senza -e sono finiti li'. Rimettere la variabile qui
+# rifa' esattamente quel danno, e in un modo che non si vede finche' non si
+# guardano i namespace indicizzati.
+#
+# QUINDI, per cambiare cluster ci sono due strade e sono queste due:
+#
+#   1. cambiare l'host dentro [logging_managers] in inventory.ini — la normale;
+#   2. passare il gruppo come EXTRA-VAR, l'unica sorgente gia' disponibile
+#      quando "hosts:" viene valutato:
+#        ansible-playbook playbooks/70-logging.yml -e logging_group=altro_gruppo
+#
+# ([all:vars] nell'inventario non funziona nemmeno lui: provato.)
+#
+# E' QUELL'HOST A DECIDERE QUALE CLUSTER VIENE INDICIZZATO: il ruolo usa il suo
+# kubeconfig, quindi legge i namespace del cluster di cui quell'host fa parte, e
+# logging_system_project_id qui sotto deve venire dallo STESSO cluster.
+#
+# Verifica sempre prima di lanciare, leggendo il nome dell'host e non il gruppo:
+#   ansible-playbook -i inventory.ini playbooks/70-logging.yml --list-hosts
+#   -> deve dire k8smanager-p01. Se dice manager01, NON lanciare.
 
 
 # --- 1. Elenco dei namespace (quello che faceva namespace-listing.sh) --------
@@ -1713,8 +1734,9 @@ logging_group: "logging_managers"
 # IL projectId E' PER CLUSTER. In un'installazione Rancher ce n'e' sempre piu'
 # di uno — il cluster "local" che ospita Rancher, e i downstream — e un
 # p-xxxxx letto sul local non corrisponde a niente su un downstream. Questo
-# viene da k8smanager-p01 (10.109.15.69), cioe' dallo stesso host che
-# logging_group seleziona: le due cose devono restare d'accordo.
+# viene da k8smanager-p01 (10.109.15.69), cioe' dallo stesso host che il play
+# seleziona con [logging_managers]: le due cose devono restare d'accordo. Se
+# --list-hosts nomina un host diverso, questo valore non vale per quel cluster.
 logging_system_project_id: "p-9cpv4"
 
 # Con true il ruolo si ferma se il cluster a cui sta parlando ha il deployment

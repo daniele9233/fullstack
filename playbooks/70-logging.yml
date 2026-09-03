@@ -4,13 +4,13 @@
 # Eseguibile da solo:
 #   ansible-playbook playbooks/70-logging.yml
 #
-# Gira sul NODO MANAGER / CONTROL PLANE — il primo host del gruppo indicato da
-# logging_group, [new_managers] salvo diverso avviso — perche' e' li' che c'e'
-# kubectl con un kubeconfig valido, ed e' da li' che
-# oggi si lanciano a mano namespace-listing.sh e create-index.sh. Solo il primo
-# host: creare template e indici e' un'operazione sul cluster Elasticsearch, non
-# sul nodo, e ripeterla da tre manager significherebbe farla tre volte in
-# parallelo sugli stessi oggetti.
+# Gira sul NODO MANAGER / CONTROL PLANE del cluster da indicizzare — il primo
+# host di [logging_managers], cioe' k8smanager-p01 (10.109.15.69), la
+# PRODUZIONE — perche' e' li' che c'e' kubectl con un kubeconfig valido, ed e'
+# da li' che oggi si lanciano a mano namespace-listing.sh e create-index.sh.
+# Solo il primo host: creare template e indici e' un'operazione sul cluster
+# Elasticsearch, non sul nodo, e ripeterla da tre manager significherebbe farla
+# tre volte in parallelo sugli stessi oggetti.
 #
 # NON tocca il nodo Elasticsearch: ci parla soltanto, con l'utente elastic.
 # Il nodo lo installa playbooks/60-elasticsearch.yml, che e' un'altra cosa e non
@@ -59,8 +59,41 @@
 #   # fra un nome e i nomi che lo contengono
 #   ansible-playbook playbooks/70-logging.yml -e logging_pattern_suffix='-*'
 
+# ATTENZIONE ALLA RIGA "hosts:" QUI SOTTO — non e' una riga come le altre.
+#
+# Ansible valuta "hosts:" PRIMA di caricare group_vars/ e host_vars/. In quel
+# momento logging_group NON ESISTE ancora, qualunque cosa ci sia scritto in
+# group_vars/all.yml: vince sempre il valore del filtro default(). Non e' un
+# dettaglio teorico, e' quello che succedeva davvero. Con
+# "logging_group: logging_managers" gia' scritto in group_vars/all.yml e il
+# default a 'new_managers', questo comando
+#
+#   ansible-playbook -i inventory.ini playbooks/70-logging.yml --list-hosts
+#
+# rispondeva
+#
+#   play #1 (new_managers[0]) ... hosts (1): manager01
+#
+# cioe' il manager del cluster downstream di LABORATORIO (192.168.1.67), non
+# quello di produzione. Ogni lancio senza -e e' finito li'.
+#
+# QUINDI IL DEFAULT QUI SOTTO E' LA LEVA VERA, ed e' per questo che punta a
+# [logging_managers]. Le uniche due cose che cambiano davvero il cluster sono:
+#
+#   1. cambiare l'host dentro [logging_managers] nell'inventario;
+#   2. passare il gruppo come EXTRA-VAR, l'unica sorgente gia' disponibile
+#      quando "hosts:" viene valutato:
+#        ansible-playbook playbooks/70-logging.yml -e logging_group=altro_gruppo
+#
+# Scrivere logging_group in group_vars/all.yml o in [all:vars] dell'inventario
+# NON funziona: provati tutti e due, in entrambi i casi il play resta sul
+# default. Per questo la variabile non sta piu' in group_vars/all.yml.
+#
+# CONTROLLA SEMPRE PRIMA DI LANCIARE, e leggi il NOME DELL'HOST, non il gruppo:
+#   ansible-playbook -i inventory.ini playbooks/70-logging.yml --list-hosts
+#   -> deve dire k8smanager-p01. Se dice manager01, NON lanciare.
 - name: Indici di logging su Elasticsearch
-  hosts: "{{ logging_group | default('new_managers') }}[0]"
+  hosts: "{{ logging_group | default('logging_managers') }}[0]"
   become: yes
   gather_facts: no
   roles:

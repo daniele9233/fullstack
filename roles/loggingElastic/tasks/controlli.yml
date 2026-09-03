@@ -139,8 +139,9 @@
       {{ inventory_hostname }}: {{ logging_kubectl }} non c'e' o non e'
       eseguibile. Su un nodo RKE2 il binario sta in
       /var/lib/rancher/rke2/bin/kubectl e il ruolo kubectl_setup lo copia in
-      /usr/local/bin. Se questo non e' un nodo del cluster, cambia
-      logging_group: il ruolo va eseguito da dove kubectl funziona.
+      /usr/local/bin. Se questo non e' un nodo del cluster, correggi l'host
+      dentro [logging_managers] in inventory.ini: il ruolo va eseguito da dove
+      kubectl funziona.
 
 - name: Verifica che il kubeconfig ci sia
   stat:
@@ -247,10 +248,14 @@
       gli indici nascono, e sono quelli sbagliati. Ci si accorge dopo, quando i
       log del cluster vero non hanno un posto dove andare.
 
-      Se e' un errore, il gruppo da correggere e' logging_group
-      (adesso "{{ logging_group }}", primo host {{ inventory_hostname }}): deve
-      contenere il manager del cluster da indicizzare, e
-      logging_system_project_id deve venire da QUELLO stesso cluster.
+      Se e' un errore, il play sta girando sull'host sbagliato: adesso e'
+      {{ inventory_hostname }}. Si corregge in inventory.ini, cambiando l'host
+      dentro [logging_managers] — che e' il gruppo cablato come default nella
+      riga "hosts:" di playbooks/70-logging.yml. NON basta cambiare
+      logging_group in group_vars/all.yml: quella riga i group_vars non li
+      legge, il valore verrebbe ignorato in silenzio. In alternativa,
+      -e logging_group=<gruppo> sulla riga di comando.
+      E logging_system_project_id deve venire da QUELLO stesso cluster.
 
       Se invece Rancher gira davvero sul cluster da indicizzare, e' un falso
       allarme: logging_rifiuta_cluster_local=false.
