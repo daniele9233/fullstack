@@ -32,7 +32,7 @@
 # app_namespaces.txt con dentro TUTTI i namespace, cattle-system compreso.
 #
 # E la riga vuota non e' innocua: create-index.sh la legge come namespace ""
-# e crea un template chiamato "k8s-coll-infra-" con pattern "k8s-coll-infra-*"
+# e crea un template chiamato "k8s-prod-infra-" con pattern "k8s-prod-infra-*"
 # a priorita' 500, cioe' un template jolly che si mette davanti a tutti gli
 # altri di quell'insieme.
 - name: Verifica che il projectId sia il valore della label e non quello dell'annotazione

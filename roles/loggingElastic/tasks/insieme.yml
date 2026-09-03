@@ -2,7 +2,7 @@
 # UN insieme: un prefisso, un elenco di namespace, una priorita' di partenza.
 # E' l'equivalente di una riga come
 #
-#   ./create-index.sh https 10.10.111.24 elastic '<password>' k8s-coll-app \
+#   ./create-index.sh https 10.10.111.24 elastic '<password>' k8s-prod-app \
 #       /root/logging-script/app_namespaces.txt 500 1 1 logs
 #
 # ma senza il giro dei rilanci a priorita' crescente.
@@ -13,11 +13,11 @@
 #
 # Il problema, in due namespace: "foo" e "foobar".
 #
-#   template k8s-coll-app-foo      pattern "k8s-coll-app-foo*"     priorita' 500
-#   template k8s-coll-app-foobar   pattern "k8s-coll-app-foobar*"  priorita' 500
+#   template k8s-prod-app-foo      pattern "k8s-prod-app-foo*"     priorita' 500
+#   template k8s-prod-app-foobar   pattern "k8s-prod-app-foobar*"  priorita' 500
 #
 # Il primo pattern matcha ANCHE gli indici del secondo
-# ("k8s-coll-app-foobar-000001" comincia per "k8s-coll-app-foo"). Due template
+# ("k8s-prod-app-foobar-000001" comincia per "k8s-prod-app-foo"). Due template
 # che si contendono lo stesso indice con la stessa priorita' sono ambigui, e
 # Elasticsearch rifiuta il secondo:
 #
@@ -36,7 +36,7 @@
 # scriverebbe nell'altro.
 #
 # Con logging_pattern_suffix = "-*" il problema non si pone proprio:
-# "k8s-coll-app-foo-*" non matcha "k8s-coll-app-foobar-000001", i conflitti
+# "k8s-prod-app-foo-*" non matcha "k8s-prod-app-foobar-000001", i conflitti
 # calcolati vengono zero e tutti i template restano alla priorita' di base.
 # (Restano possibili se logging_strip_dashes e' false, perche' allora nei nomi i
 # trattini ci sono ancora: "foo" e "foo-bar" tornano a incastrarsi.)

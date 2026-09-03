@@ -2,9 +2,9 @@
 # LA POLICY ILM: il pezzo che negli script non c'e'.
 #
 # create-index.sh compone il nome della policy come "<PREFISSO>-<LIFECYCLE_END>"
-# (k8s-coll-app + logs = k8s-coll-app-logs) e lo scrive nel template come
-#   index.lifecycle.name: k8s-coll-app-logs
-#   index.lifecycle.rollover_alias: k8s-coll-app-<namespace>
+# (k8s-prod-app + logs = k8s-prod-app-logs) e lo scrive nel template come
+#   index.lifecycle.name: k8s-prod-app-logs
+#   index.lifecycle.rollover_alias: k8s-prod-app-<namespace>
 # ma NON CREA LA POLICY. Se quel nome non esiste gia' in Elasticsearch:
 #
 #   - il template viene accettato lo stesso, senza una parola;

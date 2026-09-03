@@ -1762,7 +1762,7 @@ logging_ns_exclude: []
 
 # --- Dal nome del namespace al nome dell'indice -----------------------------
 # true = i trattini vengono tolti: "cattle-system" -> "cattlesystem", indice
-# "k8s-coll-infra-cattlesystem". E' quello che fa lo script a mano.
+# "k8s-prod-infra-cattlesystem". E' quello che fa lo script a mano.
 #
 # DEVE COINCIDERE CON QUELLO CHE SCRIVE IL COLLECTOR: se il collector tiene i
 # trattini, i template creati qui non governano nessun indice.
@@ -1825,10 +1825,9 @@ logging_es_ca_file: ""
 
 
 # --- 3. Insiemi di indici (quello che faceva create-index.sh) ---------------
-# Un elemento per ogni lancio di create-index.sh. Il primo e' quello della
-# guida:
+# Un elemento per ogni lancio di create-index.sh:
 #
-#   ./create-index.sh https 10.10.111.24 elastic '<password>' k8s-coll-app \
+#   ./create-index.sh https 10.109.15.134 elastic '<password>' k8s-prod-app \
 #       /root/logging-script/app_namespaces.txt 500 1 1 logs
 #
 # Campi: nome (etichetta leggibile), prefisso (l'indice e'
@@ -1836,13 +1835,21 @@ logging_es_ca_file: ""
 # BASE del template), shards, replicas, lifecycle (la policy si chiama
 # <prefisso>-<lifecycle>).
 #
-# IL SECONDO BLOCCO E' UN'IPOTESI: negli script forniti create-index.sh viene
-# lanciato solo sull'elenco applicativo, quindi "k8s-coll-infra" e' il prefisso
-# coerente con "k8s-coll-app" ma non e' scritto da nessuna parte. Verificalo
-# nella configurazione del collector, oppure togli il blocco.
+# I PREFISSI SONO "k8s-prod-*" PERCHE' QUESTA E' LA PRODUZIONE. La guida di
+# partenza usava "k8s-coll-app" e lanciava create-index.sh solo sull'elenco
+# applicativo; qui i due insiemi sono simmetrici, k8s-prod-app e k8s-prod-infra.
+#
+# RESTANO DA CONFERMARE SULLA CONFIGURAZIONE DEL COLLECTOR — sono l'unica cosa
+# che il playbook non puo' verificare da solo. Il nome che il collector compone
+# deve coincidere con l'alias creato qui, altrimenti nascono template e indici
+# che nessuno usa e i log continuano ad andare dove andavano. Si legge dal
+# collector sul cluster (Fluent Bit: "Index" / "Logstash_Prefix"; Logstash:
+# 'index =>'), oppure da Elasticsearch guardando quali indici hanno documenti:
+#   curl -sk -u elastic:'<password>' \
+#     'https://10.109.15.134:9200/_cat/indices?v&h=index,docs.count&s=index'
 logging_sets:
   - nome: "applicativi"
-    prefisso: "k8s-coll-app"
+    prefisso: "k8s-prod-app"
     sorgente: "app"
     priorita: 500
     shards: 1
@@ -1850,7 +1857,7 @@ logging_sets:
     lifecycle: "logs"
 
   - nome: "infrastrutturali"
-    prefisso: "k8s-coll-infra"
+    prefisso: "k8s-prod-infra"
     sorgente: "infra"
     priorita: 500
     shards: 1
@@ -1860,18 +1867,18 @@ logging_sets:
 # Coda del pattern del template, dopo <prefisso>-<namespace>.
 #
 # "*"  e' quella dello script, ed e' l'origine della SECONDA collisione: il
-#      pattern "k8s-coll-app-foo*" matcha anche "k8s-coll-app-foobar-000001",
+#      pattern "k8s-prod-app-foo*" matcha anche "k8s-prod-app-foobar-000001",
 #      quindi due namespace di cui uno e' prefisso dell'altro si contendono gli
 #      stessi indici. Elasticsearch rifiuta il secondo template
 #      ("...that have the same priority..."), lo script scrive il namespace in
-#      k8s-coll-app-template-priority-600 e VA RILANCIATO A MANO su quel file.
+#      k8s-prod-app-template-priority-600 e VA RILANCIATO A MANO su quel file.
 #
 #      Il ruolo non ha bisogno di nessun rilancio: calcola prima quali nomi sono
 #      prefisso di quali altri e fa nascere il piu' specifico gia' alla
 #      priorita' giusta.
 #
-# "-*" fa sparire il problema alla radice: "k8s-coll-app-foo-*" non matcha
-#      "k8s-coll-app-foobar-000001", e gli indici del rollover si chiamano
+# "-*" fa sparire il problema alla radice: "k8s-prod-app-foo-*" non matcha
+#      "k8s-prod-app-foobar-000001", e gli indici del rollover si chiamano
 #      sempre <alias>-00000N, quindi il trattino c'e'. E' la scelta migliore, ma
 #      cambia quali indici il template governa: prima controlla che il collector
 #      non crei indici attaccati al prefisso senza trattino.
@@ -1881,7 +1888,7 @@ logging_priority_step: 100
 
 # --- 4. Policy ILM ----------------------------------------------------------
 # GLI SCRIPT NON LA CREANO. Il template la nomina
-# (index.lifecycle.name: k8s-coll-app-logs) ma se quella policy non esiste
+# (index.lifecycle.name: k8s-prod-app-logs) ma se quella policy non esiste
 # Elasticsearch accetta il template lo stesso, l'indice viene creato lo stesso,
 # e il rollover non avviene MAI: il -000001 cresce finche' non finisce il disco.
 # E' l'unico difetto degli script che non da' nessun sintomo il giorno del

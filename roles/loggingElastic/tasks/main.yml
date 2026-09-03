@@ -7,7 +7,7 @@
 #       -> infra_namespaces.txt   namespace del progetto "system" di Rancher
 #       -> app_namespaces.txt     tutti gli altri
 #
-#   ./create-index.sh https 10.10.111.24 elastic '<password>' k8s-coll-app \
+#   ./create-index.sh https 10.10.111.24 elastic '<password>' k8s-prod-app \
 #       /root/logging-script/app_namespaces.txt 500 1 1 logs
 #       -> per ogni namespace: index template + indice -000001 + alias di
 #          scrittura, pronti per il rollover ILM

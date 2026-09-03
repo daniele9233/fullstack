@@ -4,7 +4,7 @@
 # l'index template, l'indice di partenza -000001 e l'alias di scrittura.
 #
 #   ./create-index.sh https 10.10.111.24 elastic 'WcyUYmmLcStgJnZ7GsK*' \
-#       k8s-coll-app /root/logging-script/app_namespaces.txt 500 1 1 logs
+#       k8s-prod-app /root/logging-script/app_namespaces.txt 500 1 1 logs
 #
 # LA PASSWORD VA FRA APICI SINGOLI. Contiene un "*": senza apici la shell prova
 # a espanderlo come nome di file PRIMA che lo script lo veda, e se in quel
@@ -67,7 +67,7 @@ Fornire i seguenti 10 parametri:
                                  un'altra porta: "indirizzo:porta")
   3  USER                        utente Elasticsearch
   4  PASSWORD                    FRA APICI SINGOLI se contiene * $ ? [ o spazi
-  5  PREFISSO                    es. k8s-coll-app
+  5  PREFISSO                    es. k8s-prod-app
   6  lista indici                percorso assoluto del file
   7  priorita' template          es. 500
   8  number_of_shards            es. 1
@@ -76,7 +76,7 @@ Fornire i seguenti 10 parametri:
 
 Esempio:
   ./create-index.sh https 10.10.111.24 elastic 'WcyUYmmLcStgJnZ7GsK*' \
-      k8s-coll-app /root/logging-script/app_namespaces.txt 500 1 1 logs
+      k8s-prod-app /root/logging-script/app_namespaces.txt 500 1 1 logs
 USO
   exit 2
 fi

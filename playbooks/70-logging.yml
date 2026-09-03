@@ -45,7 +45,7 @@
 #
 #   # solo gli indici applicativi, senza gli infrastrutturali
 #   ansible-playbook playbooks/70-logging.yml \
-#     -e '{"logging_sets":[{"nome":"applicativi","prefisso":"k8s-coll-app","sorgente":"app","priorita":500,"shards":1,"replicas":1,"lifecycle":"logs"}]}'
+#     -e '{"logging_sets":[{"nome":"applicativi","prefisso":"k8s-prod-app","sorgente":"app","priorita":500,"shards":1,"replicas":1,"lifecycle":"logs"}]}'
 #
 #   # riallinea le policy ILM a logging_ilm_phases. Attenzione: sovrascrive
 #   # quelle tarate a mano

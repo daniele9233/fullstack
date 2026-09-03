@@ -1592,11 +1592,13 @@ indici restano vuoti.
                               "curl -k". Copiando /etc/elasticsearch/cert/ca/ca.crt
                               da un nodo Elasticsearch a k8smanager-p01 e
                               dichiarandola qui, la verifica si accende da sola
-  logging_sets                prefissi degli indici. Quello applicativo
-                              (k8s-coll-app) viene dalla guida; quello
-                              infrastrutturale (k8s-coll-infra) e' un'IPOTESI
-                              coerente, da verificare nella configurazione del
-                              collector
+  logging_sets                prefissi degli indici: k8s-prod-app e
+                              k8s-prod-infra, perche' questa e' la produzione
+                              (la guida di partenza usava k8s-coll-app).
+                              DA CONFERMARE sulla configurazione del collector:
+                              il nome che compone lui deve coincidere con
+                              l'alias creato qui, ed e' l'unica cosa che il
+                              playbook non puo' verificare da solo
   logging_strip_dashes        true = i trattini spariscono dal nome dell'indice
                               (cattle-system -> cattlesystem). DEVE COINCIDERE
                               con quello che scrive il collector
@@ -1643,7 +1645,7 @@ accorgersene:
    Nello stesso posto finisce il file dei rilanci, che si chiama
    <prefisso>-template-priority-600 SENZA .txt e in una directory diversa da
    quella da cui si lancia: il nome che si scrive per rilanciare
-   (/root/logging-script/k8s-coll-app-template-priority-600.txt) non e' quello
+   (/root/logging-script/k8s-prod-app-template-priority-600.txt) non e' quello
    che lo script ha prodotto.
 
 3. DUE NAMESPACE, UN INDICE SOLO — senza nessun errore.
@@ -1658,7 +1660,7 @@ accorgersene:
 
 4. IL GIRO DELLE PRIORITA' A MANO.
    Questo invece un errore lo da', ed e' quello che si vede: il pattern
-   "k8s-coll-app-foo*" matcha anche "k8s-coll-app-foobar-000001", quindi due
+   "k8s-prod-app-foo*" matcha anche "k8s-prod-app-foobar-000001", quindi due
    namespace di cui uno e' prefisso dell'altro si contendono gli stessi indici.
    Elasticsearch rifiuta il secondo template ("...that have the same
    priority..."), lo script mette il namespace da parte e VA RILANCIATO a
@@ -1667,7 +1669,7 @@ accorgersene:
    gia' alla priorita' giusta: un lancio solo, e nessun namespace che resta
    indietro perche' il file di rilancio e' passato inosservato.
    Con logging_pattern_suffix='-*' il problema sparisce alla radice
-   ("k8s-coll-app-foo-*" non matcha "k8s-coll-app-foobar-000001"), ma cambia
+   ("k8s-prod-app-foo-*" non matcha "k8s-prod-app-foobar-000001"), ma cambia
    quali indici il template governa: prima va controllato il collector.
 
 5. RILANCIARLO DOPO IL PRIMO ROLLOVER NON E' INNOCUO.
