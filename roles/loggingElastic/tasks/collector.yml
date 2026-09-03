@@ -408,8 +408,6 @@
       {{ logging_coppie | length }} Output e {{ logging_coppie | length }} Flow
       presenti, uno per namespace.
   vars:
-    logging_collector_attesi: >-
-      {{ (logging_coppie | map('json_query', '[namespace,indice]') | list) }}
     logging_collector_mancanti: >-
       {%- set trovati = logging_collector_riletto.stdout_lines | default([]) -%}
       {%- set out = [] -%}

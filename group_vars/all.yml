@@ -2006,7 +2006,7 @@ logging_verify: true
 # PARTE DA true SOLO QUANDO logging_collector_es_password E' COMPILATA: senza,
 # il Secret nascerebbe vuoto e gli Output non riuscirebbero ad autenticarsi,
 # fallendo in un modo che si vede solo nei log di fluentd.
-logging_manage_collector: false
+logging_manage_collector: true
 
 # --- Come il COLLECTOR vede Elasticsearch -----------------------------------
 #
@@ -2119,7 +2119,7 @@ logging_elk_service_endpoints:
 # L'utente serve solo a scrivere i log: gli si da' un ruolo con i permessi
 # minimi sugli indici del logging e basta.
 
-logging_manage_es_user: false
+logging_manage_es_user: true
 
 # L'utente si crea se manca. Se c'e' gia', la password NON viene toccata:
 # cambiarla scollegherebbe i collector che stanno usando quella vecchia, finche'
