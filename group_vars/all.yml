@@ -1900,25 +1900,53 @@ logging_priority_step: 100
 logging_manage_ilm: true
 logging_ilm_force_update: false
 
-# Rotazione conservativa: si ruota a 50 GB di shard primario o dopo 30 giorni,
-# si cancella 90 giorni DOPO la rotazione (quindi un documento vive fra 90 e 120
-# giorni). max_primary_shard_size e' la condizione che conta: tiene gli shard in
-# una taglia sana comunque logghi il namespace. max_age serve a quelli che
-# loggano poco, altrimenti il loro indice non ruoterebbe mai.
+# QUESTI VALORI SONO COPIATI DALL'ESERCIZIO, non scelti qui. Sono il contenuto
+# di k8s-prod-app-logs e k8s-prod-infra-logs sull'ambiente gia' installato
+# (10.109.13.134), che sono identiche fra loro:
+#
+#   rollover   max_age 1d OPPURE max_primary_shard_size 50gb
+#   delete     30 giorni DOPO la rotazione
+#
+# Si ruota quindi UNA VOLTA AL GIORNO, non a indice pieno: i 50gb sono il
+# paracadute per un namespace che esplode, ma la condizione che scatta sempre e'
+# l'eta'. Si vede negli indici dell'ambiente di riferimento — un -00000N nuovo al
+# giorno, con l'orario che slitta di 10 minuti perche' quello e' l'intervallo con
+# cui ILM controlla.
+#
+# Un namespace che non logga NON ruota lo stesso: ILM aggiunge da se' una
+# condizione implicita di almeno un documento, ed e' per questo che sul
+# riferimento kubepublic e kubenodelease sono fermi al -000001 da mesi.
+#
+# ATTENZIONE ALLA RITENZIONE: 30 giorni, non 90. La versione precedente di questo
+# file diceva 90 giorni di cancellazione e rotazione a 30, che avrebbe tenuto i
+# log tre-quattro volte piu' a lungo dell'ambiente esistente — su un namespace
+# come helios-prod, che fa ~15 GB al giorno, sono ~1,4 TB invece di ~450 GB.
+#
+# set_priority mette index.priority a 100: e' la priorita' di RECUPERO dopo un
+# riavvio, non ha niente a che vedere con la priorita' dei template. Sta qui
+# perche' sta anche nelle policy in esercizio.
 #
 # La fase hot DEVE avere l'azione rollover: ogni template scrive
 # index.lifecycle.rollover_alias, e senza rollover l'alias di scrittura resta
 # agganciato al -000001 per sempre. Il ruolo si ferma se manca.
+#
+# Cambiando questi valori NON si riscrivono le policy gia' create: il ruolo le
+# tocca solo se mancano. Per riallinearle di proposito serve
+# logging_ilm_force_update=true.
 logging_ilm_phases:
   hot:
+    min_age: "0ms"
     actions:
       rollover:
+        max_age: "1d"
         max_primary_shard_size: "50gb"
-        max_age: "30d"
+      set_priority:
+        priority: 100
   delete:
-    min_age: "90d"
+    min_age: "30d"
     actions:
-      delete: {}
+      delete:
+        delete_searchable_snapshot: true
 
 
 # --- 5. Script sul nodo -----------------------------------------------------
