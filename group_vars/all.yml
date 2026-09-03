@@ -1969,3 +1969,154 @@ logging_verify: true
 # resta oscurata anche con -vvv — e nessuno dei file scritti sul nodo la
 # contiene (il LEGGIMI ha un segnaposto). L'unico posto dove sta in chiaro e'
 # questo file, come es_elastic_password.
+#
+# logging_collector_es_password qui sotto e' diversa: finisce dentro a un
+# Secret di Kubernetes, quindi il task che lo crea va marcato no_log a mano.
+
+
+# ===========================================================================
+# LOGGING, PARTE 7: IL COLLECTOR  ->  Flow e Output di Rancher Logging
+# ===========================================================================
+# Quello che sta sopra prepara il POSTO dove scrivere: template, indici, alias,
+# policy ILM. Questa parte crea CHI SCRIVE.
+#
+# Sono due oggetti per namespace, letti dall'ambiente gia' in esercizio
+# (10.109.13.x), dove sono 17 su 17 senza una sola eccezione:
+#
+#   Output <indice>   nel namespace, con index_name: <indice>
+#   Flow   <indice>   nel namespace, con localOutputRefs: [<indice>]
+#
+# Il Flow non ha "match": prende tutti i pod del suo namespace.
+#
+# ATTENZIONE A index_name: E' L'ALIAS, non l'indice. Fluentd scrive su
+# "k8s-prod-infra-cattlesystem", non su "...-000133". E' l'alias di scrittura
+# creato dalla parte 3 a reggere tutto: il rollover di ILM sposta l'indice di
+# scrittura sotto l'alias e il collector non se ne accorge. Se l'alias non
+# esiste, o non ha un indice di scrittura, fluentd riceve
+# "no write index is defined for alias" e i log restano nel buffer.
+#
+# PREREQUISITO: il logging-operator (Rancher Logging) deve essere gia'
+# installato sul cluster, altrimenti i tipi Flow e Output non esistono proprio.
+#   kubectl get crd | grep -i banzaicloud
+# Questo ruolo NON lo installa: crea gli oggetti, non l'operatore.
+
+# Interruttore generale. A false il ruolo si ferma alla parte Elasticsearch,
+# esattamente come fa oggi.
+#
+# PARTE DA true SOLO QUANDO logging_collector_es_password E' COMPILATA: senza,
+# il Secret nascerebbe vuoto e gli Output non riuscirebbero ad autenticarsi,
+# fallendo in un modo che si vede solo nei log di fluentd.
+logging_manage_collector: false
+
+# --- Come il COLLECTOR vede Elasticsearch -----------------------------------
+#
+# NON sono le stesse di logging_es_* della parte 2, e non vanno unificate:
+# quelle sono l'indirizzo da cui il PLAYBOOK parla con Elasticsearch, dal nodo
+# manager. Queste sono il nome che FLUENTD risolve da dentro un pod. Sono due
+# punti di vista diversi sulla stessa macchina, e possono divergere.
+#
+# "elk-svc" e' quello che usa l'esercizio, ed e' anche il nome che sta nel SAN
+# dei certificati (es_cert_dns_names, piu' su in questo file), quindi il TLS
+# torna senza storie.
+#
+# DEVE RISOLVERE DA DENTRO IL CLUSTER. Sul cluster di riferimento c'e' qualcosa
+# che lo fa risolvere — un Service, probabilmente ExternalName o headless con
+# gli Endpoint sull'IP esterno. Va replicato, e questo ruolo non lo fa:
+#   kubectl get svc,endpoints -A | grep -i elk        (sul cluster di riferimento)
+# Se sul cluster nuovo non c'e' modo di farlo risolvere, qui va l'IP del nodo
+# Elasticsearch — ma allora ssl_verify deve restare false, perche' il
+# certificato ha i nomi, non gli indirizzi.
+logging_collector_es_host: "elk-svc"
+logging_collector_es_port: 9200
+logging_collector_es_scheme: "https"
+
+# Come nell'esercizio: il certificato non viene verificato dal collector.
+logging_collector_es_ssl_verify: false
+logging_collector_es_ssl_version: "TLSv1_2"
+
+# Obbligatorio da Elasticsearch 8 in poi: senza, fluentd manda ancora il
+# "_type" nella bulk e Elasticsearch rifiuta.
+logging_collector_suppress_type_name: true
+
+# --- L'utente con cui il collector scrive -----------------------------------
+#
+# NON e' "elastic". L'esercizio usa un utente dedicato "rancher", che ha i
+# permessi per scrivere sugli indici del logging e nient'altro. E' giusto cosi':
+# la password finisce in un Secret dentro al cluster, e quella di elastic non ci
+# deve stare.
+logging_collector_es_user: "rancher"
+
+# >>> DA COMPILARE <<<
+#
+# La password dell'utente "rancher" su Elasticsearch. Serve in due posti, e qui
+# sta una volta sola:
+#   - dentro al Secret log-user, da cui la leggono gli Output;
+#   - per creare l'utente stesso su Elasticsearch (parte 8).
+#
+# Sull'ambiente di riferimento si legge cosi', da un namespace qualsiasi:
+#   kubectl -n cattle-system get secret log-user -o jsonpath='{.data.password}' | base64 -d
+#
+# Se preferisci una password nuova per il cluster nuovo va benissimo: basta che
+# sia la stessa nei due posti, e qui lo e' per costruzione.
+logging_collector_es_password: ""
+
+# --- Il Secret da cui gli Output leggono la password ------------------------
+#
+# L'Output non contiene la password: contiene un riferimento a un Secret NELLO
+# STESSO NAMESPACE. Quindi ne serve una copia in ognuno dei namespace, 14 in
+# questo cluster.
+#
+# Nomi presi dall'esercizio: Secret "log-user", chiave "password".
+logging_collector_secret_name: "log-user"
+logging_collector_secret_key: "password"
+
+# false = il Secret lo crei tu a mano nei namespace, e il ruolo si limita a
+# verificare che ci sia prima di creare gli Output (fallendo con un messaggio
+# chiaro invece di lasciare Output che non si autenticano).
+logging_manage_collector_secret: true
+
+# --- Le CRD del logging-operator --------------------------------------------
+# Si cambia solo se cambia la versione dell'operatore.
+logging_collector_api_version: "logging.banzaicloud.io/v1beta1"
+
+
+# ===========================================================================
+# LOGGING, PARTE 8: L'UTENTE "rancher" SU ELASTICSEARCH
+# ===========================================================================
+# Oggi non lo crea nessuno: elasticsearch_cluster non gestisce utenti, l'ho
+# verificato. Ma senza, gli Output della parte 7 si autenticano contro il nulla.
+#
+# L'utente serve solo a scrivere i log: gli si da' un ruolo con i permessi
+# minimi sugli indici del logging e basta.
+
+logging_manage_es_user: false
+
+# Nome del ruolo Elasticsearch creato per lui.
+logging_es_writer_role: "k8s-logging-writer"
+
+# Gli indici su cui puo' scrivere. I due prefissi di logging_sets, con la coda:
+# deve coprire sia gli alias (k8s-prod-app-superset) sia gli indici
+# (k8s-prod-app-superset-000132), perche' la bulk arriva sull'alias ma ILM
+# lavora sugli indici.
+logging_es_writer_index_patterns:
+  - "k8s-prod-app-*"
+  - "k8s-prod-infra-*"
+
+# >>> DA VERIFICARE SULL'ESERCIZIO, prima di mettere logging_manage_es_user a
+# true <<<
+#
+# Questi sono i privilegi che servono a un collector che scrive su un alias di
+# rollover, ma non li ho letti dall'ambiente esistente: sono la mia ricostruzione.
+# Per copiare quelli veri invece di fidarti di questa lista:
+#
+#   curl -sk -u elastic:'<password>' \
+#     'https://10.109.13.134:9200/_security/user/rancher?pretty'
+#   curl -sk -u elastic:'<password>' \
+#     'https://10.109.13.134:9200/_security/role/<nome che esce sopra>?pretty'
+logging_es_writer_privileges:
+  - "create_index"
+  - "create_doc"
+  - "index"
+  - "write"
+  - "view_index_metadata"
+  - "auto_configure"
