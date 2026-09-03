@@ -1,0 +1,162 @@
+---
+# L'UTENTE CON CUI IL COLLECTOR SCRIVE.
+#
+# Oggi non lo crea nessuno: elasticsearch_cluster e elasticsearch_node non
+# gestiscono utenti. Ma l'Output di ogni namespace si autentica come
+# "{{ logging_collector_es_user }}", e senza quell'utente fluentd riceve un 401
+# per ogni bulk — un guasto che non si vede da questa parte, solo nei suoi log.
+#
+# PERCHE' UN UTENTE DEDICATO E NON "elastic". La password finisce dentro a un
+# Secret di Kubernetes, leggibile da chiunque abbia i permessi su quel
+# namespace. Quella di elastic — che puo' cancellare indici, cambiare le
+# password altrui e spegnere la sicurezza — non ci deve stare. Questo utente
+# sa scrivere sugli indici del logging e nient'altro.
+#
+# Il ruolo lo crea SE MANCA. Se c'e' gia' non gli tocca la password: cambiarla
+# qui vorrebbe dire scollegare i collector che stanno usando quella vecchia,
+# finche' non gli si riscrive anche il Secret. Per rifarla di proposito:
+#   ansible-playbook playbooks/70-logging.yml -e logging_es_user_force_password=true
+# ricordandosi che va rilanciato ANCHE con logging_manage_collector=true, o i
+# Secret restano indietro.
+
+- name: Verifica che la password dell'utente del collector sia dichiarata
+  assert:
+    that:
+      - logging_collector_es_password | length > 0
+    fail_msg: >-
+      logging_collector_es_password e' vuota: non si puo' creare l'utente
+      "{{ logging_collector_es_user }}" senza una password. E' la stessa che
+      finisce nel Secret {{ logging_collector_secret_name }} letto dagli Output:
+      la variabile e' una sola apposta, cosi' i due posti non possono divergere.
+  run_once: true
+
+# --- Il ruolo ---------------------------------------------------------------
+#
+# I permessi stanno sui pattern di logging_es_writer_index_patterns, che devono
+# coprire SIA gli alias (k8s-prod-app-superset) SIA gli indici
+# (k8s-prod-app-superset-000132): la bulk arriva sull'alias, ma quando ILM
+# ruota e' l'indice nuovo a doversi far scrivere.
+#
+# Il ruolo si riscrive sempre: e' un oggetto piccolo e dichiarativo, e a
+# differenza della password non c'e' niente che si rompa a riallinearlo.
+
+- name: "Crea il ruolo Elasticsearch {{ logging_es_writer_role }}"
+  uri:
+    url: "{{ logging_es_url }}/_security/role/{{ logging_es_writer_role }}"
+    method: PUT
+    user: "{{ logging_es_user }}"
+    password: "{{ logging_es_password }}"
+    force_basic_auth: yes
+    validate_certs: "{{ true if logging_es_ca_file | length > 0 else logging_es_validate_certs | bool }}"
+    ca_path: "{{ logging_es_ca_file if logging_es_ca_file | length > 0 else omit }}"
+    timeout: "{{ logging_es_timeout }}"
+    body_format: json
+    body:
+      cluster:
+        # Fluentd chiede la versione all'avvio per decidere come comporre la
+        # bulk. Senza, parte con un 403 che sembra un problema di indici.
+        - "monitor"
+      indices:
+        - names: "{{ logging_es_writer_index_patterns }}"
+          privileges: "{{ logging_es_writer_privileges }}"
+    status_code: [200]
+  register: logging_es_ruolo
+  changed_when: true
+
+- name: Mostra il ruolo creato
+  debug:
+    msg: >-
+      Ruolo {{ logging_es_writer_role }}:
+      {{ logging_es_writer_privileges | join(', ') }}
+      su {{ logging_es_writer_index_patterns | join(', ') }}, piu' cluster:monitor.
+
+# --- L'utente ---------------------------------------------------------------
+
+- name: "Verifica se l'utente {{ logging_collector_es_user }} esiste gia'"
+  uri:
+    url: "{{ logging_es_url }}/_security/user/{{ logging_collector_es_user }}"
+    method: GET
+    user: "{{ logging_es_user }}"
+    password: "{{ logging_es_password }}"
+    force_basic_auth: yes
+    validate_certs: "{{ true if logging_es_ca_file | length > 0 else logging_es_validate_certs | bool }}"
+    ca_path: "{{ logging_es_ca_file if logging_es_ca_file | length > 0 else omit }}"
+    timeout: "{{ logging_es_timeout }}"
+    status_code: [200, 404]
+  register: logging_es_utente_stato
+  changed_when: false
+
+# Utente nuovo, oppure riallineamento voluto: si scrive tutto, password compresa.
+- name: "Crea l'utente {{ logging_collector_es_user }}"
+  uri:
+    url: "{{ logging_es_url }}/_security/user/{{ logging_collector_es_user }}"
+    method: PUT
+    user: "{{ logging_es_user }}"
+    password: "{{ logging_es_password }}"
+    force_basic_auth: yes
+    validate_certs: "{{ true if logging_es_ca_file | length > 0 else logging_es_validate_certs | bool }}"
+    ca_path: "{{ logging_es_ca_file if logging_es_ca_file | length > 0 else omit }}"
+    timeout: "{{ logging_es_timeout }}"
+    body_format: json
+    body:
+      password: "{{ logging_collector_es_password }}"
+      roles:
+        - "{{ logging_es_writer_role }}"
+      full_name: "Collector dei log di Kubernetes"
+    status_code: [200]
+  when: >-
+    logging_es_utente_stato.status == 404
+    or (logging_es_user_force_password | bool)
+  changed_when: true
+
+- name: Stato dell'utente
+  debug:
+    msg: >-
+      Utente {{ logging_collector_es_user }}:
+      {{ 'creato adesso' if logging_es_utente_stato.status == 404
+         else ('password riscritta (logging_es_user_force_password)'
+               if logging_es_user_force_password | bool
+               else 'esisteva gia, password non toccata') }}.
+      Ruoli attesi: {{ logging_es_writer_role }}.
+      {{ 'ATTENZIONE: se esisteva gia con ruoli diversi, questi NON sono stati
+      cambiati. Si controlla con  curl -k -u ' ~ logging_es_user ~ ":'<password>' '"
+      ~ logging_es_url ~ '/_security/user/' ~ logging_collector_es_user ~ "?pretty'"
+      if logging_es_utente_stato.status == 200 and not (logging_es_user_force_password | bool)
+      else '' }}
+
+# La prova che conta: ci si autentica davvero con quelle credenziali? Se questa
+# passa, gli Output funzioneranno; se fallisce, fluentd prendera' lo stesso 401
+# e nessuno se ne accorgerebbe fino a quando qualcuno guarda gli indici vuoti.
+- name: "Prova le credenziali di {{ logging_collector_es_user }}"
+  uri:
+    url: "{{ logging_es_url }}/"
+    method: GET
+    user: "{{ logging_collector_es_user }}"
+    password: "{{ logging_collector_es_password }}"
+    force_basic_auth: yes
+    validate_certs: "{{ true if logging_es_ca_file | length > 0 else logging_es_validate_certs | bool }}"
+    ca_path: "{{ logging_es_ca_file if logging_es_ca_file | length > 0 else omit }}"
+    timeout: "{{ logging_es_timeout }}"
+    status_code: [200, 401, 403]
+  register: logging_es_prova_utente
+  changed_when: false
+
+- name: Verifica che le credenziali del collector funzionino
+  assert:
+    that:
+      - logging_es_prova_utente.status == 200
+    fail_msg: >-
+      {{ logging_es_url }} risponde
+      "{{ logging_es_prova_utente.status }}" all'utente
+      "{{ logging_collector_es_user }}" con la password di
+      logging_collector_es_password.
+      {{ 'L utente esisteva gia con una password diversa da quella scritta qui:
+      o correggi la variabile, o riscrivi la password con
+      logging_es_user_force_password=true (e rilancia anche con
+      logging_manage_collector=true, o i Secret restano con la vecchia).'
+      if logging_es_prova_utente.status == 401 else '' }}
+      Finche' non torna 200, gli Output prenderanno lo stesso errore a ogni
+      bulk e i log non arriveranno.
+    success_msg: >-
+      L'utente {{ logging_collector_es_user }} si autentica su
+      {{ logging_es_url }}: gli Output potranno scrivere.

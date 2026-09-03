@@ -67,8 +67,23 @@
   import_tasks: ilm.yml
   when: logging_manage_ilm | bool
 
+- name: Utente Elasticsearch del collector
+  import_tasks: es_user.yml
+  when: logging_manage_es_user | bool
+
 - name: Template, indici e alias
   import_tasks: insiemi.yml
+
+# L'ORDINE QUI SOTTO NON E' ARBITRARIO: il collector va DOPO gli alias.
+#
+# index_name dell'Output e' l'ALIAS (k8s-prod-infra-cattlesystem), non l'indice.
+# Creare gli Output prima che l'alias esista vuol dire mettere in piedi dei
+# collector che scrivono contro un nome che non c'e': fluentd riceve "no write
+# index is defined for alias", i log restano nel buffer, e non fallisce niente
+# di visibile da questa parte.
+- name: Collector — Secret, Output e Flow sul cluster
+  import_tasks: collector.yml
+  when: logging_manage_collector | bool
 
 - name: Script corretti sul nodo manager
   import_tasks: script.yml

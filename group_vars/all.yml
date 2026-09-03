@@ -2091,6 +2091,14 @@ logging_collector_api_version: "logging.banzaicloud.io/v1beta1"
 
 logging_manage_es_user: false
 
+# L'utente si crea se manca. Se c'e' gia', la password NON viene toccata:
+# cambiarla scollegherebbe i collector che stanno usando quella vecchia, finche'
+# non gli si riscrive anche il Secret. Per rifarla di proposito:
+#   ansible-playbook playbooks/70-logging.yml -e logging_es_user_force_password=true
+# e va rilanciato ANCHE con logging_manage_collector=true, altrimenti i Secret
+# nei namespace restano con la password vecchia.
+logging_es_user_force_password: false
+
 # Nome del ruolo Elasticsearch creato per lui.
 logging_es_writer_role: "k8s-logging-writer"
 

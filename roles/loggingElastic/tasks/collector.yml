@@ -1,0 +1,363 @@
+---
+# IL COLLECTOR: gli oggetti di Rancher Logging che fanno arrivare i log.
+#
+# Tutto quello che sta prima prepara il POSTO dove scrivere — template, indici,
+# alias, policy ILM. Qui si crea CHI SCRIVE, e sono tre oggetti per namespace:
+#
+#   Secret <log-user>   la password dell'utente Elasticsearch, nel namespace
+#   Output <indice>     dove mandare i log: host, utente, index_name
+#   Flow   <indice>     quali log: tutti quelli del namespace -> quell'Output
+#
+# La forma e' copiata dall'ambiente gia' in esercizio, dove sono 17 namespace su
+# 17 senza una sola eccezione: Flow e Output si chiamano ESATTAMENTE come
+# l'indice, stanno NEL namespace di cui raccolgono i log, e il Flow non ha
+# "match", quindi prende tutti i pod.
+#
+# --- PERCHE' QUESTO GIRA DOPO insiemi.yml -----------------------------------
+#
+# index_name dell'Output e' l'ALIAS, non l'indice: fluentd scrive su
+# "k8s-prod-infra-cattlesystem", mai su "...-000133". E' l'alias di scrittura
+# creato da insiemi.yml a reggere tutto — il rollover di ILM sposta l'indice di
+# scrittura sotto l'alias e il collector non se ne accorge.
+#
+# Creare gli Output PRIMA degli alias vuol dire avere dei collector che scrivono
+# contro un nome che non esiste: fluentd riceve "no write index is defined for
+# alias" e i log restano nel buffer finche' qualcuno non guarda. Per questo
+# main.yml mette questo file dopo, e non e' un dettaglio di ordinamento.
+#
+# --- PERCHE' kubectl E NON kubernetes.core.k8s -------------------------------
+#
+# Il modulo k8s vorrebbe la collection kubernetes.core e la libreria python
+# "kubernetes" installate sul manager. kubectl invece c'e' di sicuro: lo verifica
+# controlli.yml, ed e' gia' il modo in cui il ruolo legge i namespace. Una
+# dipendenza in meno da installare su una macchina di produzione.
+
+- name: Verifica che le CRD del logging-operator ci siano
+  command: "{{ logging_kubectl }} get crd outputs.logging.banzaicloud.io flows.logging.banzaicloud.io"
+  environment:
+    KUBECONFIG: "{{ logging_kubeconfig }}"
+  register: logging_crd_prova
+  changed_when: false
+  failed_when: false
+
+- name: Fermati se il logging-operator non e' installato
+  assert:
+    that:
+      - logging_crd_prova.rc == 0
+    fail_msg: >-
+      Su questo cluster non ci sono le CRD di Rancher Logging, quindi i tipi
+      Flow e Output non esistono e non c'e' niente da creare. Le si vede con
+      "{{ logging_kubectl }} get crd | grep -i banzaicloud".
+      Questo ruolo crea gli OGGETTI, non installa l'operatore: installalo prima
+      (Rancher: Apps -> Logging), oppure metti logging_manage_collector=false
+      per fermarti alla sola parte Elasticsearch.
+      Errore: {{ logging_crd_prova.stderr | default('') | trim }}
+    success_msg: >-
+      CRD di Rancher Logging presenti.
+
+# Le CRD ci sono ma il collector potrebbe non girare: senza una risorsa Logging
+# non esistono ne' fluentbit ne' fluentd, e Flow e Output resterebbero oggetti
+# inerti. Non e' un errore da fermare il ruolo — gli oggetti vanno creati lo
+# stesso, e l'operatore li prendera' in carico appena c'e' — ma va detto.
+- name: Guarda se il collector e' davvero in piedi
+  command: "{{ logging_kubectl }} get logging -A --no-headers"
+  environment:
+    KUBECONFIG: "{{ logging_kubeconfig }}"
+  register: logging_risorsa_logging
+  changed_when: false
+  failed_when: false
+
+- name: Segnala che manca la risorsa Logging
+  debug:
+    msg: >-
+      ATTENZIONE: non c'e' nessuna risorsa "Logging" su questo cluster, quindi
+      il logging-operator non ha creato fluentbit e fluentd. Gli Output e i Flow
+      che sto per creare sono corretti ma inerti: nessuno legge i log e nessuno
+      li spedisce. Sull'ambiente di riferimento la risorsa Logging fa nascere
+      logging-operator-logging-fluentbit (DaemonSet) e
+      logging-operator-logging-fluentd (StatefulSet) in managed-services.
+  when: logging_risorsa_logging.stdout_lines | default([]) | length == 0
+
+
+# ===========================================================================
+# LE COPPIE namespace -> indice
+# ===========================================================================
+#
+# Fin qui il ruolo ha lavorato sui NOMI DEGLI INDICI (trattini tolti). Qui
+# servono tutte e due le cose insieme: il namespace, che e' dove va creato
+# l'oggetto, e il nome dell'indice, che e' come si chiama e dove scrive.
+#
+# La mappa costruita in namespaces.yml tiene esattamente questo legame:
+# <nome pulito> -> [namespace che ci finiscono dentro]. Ciclando su di lei si
+# gestisce da se' anche il caso della collisione (due namespace sullo stesso
+# indice, con logging_fail_on_collision=false): nascono due Flow e due Output,
+# uno per namespace, che scrivono nello stesso posto — che e' precisamente cosa
+# vuol dire quella collisione.
+
+- name: Costruisci le coppie namespace -> indice
+  set_fact:
+    logging_coppie_json: >-
+      {%- set out = [] -%}
+      {%- for insieme in logging_sets -%}
+      {%-   set mappa = logging_mappa_app if insieme.sorgente == 'app' else logging_mappa_infra -%}
+      {%-   for pulito, namespaces in mappa.items() | sort -%}
+      {%-     if pulito | length > 0 -%}
+      {%-       for ns in namespaces | sort -%}
+      {%-         set _ = out.append({
+                    'namespace': ns,
+                    'indice': insieme.prefisso ~ '-' ~ pulito,
+                    'insieme': insieme.nome | default(insieme.prefisso) }) -%}
+      {%-       endfor -%}
+      {%-     endif -%}
+      {%-   endfor -%}
+      {%- endfor -%}
+      {{ out | to_json }}
+
+- name: Converti le coppie in lista
+  set_fact:
+    logging_coppie: "{{ logging_coppie_json | from_json }}"
+
+- name: "Cosa verra' creato sul cluster"
+  debug:
+    msg:
+      - "{{ logging_coppie | length }} namespace: un Output e un Flow ciascuno"
+      - "Destinazione: {{ logging_collector_es_scheme }}://{{ logging_collector_es_host }}:{{ logging_collector_es_port }}, utente {{ logging_collector_es_user }}"
+      - "Password letta dal Secret {{ logging_collector_secret_name }} (chiave {{ logging_collector_secret_key }}) in ogni namespace"
+      - "{{ logging_coppie | map(attribute='namespace') | join(', ') }}"
+
+
+# ===========================================================================
+# IL SECRET
+# ===========================================================================
+#
+# L'Output non contiene la password: contiene un riferimento a un Secret NELLO
+# STESSO NAMESPACE. Quindi ne serve una copia in ognuno.
+#
+# stringData e non data: Kubernetes accetta il valore in chiaro e lo codifica
+# lui. Con "data" toccherebbe passare da b64encode, e un errore li' produce un
+# Secret con dentro una password sbagliata che nessuno vede — l'autenticazione
+# fallisce dentro a fluentd, non qui.
+
+- name: Verifica che la password del collector sia dichiarata
+  assert:
+    that:
+      - logging_collector_es_password | length > 0
+    fail_msg: >-
+      logging_collector_es_password e' vuota. E' la password dell'utente
+      "{{ logging_collector_es_user }}" su Elasticsearch, e finisce nel Secret
+      {{ logging_collector_secret_name }} da cui la leggono tutti gli Output.
+      Senza, il Secret nascerebbe vuoto e i collector non si autenticherebbero —
+      un guasto che si vede solo nei log di fluentd, non qui.
+      Sull'ambiente di riferimento si legge con
+      "kubectl -n cattle-system get secret {{ logging_collector_secret_name }}
+      -o jsonpath='{.data.{{ logging_collector_secret_key }}}' | base64 -d".
+  run_once: true
+
+- name: "Componi i Secret"
+  set_fact:
+    logging_manifest_secret: >-
+      {%- set out = [] -%}
+      {%- for ns in logging_coppie | map(attribute='namespace') | unique | sort -%}
+      {%-   set _ = out.append({
+              'apiVersion': 'v1',
+              'kind': 'Secret',
+              'metadata': {'name': logging_collector_secret_name, 'namespace': ns},
+              'type': 'Opaque',
+              'stringData': {logging_collector_secret_key: logging_collector_es_password} }) -%}
+      {%- endfor -%}
+      {{ out | to_json }}
+  no_log: true
+
+- name: "Applica i Secret"
+  command: "{{ logging_kubectl }} apply -f -"
+  args:
+    stdin: "{{ logging_manifest_secret | from_json | map('to_nice_yaml', indent=2) | join('---\n') }}"
+  environment:
+    KUBECONFIG: "{{ logging_kubeconfig }}"
+  register: logging_secret_applicati
+  # "unchanged" su OGNI riga = kubectl non ha cambiato niente. Basta una riga
+  # diversa (created, configured) perche' ci sia stato un cambiamento.
+  changed_when: >-
+    logging_secret_applicati.stdout_lines
+    | reject('search', 'unchanged$') | list | length > 0
+  # La password sta nello stdin: senza no_log finirebbe nel log di Ansible.
+  no_log: true
+  when: logging_manage_collector_secret | bool
+
+- name: "Riepilogo dei Secret"
+  debug:
+    msg: >-
+      Secret {{ logging_collector_secret_name }}:
+      {{ logging_coppie | map(attribute='namespace') | unique | list | length }}
+      namespace,
+      {{ 'creati o aggiornati' if logging_secret_applicati.changed | default(false) else 'gia allineati' }}.
+  when: logging_manage_collector_secret | bool
+
+# Con logging_manage_collector_secret=false il Secret lo crea qualcun altro: qui
+# ci si limita a controllare che ci sia, perche' un Output che punta a un Secret
+# assente non fallisce alla creazione — fallisce dopo, dentro a fluentd.
+- name: "Verifica che il Secret ci sia gia' in ogni namespace"
+  command: >-
+    {{ logging_kubectl }} -n {{ item }} get secret
+    {{ logging_collector_secret_name }} -o name
+  environment:
+    KUBECONFIG: "{{ logging_kubeconfig }}"
+  loop: "{{ logging_coppie | map(attribute='namespace') | unique | sort }}"
+  register: logging_secret_esistenti
+  changed_when: false
+  failed_when: false
+  when: not (logging_manage_collector_secret | bool)
+
+- name: "Fermati se manca il Secret da qualche parte"
+  assert:
+    that:
+      - logging_secret_mancanti | length == 0
+    fail_msg: >-
+      Il Secret {{ logging_collector_secret_name }} manca in
+      {{ logging_secret_mancanti | length }} namespace:
+      {{ logging_secret_mancanti | join(', ') }}.
+      Con logging_manage_collector_secret=false il Secret lo crei tu, e gli
+      Output di quei namespace non riuscirebbero ad autenticarsi — un guasto che
+      si vede solo nei log di fluentd. Crealo, oppure metti
+      logging_manage_collector_secret=true e ci pensa il ruolo.
+  vars:
+    logging_secret_mancanti: >-
+      {{ logging_secret_esistenti.results | default([])
+         | rejectattr('rc', 'equalto', 0) | map(attribute='item') | list | sort }}
+  when: not (logging_manage_collector_secret | bool)
+
+
+# ===========================================================================
+# OUTPUT E FLOW
+# ===========================================================================
+#
+# I campi vengono uno per uno dall'Output letto in esercizio su cattle-system.
+# Nessuno e' inventato:
+#
+#   host elk-svc, port 9200, scheme https, ssl_verify false,
+#   ssl_version TLSv1_2, suppress_type_name true, user rancher,
+#   password da secretKeyRef {name: log-user, key: password}
+#
+# suppress_type_name e' obbligatorio da Elasticsearch 8 in poi: senza, fluentd
+# manda ancora il "_type" nella bulk e Elasticsearch la rifiuta.
+#
+# Il Flow non ha "match": in logging-operator questo vuol dire "tutti i pod del
+# namespace". E' com'e' in esercizio, ed e' anche l'unica cosa sensata qui —
+# l'indice e' per namespace, non per applicazione.
+
+- name: Componi gli Output e i Flow
+  set_fact:
+    logging_manifest_collector: >-
+      {%- set out = [] -%}
+      {%- for c in logging_coppie -%}
+      {%-   set _ = out.append({
+              'apiVersion': logging_collector_api_version,
+              'kind': 'Output',
+              'metadata': {'name': c.indice, 'namespace': c.namespace},
+              'spec': {'elasticsearch': {
+                'host': logging_collector_es_host,
+                'port': logging_collector_es_port | int,
+                'scheme': logging_collector_es_scheme,
+                'ssl_verify': logging_collector_es_ssl_verify | bool,
+                'ssl_version': logging_collector_es_ssl_version,
+                'suppress_type_name': logging_collector_suppress_type_name | bool,
+                'index_name': c.indice,
+                'user': logging_collector_es_user,
+                'password': {'valueFrom': {'secretKeyRef': {
+                  'name': logging_collector_secret_name,
+                  'key': logging_collector_secret_key }}} }} }) -%}
+      {%-   set _ = out.append({
+              'apiVersion': logging_collector_api_version,
+              'kind': 'Flow',
+              'metadata': {'name': c.indice, 'namespace': c.namespace},
+              'spec': {'globalOutputRefs': [], 'localOutputRefs': [c.indice]} }) -%}
+      {%- endfor -%}
+      {{ out | to_json }}
+
+- name: Applica gli Output e i Flow
+  command: "{{ logging_kubectl }} apply -f -"
+  args:
+    stdin: "{{ logging_manifest_collector | from_json | map('to_nice_yaml', indent=2) | join('---\n') }}"
+  environment:
+    KUBECONFIG: "{{ logging_kubeconfig }}"
+  register: logging_collector_applicato
+  changed_when: >-
+    logging_collector_applicato.stdout_lines
+    | reject('search', 'unchanged$') | list | length > 0
+
+- name: Cosa ha fatto kubectl
+  debug:
+    msg: "{{ logging_collector_applicato.stdout_lines | default([]) }}"
+
+
+# ===========================================================================
+# RILETTURA
+# ===========================================================================
+# Come per i template: si rilegge invece di fidarsi della risposta all'apply.
+# Un oggetto che l'operatore rifiuta perche' lo spec non gli torna non fa
+# fallire "kubectl apply" in modo utile.
+
+- name: Rileggi gli Output e i Flow creati
+  command: >-
+    {{ logging_kubectl }} get output,flow -A
+    -o jsonpath='{range .items[*]}{.kind}/{.metadata.namespace}/{.metadata.name}{"\n"}{end}'
+  environment:
+    KUBECONFIG: "{{ logging_kubeconfig }}"
+  register: logging_collector_riletto
+  changed_when: false
+
+- name: Verifica che ci siano tutti
+  assert:
+    that:
+      - logging_collector_mancanti | length == 0
+    fail_msg: >-
+      Mancano {{ logging_collector_mancanti | length }} oggetti su
+      {{ (logging_coppie | length) * 2 }}: {{ logging_collector_mancanti | join(', ') }}.
+      Senza, i log di quei namespace non hanno chi li spedisca.
+    success_msg: >-
+      {{ logging_coppie | length }} Output e {{ logging_coppie | length }} Flow
+      presenti, uno per namespace.
+  vars:
+    logging_collector_attesi: >-
+      {{ (logging_coppie | map('json_query', '[namespace,indice]') | list) }}
+    logging_collector_mancanti: >-
+      {%- set trovati = logging_collector_riletto.stdout_lines | default([]) -%}
+      {%- set out = [] -%}
+      {%- for c in logging_coppie -%}
+      {%-   for tipo in ['Output', 'Flow'] -%}
+      {%-     if (tipo ~ '/' ~ c.namespace ~ '/' ~ c.indice) not in trovati -%}
+      {%-       set _ = out.append(tipo ~ ' ' ~ c.namespace ~ '/' ~ c.indice) -%}
+      {%-     endif -%}
+      {%-   endfor -%}
+      {%- endfor -%}
+      {{ out }}
+
+# "active" e' lo stato che l'operatore scrive dopo aver preso in carico
+# l'oggetto. Un Output con active diverso da true ha uno spec che l'operatore
+# non digerisce, e non spedisce niente.
+- name: Guarda quali Output l'operatore ha preso in carico
+  command: >-
+    {{ logging_kubectl }} get output -A
+    -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}={.status.active}{"\n"}{end}'
+  environment:
+    KUBECONFIG: "{{ logging_kubeconfig }}"
+  register: logging_collector_attivi
+  changed_when: false
+  failed_when: false
+
+- name: Riepilogo dello stato
+  debug:
+    msg:
+      - >-
+        Output attivi:
+        {{ logging_collector_attivi.stdout_lines | default([]) | select('search', '=true$') | list | length }}
+        su {{ logging_coppie | length }}
+      - >-
+        {{ 'NON attivi: ' ~ (logging_collector_attivi.stdout_lines | default([]) | reject('search', '=true$') | join(', '))
+           if (logging_collector_attivi.stdout_lines | default([]) | reject('search', '=true$') | list | length) > 0
+           else 'Tutti presi in carico dall operatore.' }}
+      - >-
+        Lo stato "active" dice che l'operatore ha accettato lo spec, NON che i
+        log stiano arrivando. Per quello si guarda il conteggio dei documenti:
+        curl -k -u {{ logging_es_user }}:'<password>'
+        '{{ logging_es_url }}/_cat/indices/{{ logging_sets | map(attribute='prefisso') | first }}-*?v&h=index,docs.count'
