@@ -2046,19 +2046,19 @@ logging_collector_suppress_type_name: true
 # deve stare.
 logging_collector_es_user: "rancher"
 
-# >>> DA COMPILARE <<<
-#
 # La password dell'utente "rancher" su Elasticsearch. Serve in due posti, e qui
-# sta una volta sola:
+# sta una volta sola, cosi' non possono divergere:
 #   - dentro al Secret log-user, da cui la leggono gli Output;
 #   - per creare l'utente stesso su Elasticsearch (parte 8).
 #
-# Sull'ambiente di riferimento si legge cosi', da un namespace qualsiasi:
-#   kubectl -n cattle-system get secret log-user -o jsonpath='{.data.password}' | base64 -d
+# E' DI QUESTO AMBIENTE, non dell'ambiente di riferimento: la' l'utente rancher
+# ha una password diversa, e non c'e' ragione di riusarla qui.
 #
-# Se preferisci una password nuova per il cluster nuovo va benissimo: basta che
-# sia la stessa nei due posti, e qui lo e' per costruzione.
-logging_collector_es_password: ""
+# Se un giorno va cambiata: cambiarla qui non basta. L'utente esistente non
+# viene toccato dal ruolo (vedi logging_es_user_force_password nella parte 8), e
+# il Secret nei namespace resterebbe indietro rispetto a Elasticsearch o
+# viceversa. Vanno rifatti tutti e due nello stesso lancio.
+logging_collector_es_password: "SINTESI2prod.2026"
 
 # --- Il Secret da cui gli Output leggono la password ------------------------
 #
@@ -2099,8 +2099,9 @@ logging_manage_es_user: false
 # nei namespace restano con la password vecchia.
 logging_es_user_force_password: false
 
-# Nome del ruolo Elasticsearch creato per lui.
-logging_es_writer_role: "k8s-logging-writer"
+# Nome del ruolo Elasticsearch creato per lui. E' quello dell'esercizio, letto
+# da _security/user/rancher: "roles": ["k8s-logger"].
+logging_es_writer_role: "k8s-logger"
 
 # Gli indici su cui puo' scrivere. I due prefissi di logging_sets, con la coda:
 # deve coprire sia gli alias (k8s-prod-app-superset) sia gli indici
@@ -2110,17 +2111,17 @@ logging_es_writer_index_patterns:
   - "k8s-prod-app-*"
   - "k8s-prod-infra-*"
 
-# >>> DA VERIFICARE SULL'ESERCIZIO, prima di mettere logging_manage_es_user a
-# true <<<
+# >>> ANCORA DA VERIFICARE, prima di mettere logging_manage_es_user a true <<<
 #
+# Il NOME del ruolo l'ho letto (k8s-logger, qui sopra); il suo CONTENUTO no.
 # Questi sono i privilegi che servono a un collector che scrive su un alias di
-# rollover, ma non li ho letti dall'ambiente esistente: sono la mia ricostruzione.
-# Per copiare quelli veri invece di fidarti di questa lista:
+# rollover, ma sono la mia ricostruzione, non una copia. Per leggere quelli veri:
 #
 #   curl -sk -u elastic:'<password>' \
-#     'https://10.109.13.134:9200/_security/user/rancher?pretty'
-#   curl -sk -u elastic:'<password>' \
-#     'https://10.109.13.134:9200/_security/role/<nome che esce sopra>?pretty'
+#     'https://10.109.13.134:9200/_security/role/k8s-logger?pretty'
+#
+# Se la lista che esce e' diversa, vince quella: l'obiettivo e' un ambiente
+# uguale all'altro, non uno che funziona in un modo suo.
 logging_es_writer_privileges:
   - "create_index"
   - "create_doc"
