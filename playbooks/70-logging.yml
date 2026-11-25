@@ -5,7 +5,7 @@
 #   ansible-playbook playbooks/70-logging.yml
 #
 # Gira sul NODO MANAGER / CONTROL PLANE del cluster da indicizzare — il primo
-# host di [logging_managers], cioe' k8smanager-p01 (10.109.15.69), la
+# host di [logging_managers], cioe' K8smanager01_prod (10.41.239.44), la
 # PRODUZIONE — perche' e' li' che c'e' kubectl con un kubeconfig valido, ed e'
 # da li' che oggi si lanciano a mano namespace-listing.sh e create-index.sh.
 # Solo il primo host: creare template e indici e' un'operazione sul cluster
@@ -26,7 +26,7 @@
 # COSA CREA, per ogni namespace del cluster:
 #
 #   index template  <prefisso>-<namespace>          priorita' calcolata
-#   indice          <prefisso>-<namespace>-000001   1 shard, 1 replica
+#   indice          <prefisso>-<namespace>-000001   1 shard, 0 repliche
 #   alias           <prefisso>-<namespace>          di scrittura, per il rollover
 #
 # piu' la policy ILM <prefisso>-<lifecycle>, che gli script a mano non creano.
@@ -45,7 +45,7 @@
 #
 #   # solo gli indici applicativi, senza gli infrastrutturali
 #   ansible-playbook playbooks/70-logging.yml \
-#     -e '{"logging_sets":[{"nome":"applicativi","prefisso":"k8s-prod-app","sorgente":"app","priorita":500,"shards":1,"replicas":1,"lifecycle":"logs"}]}'
+#     -e '{"logging_sets":[{"nome":"applicativi","prefisso":"k8s-prod-app","sorgente":"app","priorita":500,"shards":1,"replicas":0,"lifecycle":"logs"}]}'
 #
 #   # riallinea le policy ILM a logging_ilm_phases. Attenzione: sovrascrive
 #   # quelle tarate a mano
@@ -91,7 +91,7 @@
 #
 # CONTROLLA SEMPRE PRIMA DI LANCIARE, e leggi il NOME DELL'HOST, non il gruppo:
 #   ansible-playbook -i inventory.ini playbooks/70-logging.yml --list-hosts
-#   -> deve dire k8smanager-p01. Se dice manager01, NON lanciare.
+#   -> deve dire K8smanager01_prod. Se dice manager01, NON lanciare.
 - name: Indici di logging su Elasticsearch
   hosts: "{{ logging_group | default('logging_managers') }}[0]"
   become: yes
