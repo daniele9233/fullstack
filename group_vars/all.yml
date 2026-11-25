@@ -1658,8 +1658,8 @@ esc_health_accepted:
 #
 #   ansible-playbook -i inventory.ini playbooks/70-logging.yml
 #
-# DOVE GIRA: sul PRIMO host di [logging_managers], cioe' k8smanager-p01
-# (10.109.15.69), il manager della PRODUZIONE — perche' e' li' che c'e' kubectl
+# DOVE GIRA: sul PRIMO host di [logging_managers], cioe' K8smanager01_prod
+# (10.41.239.44), il manager della PRODUZIONE — perche' e' li' che c'e' kubectl
 # con un kubeconfig valido. Solo il primo: creare template e indici e'
 # un'operazione sul cluster Elasticsearch, non sul nodo, e ripeterla da tre
 # manager vorrebbe dire farla tre volte in parallelo sugli stessi oggetti.
@@ -1707,7 +1707,7 @@ esc_health_accepted:
 #
 # Verifica sempre prima di lanciare, leggendo il nome dell'host e non il gruppo:
 #   ansible-playbook -i inventory.ini playbooks/70-logging.yml --list-hosts
-#   -> deve dire k8smanager-p01. Se dice manager01, NON lanciare.
+#   -> deve dire K8smanager01_prod. Se dice manager01, NON lanciare.
 
 
 # --- 1. Elenco dei namespace (quello che faceva namespace-listing.sh) --------
@@ -1734,10 +1734,14 @@ esc_health_accepted:
 # IL projectId E' PER CLUSTER. In un'installazione Rancher ce n'e' sempre piu'
 # di uno — il cluster "local" che ospita Rancher, e i downstream — e un
 # p-xxxxx letto sul local non corrisponde a niente su un downstream. Questo
-# viene da k8smanager-p01 (10.109.15.69), cioe' dallo stesso host che il play
+# deve venire da K8smanager01_prod (10.41.239.44), cioe' dallo stesso host che il play
 # seleziona con [logging_managers]: le due cose devono restare d'accordo. Se
 # --list-hosts nomina un host diverso, questo valore non vale per quel cluster.
-logging_system_project_id: "p-9cpv4"
+# Letto su K8smanager01_prod (10.41.239.44), cluster ptv-prod:
+#   kubectl get ns cattle-system -o jsonpath='{.metadata.labels.field\.cattle\.io/projectId}'; echo
+#   -> p-vm6fz  (lo stesso di kube-system, kube-public, cattle-fleet-system...;
+#      "default" sta invece nel progetto Default, p-6g9xn)
+logging_system_project_id: "p-vm6fz"
 
 # Con true il ruolo si ferma se il cluster a cui sta parlando ha il deployment
 # "rancher" in cattle-system, cioe' se e' il cluster LOCAL di Rancher invece di
@@ -1802,11 +1806,12 @@ logging_write_ns_files: true
 # servizio, sta nel SAN dei certificati, e a quel punto si puo' anche accendere
 # la verifica (logging_es_ca_file piu' sotto) senza che il nome faccia storie.
 logging_es_scheme: "https"
-logging_es_host: "10.109.15.134"
+logging_es_host: "10.41.239.57"
 logging_es_port: 9200
 logging_es_user: "elastic"
-# La stessa di es_elastic_password: e' l'utente elastic di quel cluster.
-logging_es_password: "El4S7iCsin7s12026"
+# Utente elastic di elasticinfra01prod (10.41.239.57), da
+# /etc/elasticsearch/cert/elk_credentials.txt.
+logging_es_password: "Kepphab=_ES-RMp5=3CE"
 
 # Derivata: e' l'indirizzo a cui vanno tutte le chiamate del ruolo.
 logging_es_url: "{{ logging_es_scheme }}://{{ logging_es_host }}:{{ logging_es_port }}"
@@ -1846,14 +1851,21 @@ logging_es_ca_file: ""
 # collector sul cluster (Fluent Bit: "Index" / "Logstash_Prefix"; Logstash:
 # 'index =>'), oppure da Elasticsearch guardando quali indici hanno documenti:
 #   curl -sk -u elastic:'<password>' \
-#     'https://10.109.15.134:9200/_cat/indices?v&h=index,docs.count&s=index'
+#     'https://10.41.239.57:9200/_cat/indices?v&h=index,docs.count&s=index'
+#
+# REPLICAS 0 PERCHE' ELASTICSEARCH E' UN NODO SOLO (elasticinfra01prod,
+# _cat/nodes ne elenca uno). Una replica non puo' stare sullo stesso nodo del
+# suo primario: con replicas 1 ogni indice resterebbe yellow per sempre, con
+# una replica "unassigned" che non verra' mai allocata. Se un giorno il cluster
+# passa a tre nodi, rimettere 1 qui E sugli indici esistenti:
+#   PUT k8s-prod-*/_settings  {"index.number_of_replicas": 1}
 logging_sets:
   - nome: "applicativi"
     prefisso: "k8s-prod-app"
     sorgente: "app"
     priorita: 500
     shards: 1
-    replicas: 1
+    replicas: 0
     lifecycle: "logs"
 
   - nome: "infrastrutturali"
@@ -1861,7 +1873,7 @@ logging_sets:
     sorgente: "infra"
     priorita: 500
     shards: 1
-    replicas: 1
+    replicas: 0
     lifecycle: "logs"
 
 # Coda del pattern del template, dopo <prefisso>-<namespace>.
@@ -2065,7 +2077,7 @@ logging_collector_es_user: "rancher"
 # viene toccato dal ruolo (vedi logging_es_user_force_password nella parte 8), e
 # il Secret nei namespace resterebbe indietro rispetto a Elasticsearch o
 # viceversa. Vanno rifatti tutti e due nello stesso lancio.
-logging_collector_es_password: "SINTESI2prod.2026"
+logging_collector_es_password: "L3XIubL5g7ylnmE0RbNvAFbt"
 
 # --- Il Secret da cui gli Output leggono la password ------------------------
 #
@@ -2112,9 +2124,7 @@ logging_elk_service_port: 9200
 # Vanno bene gli IP e non i nomi: e' proprio questo oggetto a fare la
 # risoluzione, quindi non puo' dipendere da un'altra risoluzione.
 logging_elk_service_endpoints:
-  - "10.109.15.134"
-  - "10.109.15.135"
-  - "10.109.15.136"
+  - "10.41.239.57"
 
 
 # ===========================================================================
